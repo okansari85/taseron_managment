@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Symfony\Component\Process\Process;
+use Symfony\Component\Process\ExecutableFinder;
 
 class DbRestore extends Command
 {
@@ -113,20 +114,17 @@ class DbRestore extends Command
     }
 
     private function findBinary(array $binaries): ?string
-    {
-        foreach ($binaries as $binary) {
-            $process = new Process(['bash', '-lc', "command -v {$binary}"]);
-            $process->run();
+{
+    $finder = new ExecutableFinder();
 
-            if ($process->isSuccessful()) {
-                $path = trim($process->getOutput());
+    foreach ($binaries as $binary) {
+        $path = $finder->find($binary);
 
-                if ($path !== '') {
-                    return $path;
-                }
-            }
+        if ($path !== null) {
+            return $path;
         }
+    }
 
-        return null;
+    return null;
     }
 }
