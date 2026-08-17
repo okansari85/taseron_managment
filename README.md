@@ -20,6 +20,17 @@ Değişiklikleri GitHub'a gönder:
     git commit -m "Development update"
     git push
 
+//
+php artisan db:snapshot
+git add .
+git commit -m "Development update"
+git push
+//
+
+git pull
+php artisan db:restore
+
+
 ### Evde — Local Development
 
 Son değişiklikleri çek:
