@@ -2,10 +2,12 @@
 
 namespace App\Models;
 
+use App\Domain\Tenancy\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Organization extends Model
 {
@@ -17,6 +19,13 @@ class Organization extends Model
         'name',
         'type',
     ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(
+            app(TenantScope::class)
+        );
+    }
 
     public function tenant(): BelongsTo
     {
@@ -31,5 +40,13 @@ class Organization extends Model
     public function children(): HasMany
     {
         return $this->hasMany(Organization::class, 'parent_id');
+    }
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            User::class,
+            'user_organizations'
+        )->withTimestamps();
     }
 }
