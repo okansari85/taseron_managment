@@ -21,10 +21,3 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 
-Route::post('test-json', function (Request $request) {
-    return response()->json([
-        'all' => $request->all(),
-        'content' => $request->getContent(),
-        'is_json' => $request->isJson(),
-    ]);
-});
