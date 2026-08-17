@@ -1,0 +1,8 @@
+{
+  "name": "Taseron Laravel",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "forwardPorts": [8000],
+  "postStartCommand": "sudo service mariadb start"
+}
