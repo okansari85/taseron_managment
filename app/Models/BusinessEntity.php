@@ -6,14 +6,17 @@ use App\Domain\Tenancy\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use App\Models\Location;
 
-class Location extends Model
+class BusinessEntity extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'tenant_id',
+        'type',
         'name',
     ];
 
@@ -26,26 +29,26 @@ class Location extends Model
 
     public function tenant(): BelongsTo
     {
-        return $this->belongsTo(
-            Tenant::class
-        );
+        return $this->belongsTo(Tenant::class);
     }
 
-    public function organizations(): BelongsToMany
+    public function company(): HasOne
     {
-        return $this->belongsToMany(
-            Organization::class,
-            'organization_locations'
-        )->withTimestamps();
+        return $this->hasOne(Company::class);
     }
 
-    public function businessEntities(): BelongsToMany
+    public function contractor(): HasOne
+    {
+        return $this->hasOne(Contractor::class);
+    }
+
+    public function locations(): BelongsToMany
     {
         return $this->belongsToMany(
-            BusinessEntity::class,
+            Location::class,
             'location_business_entities',
-            'location_id',
-            'business_entity_id'
+            'business_entity_id',
+            'location_id'
         )
             ->withPivot([
                 'nace_code',

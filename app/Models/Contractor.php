@@ -5,16 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
-class Company extends Model
+class Contractor extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'name',
-        'company_type',
         'business_entity_id',
+        'contractor_type',
     ];
 
     public function businessEntity(): BelongsTo
@@ -23,17 +21,5 @@ class Company extends Model
             BusinessEntity::class,
             'business_entity_id'
         );
-    }
-
-    public function organizations(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            Organization::class,
-            'organization_companies',
-            'business_entity_id',
-            'organization_id',
-            'business_entity_id',
-            'id'
-        )->withTimestamps();
     }
 }

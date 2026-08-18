@@ -14,7 +14,17 @@ use App\Repositories\CompanyRepository;
 use App\Repositories\Contracts\LocationRepositoryInterface;
 use App\Repositories\LocationRepository;
 
+use App\Repositories\OrganizationCompanyRepository;
+use App\Repositories\Contracts\OrganizationCompanyRepositoryInterface;
 
+use App\Repositories\Contracts\OrganizationLocationRepositoryInterface;
+use App\Repositories\OrganizationLocationRepository;
+
+use App\Repositories\Contracts\LocationBusinessEntityRepositoryInterface;
+use App\Repositories\LocationBusinessEntityRepository;
+
+use App\Repositories\Contracts\ContractorRepositoryInterface;
+use App\Repositories\ContractorRepository;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -38,6 +48,26 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(
             LocationRepositoryInterface::class,
             LocationRepository::class
+        );
+
+        $this->app->bind(
+            OrganizationCompanyRepositoryInterface::class,
+            OrganizationCompanyRepository::class
+        );
+
+        $this->app->bind(
+            OrganizationLocationRepositoryInterface::class,
+            OrganizationLocationRepository::class
+        );
+
+        $this->app->bind(
+        LocationBusinessEntityRepositoryInterface::class,
+        LocationBusinessEntityRepository::class
+        );
+
+        $this->app->bind(
+            ContractorRepositoryInterface::class,
+            ContractorRepository::class
         );
     }
 

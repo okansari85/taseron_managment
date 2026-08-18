@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use App\Models\BusinessEntity;
 
 class Organization extends Model
 {
@@ -53,9 +54,13 @@ class Organization extends Model
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(
-            Company::class,
-            'organization_companies'
-        )->withTimestamps();
+            BusinessEntity::class,
+            'organization_companies',
+            'organization_id',
+            'business_entity_id'
+        )
+            ->where('business_entities.type', 'company')
+            ->withTimestamps();
     }
 
     public function locations(): BelongsToMany
