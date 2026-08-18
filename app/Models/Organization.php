@@ -49,4 +49,20 @@ class Organization extends Model
             'user_organizations'
         )->withTimestamps();
     }
+
+    public function companies(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Company::class,
+            'organization_companies'
+        )->withTimestamps();
+    }
+
+    public function locations(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Location::class,
+            'organization_locations'
+        )->withTimestamps();
+    }
 }
