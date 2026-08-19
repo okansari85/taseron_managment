@@ -26,6 +26,9 @@ use App\Repositories\LocationBusinessEntityRepository;
 use App\Repositories\Contracts\ContractorRepositoryInterface;
 use App\Repositories\ContractorRepository;
 
+use App\Repositories\Contracts\BrandRepositoryInterface;
+use App\Repositories\BrandRepository;
+
 class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
@@ -61,13 +64,18 @@ class AppServiceProvider extends ServiceProvider
         );
 
         $this->app->bind(
-        LocationBusinessEntityRepositoryInterface::class,
-        LocationBusinessEntityRepository::class
+            LocationBusinessEntityRepositoryInterface::class,
+            LocationBusinessEntityRepository::class
         );
 
         $this->app->bind(
             ContractorRepositoryInterface::class,
             ContractorRepository::class
+        );
+
+        $this->app->bind(
+            BrandRepositoryInterface::class,
+            BrandRepository::class
         );
     }
 
