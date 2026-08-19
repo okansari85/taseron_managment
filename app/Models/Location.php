@@ -54,4 +54,14 @@ class Location extends Model
             ])
             ->withTimestamps();
     }
+
+    public function brands(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Brand::class,
+            'brand_locations',
+            'location_id',
+            'brand_id'
+        )->withTimestamps();
+    }
 }
