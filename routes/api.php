@@ -12,6 +12,8 @@ use App\Http\Controllers\LocationBusinessEntityController;
 use App\Http\Controllers\OrganizationCompanyController;
 use App\Http\Controllers\OrganizationLocationController;
 use App\Http\Controllers\TenantOnboardingController;
+use App\Http\Controllers\BrandController;
+use App\Http\Controllers\BrandLocationController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -56,6 +58,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::apiResource('locations', LocationController::class);
 
+            Route::apiResource('brands', BrandController::class);
+
             Route::get(
                 'organizations/{organization}/companies',
                 [OrganizationCompanyController::class, 'index']
@@ -89,6 +93,26 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete(
                 'organizations/{organization}/locations/{location}',
                 [OrganizationLocationController::class, 'detach']
+            );
+
+            Route::get(
+                'brands/{brand}/locations',
+                [BrandLocationController::class, 'index']
+            );
+
+            Route::put(
+                'brands/{brand}/locations',
+                [BrandLocationController::class, 'sync']
+            );
+
+            Route::post(
+                'brands/{brand}/locations/{location}',
+                [BrandLocationController::class, 'attach']
+            );
+
+            Route::delete(
+                'brands/{brand}/locations/{location}',
+                [BrandLocationController::class, 'detach']
             );
 
             Route::get(
