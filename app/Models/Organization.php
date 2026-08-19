@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use App\Models\BusinessEntity;
+use App\Models\Brand;
 
 class Organization extends Model
 {
@@ -69,5 +70,13 @@ class Organization extends Model
             Location::class,
             'organization_locations'
         )->withTimestamps();
+    }
+
+    public function brands(): HasMany
+    {
+        return $this->hasMany(
+            Brand::class,
+            'organization_id'
+        );
     }
 }
