@@ -2,10 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\CreateBrandRequest;
+use App\Http\Requests\UpdateBrandRequest;
 use App\Models\Brand;
 use App\Services\BrandService;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 
 class BrandController extends Controller
 {
@@ -21,20 +22,10 @@ class BrandController extends Controller
         ]);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(CreateBrandRequest $request): JsonResponse
     {
         $brand = $this->service->create(
-            $request->validate([
-                'organization_id' => [
-                    'required',
-                    'integer',
-                ],
-                'name' => [
-                    'required',
-                    'string',
-                    'max:255',
-                ],
-            ])
+            $request->validated()
         );
 
         return response()->json([
@@ -51,24 +42,12 @@ class BrandController extends Controller
     }
 
     public function update(
-        Request $request,
+        UpdateBrandRequest $request,
         Brand $brand
     ): JsonResponse {
-        $data = $request->validate([
-            'organization_id' => [
-                'sometimes',
-                'integer',
-            ],
-            'name' => [
-                'sometimes',
-                'string',
-                'max:255',
-            ],
-        ]);
-
         $brand = $this->service->update(
             $brand,
-            $data
+            $request->validated()
         );
 
         return response()->json([
