@@ -13,7 +13,6 @@ class Brand extends Model
 
     protected $fillable = [
         'tenant_id',
-        'organization_id',
         'name',
     ];
 
@@ -22,18 +21,13 @@ class Brand extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    public function organization(): BelongsTo
-    {
-        return $this->belongsTo(Organization::class);
-    }
-
-    public function locations(): BelongsToMany
+    public function companies(): BelongsToMany
     {
         return $this->belongsToMany(
-            Location::class,
-            'brand_locations',
+            Company::class,
+            'company_brands',
             'brand_id',
-            'location_id'
+            'company_id'
         )->withTimestamps();
     }
 }
