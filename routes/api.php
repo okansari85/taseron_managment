@@ -13,7 +13,7 @@ use App\Http\Controllers\OrganizationCompanyController;
 use App\Http\Controllers\TenantOnboardingController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
-use App\Http\Controllers\OperationalUnitController;
+use App\Http\Controllers\OperationalRegionController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -36,7 +36,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('contractors', ContractorController::class);
             Route::apiResource('locations', LocationController::class);
             Route::apiResource('brands', BrandController::class);
-            Route::apiResource('locations.operational-units', OperationalUnitController::class);
+            Route::apiResource('locations.operational-regions', OperationalRegionController::class);
 
             Route::get('organizations/{organization}/companies', [OrganizationCompanyController::class, 'index']);
             Route::put('organizations/{organization}/companies', [OrganizationCompanyController::class, 'sync']);
