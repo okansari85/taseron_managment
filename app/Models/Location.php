@@ -32,14 +32,6 @@ class Location extends Model
         );
     }
 
-    public function organizations(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            Organization::class,
-            'organization_locations'
-        )->withTimestamps();
-    }
-
     public function operationalUnits(): HasMany
     {
         return $this->hasMany(
