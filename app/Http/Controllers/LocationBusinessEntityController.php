@@ -16,44 +16,32 @@ class LocationBusinessEntityController extends Controller
     ) {
     }
 
-    public function index(
-        Location $location
-    ): JsonResponse {
-        return response()->json(
-            $this->service->all($location)
-        );
+    public function index(Location $location): JsonResponse
+    {
+        return response()->json($this->service->all($location));
     }
 
     public function store(
         StoreLocationBusinessEntityRequest $request,
         Location $location
     ): JsonResponse {
-        $businessEntity = BusinessEntity::query()
-            ->findOrFail(
-                $request->validated('business_entity_id')
-            );
+        $businessEntity = BusinessEntity::query()->findOrFail(
+            $request->validated('business_entity_id')
+        );
 
         $this->service->attach(
             $location,
             $businessEntity,
             [
-                'operational_unit_id' =>
-                    $request->validated('operational_unit_id'),
-
-                'nace_code' =>
-                    $request->validated('nace_code'),
-
-                'hazard_class' =>
-                    $request->validated('hazard_class'),
-
-                'sgk_workplace_number' =>
-                    $request->validated('sgk_workplace_number'),
+                'operational_region_id' => $request->validated('operational_region_id'),
+                'nace_code' => $request->validated('nace_code'),
+                'hazard_class' => $request->validated('hazard_class'),
+                'sgk_workplace_number' => $request->validated('sgk_workplace_number'),
             ]
         );
 
         return response()->json([
-            'message' =>
-                'Business Entity lokasyona başarıyla bağlandı.',
+            'message' => 'Business Entity lokasyona başarıyla bağlandı.',
         ], 201);
     }
 
@@ -69,8 +57,7 @@ class LocationBusinessEntityController extends Controller
         );
 
         return response()->json([
-            'message' =>
-                'Lokasyon Business Entity bilgileri başarıyla güncellendi.',
+            'message' => 'Lokasyon Business Entity bilgileri başarıyla güncellendi.',
         ]);
     }
 
@@ -78,14 +65,10 @@ class LocationBusinessEntityController extends Controller
         Location $location,
         BusinessEntity $businessEntity
     ): JsonResponse {
-        $this->service->detach(
-            $location,
-            $businessEntity
-        );
+        $this->service->detach($location, $businessEntity);
 
         return response()->json([
-            'message' =>
-                'Business Entity lokasyondan başarıyla çıkarıldı.',
+            'message' => 'Business Entity lokasyondan başarıyla çıkarıldı.',
         ]);
     }
 }
