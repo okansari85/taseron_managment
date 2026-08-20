@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Location extends Model
 {
@@ -39,6 +40,14 @@ class Location extends Model
         )->withTimestamps();
     }
 
+    public function operationalUnits(): HasMany
+    {
+        return $this->hasMany(
+            OperationalUnit::class,
+            'location_id'
+        );
+    }
+
     public function businessEntities(): BelongsToMany
     {
         return $this->belongsToMany(
@@ -48,6 +57,7 @@ class Location extends Model
             'business_entity_id'
         )
             ->withPivot([
+                'operational_unit_id',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
