@@ -32,6 +32,21 @@ return new class extends Migration
             ->unique()
             ->values();
 
+        // MySQL needs an index beginning with organization_id for the
+        // organization foreign key. Keep that index before dropping the
+        // old composite unique index.
+        if (
+            ! $indexes->contains('organization_companies_organization_id_index')
+            && ! $indexes->contains('organization_companies_organization_id_business_entity_id_unique')
+        ) {
+            Schema::table('organization_companies', function (Blueprint $table) {
+                $table->index(
+                    'organization_id',
+                    'organization_companies_organization_id_index'
+                );
+            });
+        }
+
         if ($indexes->contains('organization_companies_organization_id_business_entity_id_unique')) {
             Schema::table('organization_companies', function (Blueprint $table) {
                 $table->dropUnique(
@@ -73,6 +88,19 @@ return new class extends Migration
                     ['organization_id', 'business_entity_id'],
                     'organization_companies_organization_id_business_entity_id_unique'
                 );
+            });
+        }
+
+        $indexes = DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', DB::getDatabaseName())
+            ->where('TABLE_NAME', 'organization_companies')
+            ->pluck('INDEX_NAME')
+            ->unique()
+            ->values();
+
+        if ($indexes->contains('organization_companies_organization_id_index')) {
+            Schema::table('organization_companies', function (Blueprint $table) {
+                $table->dropIndex('organization_companies_organization_id_index');
             });
         }
     }
