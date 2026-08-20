@@ -17,36 +17,6 @@
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
 
 --
--- Table structure for table `brand_locations`
---
-
-DROP TABLE IF EXISTS `brand_locations`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `brand_locations` (
-  `brand_id` bigint(20) unsigned NOT NULL,
-  `location_id` bigint(20) unsigned NOT NULL,
-  `created_at` timestamp NULL DEFAULT NULL,
-  `updated_at` timestamp NULL DEFAULT NULL,
-  UNIQUE KEY `brand_locations_brand_id_location_id_unique` (`brand_id`,`location_id`),
-  UNIQUE KEY `brand_locations_location_id_unique` (`location_id`),
-  CONSTRAINT `brand_locations_brand_id_foreign` FOREIGN KEY (`brand_id`) REFERENCES `brands` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `brand_locations_location_id_foreign` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping data for table `brand_locations`
---
-
-LOCK TABLES `brand_locations` WRITE;
-/*!40000 ALTER TABLE `brand_locations` DISABLE KEYS */;
-INSERT INTO `brand_locations` VALUES
-(1,3,'2026-08-19 12:05:56','2026-08-19 12:05:56');
-/*!40000 ALTER TABLE `brand_locations` ENABLE KEYS */;
-UNLOCK TABLES;
-
---
 -- Table structure for table `brands`
 --
 
@@ -56,14 +26,11 @@ DROP TABLE IF EXISTS `brands`;
 CREATE TABLE `brands` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `tenant_id` bigint(20) unsigned NOT NULL,
-  `organization_id` bigint(20) unsigned NOT NULL,
   `name` varchar(255) NOT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `brands_tenant_id_foreign` (`tenant_id`),
-  KEY `brands_organization_id_foreign` (`organization_id`),
-  CONSTRAINT `brands_organization_id_foreign` FOREIGN KEY (`organization_id`) REFERENCES `organizations` (`id`) ON DELETE CASCADE,
   CONSTRAINT `brands_tenant_id_foreign` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -75,8 +42,8 @@ CREATE TABLE `brands` (
 LOCK TABLES `brands` WRITE;
 /*!40000 ALTER TABLE `brands` DISABLE KEYS */;
 INSERT INTO `brands` VALUES
-(1,3,2,'Burger King','2026-08-19 12:04:50','2026-08-19 12:04:50'),
-(2,3,2,'Popeyes','2026-08-19 12:06:45','2026-08-19 12:06:45');
+(1,3,'Burger King','2026-08-19 12:04:50','2026-08-19 12:04:50'),
+(2,3,'Popeyes','2026-08-19 12:06:45','2026-08-19 12:06:45');
 /*!40000 ALTER TABLE `brands` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -196,6 +163,34 @@ INSERT INTO `companies` VALUES
 (2,4,'Test Şahıs Firması','individual','2026-08-18 17:51:03','2026-08-18 17:51:03'),
 (3,5,'Test Tüzel Firma A.S.','corporate','2026-08-18 17:54:14','2026-08-18 17:54:14');
 /*!40000 ALTER TABLE `companies` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `company_brands`
+--
+
+DROP TABLE IF EXISTS `company_brands`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `company_brands` (
+  `company_id` bigint(20) unsigned NOT NULL,
+  `brand_id` bigint(20) unsigned NOT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  UNIQUE KEY `company_brands_company_id_brand_id_unique` (`company_id`,`brand_id`),
+  KEY `company_brands_brand_id_foreign` (`brand_id`),
+  CONSTRAINT `company_brands_brand_id_foreign` FOREIGN KEY (`brand_id`) REFERENCES `brands` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `company_brands_company_id_foreign` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `company_brands`
+--
+
+LOCK TABLES `company_brands` WRITE;
+/*!40000 ALTER TABLE `company_brands` DISABLE KEYS */;
+/*!40000 ALTER TABLE `company_brands` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -329,16 +324,22 @@ CREATE TABLE `location_business_entities` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `location_id` bigint(20) unsigned NOT NULL,
   `business_entity_id` bigint(20) unsigned NOT NULL,
+  `brand_id` bigint(20) unsigned NOT NULL,
+  `operational_unit_id` bigint(20) unsigned DEFAULT NULL,
   `nace_code` varchar(255) NOT NULL,
   `hazard_class` varchar(255) NOT NULL,
   `sgk_workplace_number` varchar(255) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `location_business_entities_location_id_business_entity_id_unique` (`location_id`,`business_entity_id`),
   KEY `location_business_entities_business_entity_id_location_id_index` (`business_entity_id`,`location_id`),
+  KEY `location_business_entities_operational_unit_id_foreign` (`operational_unit_id`),
+  KEY `location_business_entities_location_id_operational_unit_id_index` (`location_id`,`operational_unit_id`),
+  KEY `location_business_entities_brand_id_foreign` (`brand_id`),
+  CONSTRAINT `location_business_entities_brand_id_foreign` FOREIGN KEY (`brand_id`) REFERENCES `brands` (`id`),
   CONSTRAINT `location_business_entities_business_entity_id_foreign` FOREIGN KEY (`business_entity_id`) REFERENCES `business_entities` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `location_business_entities_location_id_foreign` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE CASCADE
+  CONSTRAINT `location_business_entities_location_id_foreign` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `location_business_entities_operational_unit_id_foreign` FOREIGN KEY (`operational_unit_id`) REFERENCES `operational_units` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -348,9 +349,6 @@ CREATE TABLE `location_business_entities` (
 
 LOCK TABLES `location_business_entities` WRITE;
 /*!40000 ALTER TABLE `location_business_entities` DISABLE KEYS */;
-INSERT INTO `location_business_entities` VALUES
-(1,1,1,'56.10.01','tehlikeli','1234567890123456','2026-08-18 16:06:09','2026-08-18 16:06:09'),
-(8,1,2,'78.20.01','tehlikeli','9876543210123456','2026-08-18 16:21:19','2026-08-18 16:21:19');
 /*!40000 ALTER TABLE `location_business_entities` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -431,7 +429,7 @@ CREATE TABLE `migrations` (
   `migration` varchar(255) NOT NULL,
   `batch` int(11) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -465,7 +463,11 @@ INSERT INTO `migrations` VALUES
 (22,'2026_08_19_000001_create_brands_table',18),
 (23,'2026_08_19_000002_create_brand_locations_table',18),
 (24,'2026_08_19_000003_add_unique_location_to_brand_locations_table',19),
-(25,'2026_08_19_170000_simplify_organization_type',20);
+(25,'2026_08_19_170000_simplify_organization_type',20),
+(26,'2026_08_20_110000_create_operational_units_table',21),
+(27,'2026_08_20_110100_add_operational_unit_id_to_location_business_entities_table',21),
+(28,'2026_08_20_120000_refactor_brands_to_company_relationship',22),
+(29,'2026_08_20_185200_add_brand_and_operational_constraints_to_location_business_entities_table',23);
 /*!40000 ALTER TABLE `migrations` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -522,6 +524,40 @@ INSERT INTO `model_has_roles` VALUES
 (1,'App\\Models\\User',1),
 (1,'App\\Models\\User',2);
 /*!40000 ALTER TABLE `model_has_roles` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `operational_units`
+--
+
+DROP TABLE IF EXISTS `operational_units`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `operational_units` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `tenant_id` bigint(20) unsigned NOT NULL,
+  `location_id` bigint(20) unsigned NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `type` enum('facility','warehouse','business') NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `operational_units_location_id_foreign` (`location_id`),
+  KEY `operational_units_tenant_id_location_id_index` (`tenant_id`,`location_id`),
+  KEY `operational_units_tenant_id_type_index` (`tenant_id`,`type`),
+  CONSTRAINT `operational_units_location_id_foreign` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `operational_units_tenant_id_foreign` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `operational_units`
+--
+
+LOCK TABLES `operational_units` WRITE;
+/*!40000 ALTER TABLE `operational_units` DISABLE KEYS */;
+/*!40000 ALTER TABLE `operational_units` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -924,4 +960,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-08-19 14:30:58
+-- Dump completed on 2026-08-20 16:26:33
