@@ -332,6 +332,7 @@ CREATE TABLE `location_business_entities` (
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `lbe_location_business_entity_operational_unit_unique` (`location_id`,`business_entity_id`,`operational_unit_id`),
   KEY `location_business_entities_business_entity_id_location_id_index` (`business_entity_id`,`location_id`),
   KEY `location_business_entities_operational_unit_id_foreign` (`operational_unit_id`),
   KEY `location_business_entities_location_id_operational_unit_id_index` (`location_id`,`operational_unit_id`),
@@ -429,7 +430,7 @@ CREATE TABLE `migrations` (
   `migration` varchar(255) NOT NULL,
   `batch` int(11) NOT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=31 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -467,7 +468,8 @@ INSERT INTO `migrations` VALUES
 (26,'2026_08_20_110000_create_operational_units_table',21),
 (27,'2026_08_20_110100_add_operational_unit_id_to_location_business_entities_table',21),
 (28,'2026_08_20_120000_refactor_brands_to_company_relationship',22),
-(29,'2026_08_20_185200_add_brand_and_operational_constraints_to_location_business_entities_table',23);
+(29,'2026_08_20_185200_add_brand_and_operational_constraints_to_location_business_entities_table',23),
+(30,'2026_08_20_193000_fix_location_business_entity_operational_unit_uniqueness',24);
 /*!40000 ALTER TABLE `migrations` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -960,4 +962,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-08-20 16:26:33
+-- Dump completed on 2026-08-20 16:36:39
