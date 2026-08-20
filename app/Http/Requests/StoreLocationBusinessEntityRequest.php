@@ -15,6 +15,8 @@ class StoreLocationBusinessEntityRequest extends FormRequest
     {
         return [
             'business_entity_id' => ['required', 'integer', 'exists:business_entities,id'],
+            'brand_ids' => ['sometimes', 'array'],
+            'brand_ids.*' => ['integer', 'exists:brands,id'],
             'operational_region_id' => ['nullable', 'integer', 'exists:operational_regions,id'],
             'nace_code' => ['required', 'string', 'max:50'],
             'hazard_class' => ['required', 'string', 'max:100'],
@@ -28,6 +30,9 @@ class StoreLocationBusinessEntityRequest extends FormRequest
             'business_entity_id.required' => 'Business Entity seçimi zorunludur.',
             'business_entity_id.integer' => 'Business Entity ID geçerli olmalıdır.',
             'business_entity_id.exists' => 'Seçilen Business Entity bulunamadı.',
+            'brand_ids.array' => 'Markalar liste olarak gönderilmelidir.',
+            'brand_ids.*.integer' => 'Marka ID geçerli olmalıdır.',
+            'brand_ids.*.exists' => 'Seçilen markalardan biri bulunamadı.',
             'operational_region_id.integer' => 'Operasyonel alan ID geçerli olmalıdır.',
             'operational_region_id.exists' => 'Seçilen operasyonel alan bulunamadı.',
             'nace_code.required' => 'NACE kodu zorunludur.',
