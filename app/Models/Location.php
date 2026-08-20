@@ -57,21 +57,12 @@ class Location extends Model
             'business_entity_id'
         )
             ->withPivot([
+                'brand_id',
                 'operational_unit_id',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
             ])
             ->withTimestamps();
-    }
-
-    public function brands(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            Brand::class,
-            'brand_locations',
-            'location_id',
-            'brand_id'
-        )->withTimestamps();
     }
 }
