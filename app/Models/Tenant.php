@@ -32,7 +32,7 @@ class Tenant extends Model
             return null;
         }
 
-        return rtrim(config('app.url'), '/') . '/storage/' . ltrim($this->logo_path, '/');
+        return url('/storage/' . ltrim($this->logo_path, '/'));
     }
 
     public function organizations(): HasMany
