@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\BusinessEntity;
 use App\Models\Location;
-use App\Models\OperationalUnit;
+use App\Models\OperationalRegion;
 use App\Repositories\Contracts\LocationBusinessEntityRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -28,22 +28,10 @@ class LocationBusinessEntityService
         BusinessEntity $businessEntity,
         array $pivotData
     ): void {
-        $this->validateBusinessEntity(
-            $businessEntity,
-            $pivotData,
-            $location
-        );
+        $this->validateBusinessEntity($businessEntity, $pivotData, $location);
 
-        DB::transaction(function () use (
-            $location,
-            $businessEntity,
-            $pivotData
-        ) {
-            $this->repository->attach(
-                $location,
-                $businessEntity,
-                $pivotData
-            );
+        DB::transaction(function () use ($location, $businessEntity, $pivotData) {
+            $this->repository->attach($location, $businessEntity, $pivotData);
         });
     }
 
@@ -52,37 +40,17 @@ class LocationBusinessEntityService
         BusinessEntity $businessEntity,
         array $pivotData
     ): void {
-        $this->validateBusinessEntity(
-            $businessEntity,
-            $pivotData,
-            $location
-        );
+        $this->validateBusinessEntity($businessEntity, $pivotData, $location);
 
-        DB::transaction(function () use (
-            $location,
-            $businessEntity,
-            $pivotData
-        ) {
-            $this->repository->update(
-                $location,
-                $businessEntity,
-                $pivotData
-            );
+        DB::transaction(function () use ($location, $businessEntity, $pivotData) {
+            $this->repository->update($location, $businessEntity, $pivotData);
         });
     }
 
-    public function detach(
-        Location $location,
-        BusinessEntity $businessEntity
-    ): void {
-        DB::transaction(function () use (
-            $location,
-            $businessEntity
-        ) {
-            $this->repository->detach(
-                $location,
-                $businessEntity
-            );
+    public function detach(Location $location, BusinessEntity $businessEntity): void
+    {
+        DB::transaction(function () use ($location, $businessEntity) {
+            $this->repository->detach($location, $businessEntity);
         });
     }
 
@@ -91,37 +59,32 @@ class LocationBusinessEntityService
         array &$pivotData,
         Location $location
     ): void {
-        $operationalUnitId = $pivotData['operational_unit_id'] ?? null;
+        $operationalRegionId = $pivotData['operational_region_id'] ?? null;
 
-        if ($operationalUnitId !== null) {
-            $operationalUnit = OperationalUnit::query()
-                ->whereKey($operationalUnitId)
+        if ($operationalRegionId !== null) {
+            $operationalRegion = OperationalRegion::query()
+                ->whereKey($operationalRegionId)
                 ->first();
 
-            if ($operationalUnit === null) {
+            if ($operationalRegion === null) {
                 throw ValidationException::withMessages([
-                    'operational_unit_id' => [
-                        'Seçilen operasyonel birim bulunamadı.',
-                    ],
+                    'operational_region_id' => ['Seçilen operasyonel alan bulunamadı.'],
                 ]);
             }
 
-            if ($operationalUnit->location_id !== $location->id) {
+            if ($operationalRegion->location_id !== $location->id) {
                 throw ValidationException::withMessages([
-                    'operational_unit_id' => [
-                        'Seçilen operasyonel birim bu lokasyona ait değil.',
+                    'operational_region_id' => [
+                        'Seçilen operasyonel alan bu lokasyona ait değil.',
                     ],
                 ]);
             }
         }
 
-        // Şirket lokasyona bağlanabilir.
         if ($businessEntity->type === 'company') {
             return;
         }
 
-        // Sadece company ve contractor BusinessEntity
-        // lokasyon ilişkisine aday olabilir.
         if ($businessEntity->type !== 'contractor') {
             throw new LogicException(
                 'Bu Business Entity tipi lokasyona bağlanamaz.'
@@ -136,7 +99,6 @@ class LocationBusinessEntityService
             );
         }
 
-        // Geçici taşeron lokasyona bağlanamaz.
         if ($contractor->contractor_type === 'temporary') {
             throw ValidationException::withMessages([
                 'business_entity_id' => [
