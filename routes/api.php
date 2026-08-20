@@ -14,6 +14,7 @@ use App\Http\Controllers\OrganizationLocationController;
 use App\Http\Controllers\TenantOnboardingController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
+use App\Http\Controllers\OperationalUnitController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -34,7 +35,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:super-admin')->group(function () {
         Route::apiResource('tenants', TenantController::class);
 
-          Route::post(
+        Route::post(
             'tenant-onboarding',
             [TenantOnboardingController::class, 'store']
         );
@@ -59,6 +60,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('locations', LocationController::class);
 
             Route::apiResource('brands', BrandController::class);
+
+            Route::apiResource(
+                'locations.operational-units',
+                OperationalUnitController::class
+            );
 
             Route::get(
                 'organizations/{organization}/companies',
