@@ -2,124 +2,114 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\\Schema;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        if (! Schema::hasColumn('location_business_entities', 'brand_id')) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
-                // Legacy location-business records may already exist. Keep this
-                // nullable at the database level for the migration; the
-                // application will require brand_id for new assignments.
+        Schema::table('location_business_entities', function (Blueprint $table) {
+            if (! Schema::hasColumn('location_business_entities', 'brand_id')) {
                 $table->foreignId('brand_id')
                     ->nullable()
                     ->after('business_entity_id');
-            });
-        }
+            }
+        });
 
-        // The previous location + business_entity uniqueness is no longer
-        // sufficient because the same company can appear in different
-        // operational contexts.
-        $hasLegacyUnique = DB::table('information_schema.statistics')
-            ->where('table_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('index_name', 'location_business_entities_location_id_business_entity_id_unique')
-            ->exists();
+        // Existing location_business_entities rows were created before brand_id existed.
+        // Clear only invalid brand references before adding the foreign key.
+        DB::statement('
+            UPDATE location_business_entities lbe
+            LEFT JOIN brands b ON b.id = lbe.brand_id
+            SET lbe.brand_id = NULL
+            WHERE lbe.brand_id IS NOT NULL
+              AND b.id IS NULL
+        ');
 
-        if ($hasLegacyUnique) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
-                $table->dropUnique([
-                    'location_id',
-                    'business_entity_id',
-                ]);
-            });
-        }
-
-        // Add the FK after the nullable column exists so existing rows remain
-        // valid during the migration.
-        $hasBrandForeignKey = DB::table('information_schema.table_constraints')
-            ->where('constraint_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('constraint_name', 'location_business_entities_brand_id_foreign')
-            ->where('constraint_type', 'FOREIGN KEY')
-            ->exists();
-
-        if (! $hasBrandForeignKey) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
+        Schema::table('location_business_entities', function (Blueprint $table) {
+            if (! $this->foreignKeyExists('location_business_entities', 'location_business_entities_brand_id_foreign')) {
                 $table->foreign('brand_id')
                     ->references('id')
                     ->on('brands')
                     ->restrictOnDelete();
-            });
-        }
+            }
 
-        // One operational unit represents one company + brand assignment.
-        // MySQL allows multiple NULL values in a UNIQUE index, so legacy
-        // location-level rows without an operational unit remain valid.
-        $hasOperationalUnitUnique = DB::table('information_schema.statistics')
-            ->where('table_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('index_name', 'location_business_entities_operational_unit_id_unique')
-            ->exists();
+            $this->dropUniqueIfExists(
+                $table,
+                'location_business_entities',
+                'location_business_entities_location_id_business_entity_id_unique'
+            );
 
-        if (! $hasOperationalUnitUnique) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
+            if (! $this->indexOrUniqueExists(
+                'location_business_entities',
+                'location_business_entities_operational_unit_id_unique'
+            )) {
+                // An operational unit can represent only one company + brand assignment.
+                // Multiple NULL values remain allowed for location-level assignments.
                 $table->unique('operational_unit_id');
-            });
-        }
+            }
+        });
     }
 
     public function down(): void
     {
-        $hasOperationalUnitUnique = DB::table('information_schema.statistics')
-            ->where('table_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('index_name', 'location_business_entities_operational_unit_id_unique')
-            ->exists();
+        Schema::table('location_business_entities', function (Blueprint $table) {
+            $this->dropUniqueIfExists(
+                $table,
+                'location_business_entities',
+                'location_business_entities_operational_unit_id_unique'
+            );
 
-        if ($hasOperationalUnitUnique) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
-                $table->dropUnique([
-                    'operational_unit_id',
-                ]);
-            });
-        }
+            if ($this->foreignKeyExists('location_business_entities', 'location_business_entities_brand_id_foreign')) {
+                $table->dropForeign('location_business_entities_brand_id_foreign');
+            }
 
-        $hasBrandForeignKey = DB::table('information_schema.table_constraints')
-            ->where('constraint_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('constraint_name', 'location_business_entities_brand_id_foreign')
-            ->where('constraint_type', 'FOREIGN KEY')
-            ->exists();
-
-        if ($hasBrandForeignKey) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
-                $table->dropForeign(['brand_id']);
-            });
-        }
-
-        if (Schema::hasColumn('location_business_entities', 'brand_id')) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
+            if (Schema::hasColumn('location_business_entities', 'brand_id')) {
                 $table->dropColumn('brand_id');
-            });
-        }
+            }
 
-        $hasLegacyUnique = DB::table('information_schema.statistics')
-            ->where('table_schema', DB::raw('DATABASE()'))
-            ->where('table_name', 'location_business_entities')
-            ->where('index_name', 'location_business_entities_location_id_business_entity_id_unique')
-            ->exists();
-
-        if (! $hasLegacyUnique) {
-            Schema::table('location_business_entities', function (Blueprint $table) {
+            if (! $this->indexOrUniqueExists(
+                'location_business_entities',
+                'location_business_entities_location_id_business_entity_id_unique'
+            )) {
                 $table->unique([
                     'location_id',
                     'business_entity_id',
                 ]);
-            });
+            }
+        });
+    }
+
+    private function foreignKeyExists(string $table, string $foreignName): bool
+    {
+        $database = DB::getDatabaseName();
+
+        return DB::table('information_schema.KEY_COLUMN_USAGE')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', $table)
+            ->where('CONSTRAINT_NAME', $foreignName)
+            ->exists();
+    }
+
+    private function indexOrUniqueExists(string $table, string $indexName): bool
+    {
+        $database = DB::getDatabaseName();
+
+        return DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', $table)
+            ->where('INDEX_NAME', $indexName)
+            ->exists();
+    }
+
+    private function dropUniqueIfExists(
+        Blueprint $table,
+        string $tableName,
+        string $indexName
+    ): void {
+        if ($this->indexOrUniqueExists($tableName, $indexName)) {
+            $table->dropUnique($indexName);
         }
     }
 };
