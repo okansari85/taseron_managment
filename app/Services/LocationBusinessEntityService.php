@@ -7,6 +7,7 @@ use App\Models\Location;
 use App\Models\OperationalRegion;
 use App\Repositories\Contracts\LocationBusinessEntityRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 use Illuminate\Validation\ValidationException;
@@ -20,7 +21,15 @@ class LocationBusinessEntityService
 
     public function all(Location $location): Collection
     {
-        return $this->repository->all($location);
+        $businessEntities = $this->repository->all($location);
+
+        $businessEntities->each(function (BusinessEntity $businessEntity): void {
+            if ($businessEntity->pivot instanceof Pivot) {
+                $businessEntity->pivot->load('brands');
+            }
+        });
+
+        return $businessEntities;
     }
 
     public function attach(
@@ -28,10 +37,20 @@ class LocationBusinessEntityService
         BusinessEntity $businessEntity,
         array $pivotData
     ): void {
-        $this->validateBusinessEntity($businessEntity, $pivotData, $location);
+        $brandIds = $pivotData['brand_ids'] ?? [];
+        unset($pivotData['brand_ids']);
 
-        DB::transaction(function () use ($location, $businessEntity, $pivotData) {
+        $this->validateBusinessEntity($businessEntity, $pivotData, $location);
+        $this->validateBrands($businessEntity, $brandIds);
+
+        DB::transaction(function () use (
+            $location,
+            $businessEntity,
+            $pivotData,
+            $brandIds
+        ) {
             $this->repository->attach($location, $businessEntity, $pivotData);
+            $this->syncBrands($location, $businessEntity, $brandIds);
         });
     }
 
@@ -40,10 +59,26 @@ class LocationBusinessEntityService
         BusinessEntity $businessEntity,
         array $pivotData
     ): void {
+        $brandIds = $pivotData['brand_ids'] ?? null;
+        unset($pivotData['brand_ids']);
+
         $this->validateBusinessEntity($businessEntity, $pivotData, $location);
 
-        DB::transaction(function () use ($location, $businessEntity, $pivotData) {
+        if ($brandIds !== null) {
+            $this->validateBrands($businessEntity, $brandIds);
+        }
+
+        DB::transaction(function () use (
+            $location,
+            $businessEntity,
+            $pivotData,
+            $brandIds
+        ) {
             $this->repository->update($location, $businessEntity, $pivotData);
+
+            if ($brandIds !== null) {
+                $this->syncBrands($location, $businessEntity, $brandIds);
+            }
         });
     }
 
@@ -106,5 +141,74 @@ class LocationBusinessEntityService
                 ],
             ]);
         }
+    }
+
+    private function validateBrands(
+        BusinessEntity $businessEntity,
+        array $brandIds
+    ): void {
+        if ($brandIds === []) {
+            return;
+        }
+
+        if ($businessEntity->type !== 'company' || $businessEntity->company === null) {
+            throw ValidationException::withMessages([
+                'brand_ids' => [
+                    'Marka yalnızca şirket tipindeki Business Entity için tanımlanabilir.',
+                ],
+            ]);
+        }
+
+        $companyBrandCount = DB::table('company_brands')
+            ->where('company_id', $businessEntity->company->id)
+            ->whereIn('brand_id', array_values(array_unique($brandIds)))
+            ->count();
+
+        if ($companyBrandCount !== count(array_unique($brandIds))) {
+            throw ValidationException::withMessages([
+                'brand_ids' => [
+                    'Seçilen markalardan biri bu şirkete bağlı değil.',
+                ],
+            ]);
+        }
+    }
+
+    private function syncBrands(
+        Location $location,
+        BusinessEntity $businessEntity,
+        array $brandIds
+    ): void {
+        $pivot = DB::table('location_business_entities')
+            ->where('location_id', $location->id)
+            ->where('business_entity_id', $businessEntity->id)
+            ->first();
+
+        if ($pivot === null) {
+            throw new LogicException(
+                'Lokasyon Business Entity kaydı bulunamadı.'
+            );
+        }
+
+        DB::table('location_business_entity_brands')
+            ->where('location_business_entity_id', $pivot->id)
+            ->delete();
+
+        if ($brandIds === []) {
+            return;
+        }
+
+        $rows = [];
+        $now = now();
+
+        foreach (array_values(array_unique($brandIds)) as $brandId) {
+            $rows[] = [
+                'location_business_entity_id' => $pivot->id,
+                'brand_id' => $brandId,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        DB::table('location_business_entity_brands')->insert($rows);
     }
 }
