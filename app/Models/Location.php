@@ -57,7 +57,6 @@ class Location extends Model
             'business_entity_id'
         )
             ->withPivot([
-                'brand_id',
                 'operational_unit_id',
                 'nace_code',
                 'hazard_class',
