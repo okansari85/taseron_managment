@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Brand;
-use App\Models\Organization;
+use App\Models\Company;
 use App\Repositories\Contracts\BrandRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -38,24 +38,17 @@ class BrandService
         }
 
         return DB::transaction(function () use ($data) {
-            $tenantId = $this->tenantContext->id();
-
-            $organization = Organization::query()
-                ->where('tenant_id', $tenantId)
-                ->whereKey($data['organization_id'])
-                ->first();
-
-            if ($organization === null) {
-                throw new RuntimeException(
-                    'Seçilen organizasyon bu tenant içerisinde bulunamadı.'
-                );
-            }
-
-            return $this->repository->create([
-                'tenant_id' => $tenantId,
-                'organization_id' => $organization->id,
+            $brand = $this->repository->create([
+                'tenant_id' => $this->tenantContext->id(),
                 'name' => $data['name'],
             ]);
+
+            $this->syncCompanies(
+                $brand,
+                $data['company_ids'] ?? []
+            );
+
+            return $brand->load('companies');
         });
     }
 
@@ -80,23 +73,20 @@ class BrandService
 
             unset($data['tenant_id']);
 
-            if (array_key_exists('organization_id', $data)) {
-                $organizationExists = Organization::query()
-                    ->where('tenant_id', $tenantId)
-                    ->whereKey($data['organization_id'])
-                    ->exists();
+            $companyIdsProvided = array_key_exists('company_ids', $data);
+            $companyIds = $data['company_ids'] ?? [];
+            unset($data['company_ids']);
 
-                if (! $organizationExists) {
-                    throw new RuntimeException(
-                        'Seçilen organizasyon bu tenant içerisinde bulunamadı.'
-                    );
-                }
-            }
-
-            return $this->repository->update(
+            $brand = $this->repository->update(
                 $brand,
                 $data
             );
+
+            if ($companyIdsProvided) {
+                $this->syncCompanies($brand, $companyIds);
+            }
+
+            return $brand->load('companies');
         });
     }
 
@@ -117,5 +107,34 @@ class BrandService
 
             $this->repository->delete($brand);
         });
+    }
+
+    /**
+     * @param array<int, int|string> $companyIds
+     */
+    private function syncCompanies(Brand $brand, array $companyIds): void
+    {
+        if ($companyIds === []) {
+            $brand->companies()->sync([]);
+            return;
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $companyIds)));
+
+        $validIds = Company::query()
+            ->whereIn('id', $ids)
+            ->whereHas('businessEntity', function ($query) {
+                $query->where('tenant_id', $this->tenantContext->id());
+            })
+            ->pluck('id')
+            ->all();
+
+        if (count($validIds) !== count($ids)) {
+            throw new RuntimeException(
+                'Seçilen şirketlerden biri bu tenant içerisinde bulunamadı.'
+            );
+        }
+
+        $brand->companies()->sync($validIds);
     }
 }
