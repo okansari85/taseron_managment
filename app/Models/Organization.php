@@ -64,14 +64,6 @@ class Organization extends Model
             ->withTimestamps();
     }
 
-    public function locations(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            Location::class,
-            'organization_locations'
-        )->withTimestamps();
-    }
-
     public function brands(): HasMany
     {
         return $this->hasMany(
