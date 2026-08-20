@@ -19,8 +19,8 @@ use App\Repositories\Contracts\ContractorRepositoryInterface;
 use App\Repositories\ContractorRepository;
 use App\Repositories\Contracts\BrandRepositoryInterface;
 use App\Repositories\BrandRepository;
-use App\Repositories\Contracts\OperationalUnitRepositoryInterface;
-use App\Repositories\OperationalUnitRepository;
+use App\Repositories\Contracts\OperationalRegionRepositoryInterface;
+use App\Repositories\OperationalRegionRepository;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -34,7 +34,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(LocationBusinessEntityRepositoryInterface::class, LocationBusinessEntityRepository::class);
         $this->app->bind(ContractorRepositoryInterface::class, ContractorRepository::class);
         $this->app->bind(BrandRepositoryInterface::class, BrandRepository::class);
-        $this->app->bind(OperationalUnitRepositoryInterface::class, OperationalUnitRepository::class);
+        $this->app->bind(OperationalRegionRepositoryInterface::class, OperationalRegionRepository::class);
     }
 
     public function boot(): void
