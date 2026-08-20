@@ -25,20 +25,12 @@ return new class extends Migration
                )
         SQL);
 
-        $indexes = DB::table('information_schema.STATISTICS')
-            ->where('TABLE_SCHEMA', DB::getDatabaseName())
-            ->where('TABLE_NAME', 'organization_companies')
-            ->pluck('INDEX_NAME')
-            ->unique()
-            ->values();
+        // The old composite unique index currently supports the organization
+        // foreign key. Create a dedicated organization_id index FIRST so
+        // MySQL can safely drop the old composite index afterward.
+        $indexes = $this->indexes();
 
-        // MySQL needs an index beginning with organization_id for the
-        // organization foreign key. Keep that index before dropping the
-        // old composite unique index.
-        if (
-            ! $indexes->contains('organization_companies_organization_id_index')
-            && ! $indexes->contains('organization_companies_organization_id_business_entity_id_unique')
-        ) {
+        if (! $indexes->contains('organization_companies_organization_id_index')) {
             Schema::table('organization_companies', function (Blueprint $table) {
                 $table->index(
                     'organization_id',
@@ -47,6 +39,8 @@ return new class extends Migration
             });
         }
 
+        $indexes = $this->indexes();
+
         if ($indexes->contains('organization_companies_organization_id_business_entity_id_unique')) {
             Schema::table('organization_companies', function (Blueprint $table) {
                 $table->dropUnique(
@@ -54,6 +48,8 @@ return new class extends Migration
                 );
             });
         }
+
+        $indexes = $this->indexes();
 
         if (! $indexes->contains('organization_companies_business_entity_id_unique')) {
             Schema::table('organization_companies', function (Blueprint $table) {
@@ -67,12 +63,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        $indexes = DB::table('information_schema.STATISTICS')
-            ->where('TABLE_SCHEMA', DB::getDatabaseName())
-            ->where('TABLE_NAME', 'organization_companies')
-            ->pluck('INDEX_NAME')
-            ->unique()
-            ->values();
+        $indexes = $this->indexes();
 
         if ($indexes->contains('organization_companies_business_entity_id_unique')) {
             Schema::table('organization_companies', function (Blueprint $table) {
@@ -81,6 +72,8 @@ return new class extends Migration
                 );
             });
         }
+
+        $indexes = $this->indexes();
 
         if (! $indexes->contains('organization_companies_organization_id_business_entity_id_unique')) {
             Schema::table('organization_companies', function (Blueprint $table) {
@@ -91,17 +84,25 @@ return new class extends Migration
             });
         }
 
-        $indexes = DB::table('information_schema.STATISTICS')
-            ->where('TABLE_SCHEMA', DB::getDatabaseName())
-            ->where('TABLE_NAME', 'organization_companies')
-            ->pluck('INDEX_NAME')
-            ->unique()
-            ->values();
+        // The dedicated organization index is required while the composite
+        // unique index is absent. It can be removed after the composite index
+        // is restored.
+        $indexes = $this->indexes();
 
         if ($indexes->contains('organization_companies_organization_id_index')) {
             Schema::table('organization_companies', function (Blueprint $table) {
                 $table->dropIndex('organization_companies_organization_id_index');
             });
         }
+    }
+
+    private function indexes()
+    {
+        return DB::table('information_schema.STATISTICS')
+            ->where('TABLE_SCHEMA', DB::getDatabaseName())
+            ->where('TABLE_NAME', 'organization_companies')
+            ->pluck('INDEX_NAME')
+            ->unique()
+            ->values();
     }
 };
