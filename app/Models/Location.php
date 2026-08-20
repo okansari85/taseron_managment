@@ -46,7 +46,9 @@ class Location extends Model
             'location_id',
             'business_entity_id'
         )
+            ->using(LocationBusinessEntity::class)
             ->withPivot([
+                'id',
                 'operational_region_id',
                 'nace_code',
                 'hazard_class',
