@@ -9,7 +9,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // A location can contain multiple companies in the same operational unit.
+        // A location may contain multiple companies in the same operational unit.
         // The same company can only be registered once within the same unit.
         if ($this->indexExists(
             'location_business_entities',
@@ -18,15 +18,6 @@ return new class extends Migration
             Schema::table('location_business_entities', function (Blueprint $table) {
                 $table->dropUnique('location_business_entities_operational_unit_id_unique');
             });
-        }
-
-        if (! Schema::hasColumn('location_business_entities', 'operational_unit_key')) {
-            DB::statement('
-                ALTER TABLE location_business_entities
-                ADD COLUMN operational_unit_key BIGINT
-                GENERATED ALWAYS AS (COALESCE(operational_unit_id, 0)) STORED
-                AFTER operational_unit_id
-            ');
         }
 
         if (! $this->indexExists(
@@ -38,7 +29,7 @@ return new class extends Migration
                     [
                         'location_id',
                         'business_entity_id',
-                        'operational_unit_key',
+                        'operational_unit_id',
                     ],
                     'lbe_location_business_entity_operational_unit_unique'
                 );
@@ -55,13 +46,6 @@ return new class extends Migration
             Schema::table('location_business_entities', function (Blueprint $table) {
                 $table->dropUnique('lbe_location_business_entity_operational_unit_unique');
             });
-        }
-
-        if (Schema::hasColumn('location_business_entities', 'operational_unit_key')) {
-            DB::statement('
-                ALTER TABLE location_business_entities
-                DROP COLUMN operational_unit_key
-            ');
         }
 
         if (! $this->indexExists(
