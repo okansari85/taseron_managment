@@ -50,7 +50,7 @@ class BusinessEntity extends Model
             'location_id'
         )
             ->withPivot([
-                'operational_unit_id',
+                'operational_region_id',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
