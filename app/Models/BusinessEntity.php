@@ -6,9 +6,8 @@ use App\Domain\Tenancy\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use App\Models\Location;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class BusinessEntity extends Model
 {
@@ -51,6 +50,8 @@ class BusinessEntity extends Model
             'location_id'
         )
             ->withPivot([
+                'brand_id',
+                'operational_unit_id',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
