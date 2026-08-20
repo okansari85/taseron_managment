@@ -28,9 +28,11 @@ class Tenant extends Model
 
     public function getLogoUrlAttribute(): ?string
     {
-        return $this->logo_path
-            ? Storage::disk('public')->url($this->logo_path)
-            : null;
+        if (!$this->logo_path) {
+            return null;
+        }
+
+        return rtrim(config('app.url'), '/') . '/storage/' . ltrim($this->logo_path, '/');
     }
 
     public function organizations(): HasMany
