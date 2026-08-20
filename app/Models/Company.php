@@ -36,4 +36,14 @@ class Company extends Model
             'id'
         )->withTimestamps();
     }
+
+    public function brands(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Brand::class,
+            'company_brands',
+            'company_id',
+            'brand_id'
+        )->withTimestamps();
+    }
 }
