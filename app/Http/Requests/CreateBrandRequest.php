@@ -14,9 +14,15 @@ class CreateBrandRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'organization_id' => [
-                'required',
+            'company_ids' => [
+                'sometimes',
+                'array',
+                'min:1',
+            ],
+
+            'company_ids.*' => [
                 'integer',
+                'distinct',
             ],
 
             'name' => [
