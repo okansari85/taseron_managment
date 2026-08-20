@@ -27,15 +27,13 @@ class Location extends Model
 
     public function tenant(): BelongsTo
     {
-        return $this->belongsTo(
-            Tenant::class
-        );
+        return $this->belongsTo(Tenant::class);
     }
 
-    public function operationalUnits(): HasMany
+    public function operationalRegions(): HasMany
     {
         return $this->hasMany(
-            OperationalUnit::class,
+            OperationalRegion::class,
             'location_id'
         );
     }
@@ -49,7 +47,7 @@ class Location extends Model
             'business_entity_id'
         )
             ->withPivot([
-                'operational_unit_id',
+                'operational_region_id',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
