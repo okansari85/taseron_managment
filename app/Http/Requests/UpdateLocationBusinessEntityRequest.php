@@ -14,6 +14,8 @@ class UpdateLocationBusinessEntityRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'brand_ids' => ['sometimes', 'array'],
+            'brand_ids.*' => ['integer', 'exists:brands,id'],
             'operational_region_id' => [
                 'nullable',
                 'integer',
@@ -28,6 +30,9 @@ class UpdateLocationBusinessEntityRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'brand_ids.array' => 'Markalar liste olarak gönderilmelidir.',
+            'brand_ids.*.integer' => 'Marka ID geçerli olmalıdır.',
+            'brand_ids.*.exists' => 'Seçilen markalardan biri bulunamadı.',
             'operational_region_id.integer' => 'Operasyonel alan ID geçerli olmalıdır.',
             'operational_region_id.exists' => 'Seçilen operasyonel alan bulunamadı.',
             'nace_code.required' => 'NACE kodu zorunludur.',
