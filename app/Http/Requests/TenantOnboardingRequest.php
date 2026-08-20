@@ -85,6 +85,13 @@ class TenantOnboardingRequest extends FormRequest
                 'string',
                 'max:255',
             ],
+
+            'logo' => [
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,svg',
+                'max:2048',
+            ],
         ];
     }
 }
