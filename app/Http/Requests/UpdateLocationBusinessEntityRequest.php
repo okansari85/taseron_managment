@@ -14,6 +14,12 @@ class UpdateLocationBusinessEntityRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'operational_unit_id' => [
+                'nullable',
+                'integer',
+                'exists:operational_units,id',
+            ],
+
             'nace_code' => [
                 'required',
                 'string',
@@ -37,6 +43,12 @@ class UpdateLocationBusinessEntityRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'operational_unit_id.integer' =>
+                'Operasyonel birim ID geçerli olmalıdır.',
+
+            'operational_unit_id.exists' =>
+                'Seçilen operasyonel birim bulunamadı.',
+
             'nace_code.required' =>
                 'NACE kodu zorunludur.',
 
