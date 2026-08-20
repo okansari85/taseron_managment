@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\BusinessEntity;
 use App\Models\Location;
+use App\Models\OperationalUnit;
 use App\Repositories\Contracts\LocationBusinessEntityRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -29,7 +30,8 @@ class LocationBusinessEntityService
     ): void {
         $this->validateBusinessEntity(
             $businessEntity,
-            $pivotData
+            $pivotData,
+            $location
         );
 
         DB::transaction(function () use (
@@ -52,7 +54,8 @@ class LocationBusinessEntityService
     ): void {
         $this->validateBusinessEntity(
             $businessEntity,
-            $pivotData
+            $pivotData,
+            $location
         );
 
         DB::transaction(function () use (
@@ -83,40 +86,63 @@ class LocationBusinessEntityService
         });
     }
 
-  private function validateBusinessEntity(
-    BusinessEntity $businessEntity,
-    array &$pivotData
-): void {
-    // Şirket lokasyona bağlanabilir.
-    if ($businessEntity->type === 'company') {
-        return;
+    private function validateBusinessEntity(
+        BusinessEntity $businessEntity,
+        array &$pivotData,
+        Location $location
+    ): void {
+        $operationalUnitId = $pivotData['operational_unit_id'] ?? null;
+
+        if ($operationalUnitId !== null) {
+            $operationalUnit = OperationalUnit::query()
+                ->whereKey($operationalUnitId)
+                ->first();
+
+            if ($operationalUnit === null) {
+                throw ValidationException::withMessages([
+                    'operational_unit_id' => [
+                        'Seçilen operasyonel birim bulunamadı.',
+                    ],
+                ]);
+            }
+
+            if ($operationalUnit->location_id !== $location->id) {
+                throw ValidationException::withMessages([
+                    'operational_unit_id' => [
+                        'Seçilen operasyonel birim bu lokasyona ait değil.',
+                    ],
+                ]);
+            }
+        }
+
+        // Şirket lokasyona bağlanabilir.
+        if ($businessEntity->type === 'company') {
+            return;
+        }
+
+        // Sadece company ve contractor BusinessEntity
+        // lokasyon ilişkisine aday olabilir.
+        if ($businessEntity->type !== 'contractor') {
+            throw new LogicException(
+                'Bu Business Entity tipi lokasyona bağlanamaz.'
+            );
+        }
+
+        $contractor = $businessEntity->contractor;
+
+        if ($contractor === null) {
+            throw new LogicException(
+                'Business Entity için Contractor kaydı bulunamadı.'
+            );
+        }
+
+        // Geçici taşeron lokasyona bağlanamaz.
+        if ($contractor->contractor_type === 'temporary') {
+            throw ValidationException::withMessages([
+                'business_entity_id' => [
+                    'Geçici taşeron lokasyona bağlanamaz.',
+                ],
+            ]);
+        }
     }
-
-    // Sadece company ve contractor BusinessEntity
-    // lokasyon ilişkisine aday olabilir.
-    if ($businessEntity->type !== 'contractor') {
-        throw new LogicException(
-            'Bu Business Entity tipi lokasyona bağlanamaz.'
-        );
-    }
-
-    $contractor = $businessEntity->contractor;
-
-    if ($contractor === null) {
-        throw new LogicException(
-            'Business Entity için Contractor kaydı bulunamadı.'
-        );
-    }
-
-    // Geçici taşeron lokasyona bağlanamaz.
-    if ($contractor->contractor_type === 'temporary') {
-    throw ValidationException::withMessages([
-        'business_entity_id' => [
-            'Geçici taşeron lokasyona bağlanamaz.'
-        ],
-    ]);
-    }
-
-    // Buraya gelen contractor artık permanent olmalıdır.
-}
 }
