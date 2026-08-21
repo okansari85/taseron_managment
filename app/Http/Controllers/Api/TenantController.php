@@ -6,13 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreTenantRequest;
 use App\Http\Requests\UpdateTenantRequest;
 use App\Models\Tenant;
+use App\Services\OrganizationService;
 use App\Services\TenantService;
 use Illuminate\Http\JsonResponse;
 
 class TenantController extends Controller
 {
     public function __construct(
-        private TenantService $service
+        private TenantService $service,
+        private OrganizationService $organizationService
     ) {
     }
 
@@ -25,9 +27,6 @@ class TenantController extends Controller
 
     public function store(StoreTenantRequest $request): JsonResponse
     {
-
-
-
         $tenant = $this->service->create(
             $request->validated()
         );
@@ -40,8 +39,15 @@ class TenantController extends Controller
 
     public function show(Tenant $tenant): JsonResponse
     {
+        $tenant = $this->service->find($tenant->id);
+        $rootOrganization = $this->organizationService
+            ->getRootByTenantId($tenant->id);
+
         return response()->json([
-            'data' => $this->service->find($tenant->id),
+            'data' => [
+                ...$tenant->toArray(),
+                'root_organization' => $rootOrganization,
+            ],
         ]);
     }
 
