@@ -27,6 +27,7 @@ class UpdateTenantRequest extends FormRequest
                 Rule::unique('tenants', 'slug')->ignore($tenant),
             ],
             'status' => ['sometimes', 'boolean'],
+            'logo' => ['sometimes', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
         ];
     }
 }
