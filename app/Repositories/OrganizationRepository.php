@@ -36,4 +36,12 @@ class OrganizationRepository implements OrganizationRepositoryInterface
     {
         $organization->delete();
     }
+
+    public function getRootByTenantId(int $tenantId): ?Organization
+    {
+        return Organization::query()
+            ->where('tenant_id', $tenantId)
+            ->whereNull('parent_id')
+            ->first();
+    }
 }
