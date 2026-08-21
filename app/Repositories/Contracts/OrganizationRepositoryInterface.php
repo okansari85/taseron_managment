@@ -16,4 +16,6 @@ interface OrganizationRepositoryInterface
     public function update(Organization $organization, array $data): Organization;
 
     public function delete(Organization $organization): void;
+
+    public function getRootByTenantId(int $tenantId): ?Organization;
 }
