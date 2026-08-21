@@ -28,6 +28,11 @@ class OrganizationService
         return $this->repository->find($id);
     }
 
+    public function getRootByTenantId(int $tenantId): ?Organization
+    {
+        return $this->repository->getRootByTenantId($tenantId);
+    }
+
     public function create(array $data): Organization
     {
         if (! $this->tenantContext->has()) {
