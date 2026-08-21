@@ -5,8 +5,10 @@ namespace App\Services;
 use App\Models\Tenant;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 class TenantService
 {
@@ -34,9 +36,33 @@ class TenantService
 
     public function update(Tenant $tenant, array $data): Tenant
     {
-        return DB::transaction(function () use ($tenant, $data) {
-            return $this->repository->update($tenant, $data);
-        });
+        $oldLogoPath = $tenant->logo_path;
+        $newLogoPath = null;
+
+        try {
+            $updatedTenant = DB::transaction(function () use ($tenant, $data, &$newLogoPath) {
+                if (($data['logo'] ?? null) instanceof UploadedFile) {
+                    $newLogoPath = $data['logo']->store('tenant-logos', 'public');
+                    $data['logo_path'] = $newLogoPath;
+                }
+
+                unset($data['logo']);
+
+                return $this->repository->update($tenant, $data);
+            });
+
+            if ($newLogoPath !== null && $oldLogoPath && $oldLogoPath !== $newLogoPath) {
+                Storage::disk('public')->delete($oldLogoPath);
+            }
+
+            return $updatedTenant;
+        } catch (Throwable $exception) {
+            if ($newLogoPath !== null) {
+                Storage::disk('public')->delete($newLogoPath);
+            }
+
+            throw $exception;
+        }
     }
 
     public function delete(Tenant $tenant): void
