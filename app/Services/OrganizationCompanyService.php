@@ -24,6 +24,11 @@ class OrganizationCompanyService
         return $this->repository->all($organization);
     }
 
+    public function allForTenant(): Collection
+    {
+        return $this->repository->allForTenant();
+    }
+
     public function attach(
         Organization $organization,
         BusinessEntity $businessEntity
