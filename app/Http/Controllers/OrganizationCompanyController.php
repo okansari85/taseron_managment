@@ -15,6 +15,13 @@ class OrganizationCompanyController extends Controller
     ) {
     }
 
+    public function indexForTenant(): JsonResponse
+    {
+        return response()->json(
+            $this->service->allForTenant()
+        );
+    }
+
     public function index(
         Organization $organization
     ): JsonResponse {
