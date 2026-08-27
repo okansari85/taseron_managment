@@ -21,10 +21,25 @@ class StoreCompanyRequest extends FormRequest
                 'max:255',
             ],
 
+            'short_name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'description' => [
+                'nullable',
+                'string',
+                'max:500',
+            ],
+
+            'is_active' => [
+                'boolean',
+            ],
+
             'company_type' => [
                 'required',
                 Rule::in([
-                    'individual',
                     'corporate',
                 ]),
             ],
@@ -37,6 +52,13 @@ class StoreCompanyRequest extends FormRequest
             'name.required' => 'Şirket adı zorunludur.',
             'name.string' => 'Şirket adı geçerli bir metin olmalıdır.',
             'name.max' => 'Şirket adı en fazla 255 karakter olabilir.',
+
+            'short_name.required' => 'Kısa ad zorunludur.',
+            'short_name.string' => 'Kısa ad geçerli bir metin olmalıdır.',
+            'short_name.max' => 'Kısa ad en fazla 255 karakter olabilir.',
+
+            'description.string' => 'Açıklama geçerli bir metin olmalıdır.',
+            'description.max' => 'Açıklama en fazla 500 karakter olabilir.',
 
             'company_type.required' => 'Şirket türü zorunludur.',
             'company_type.in' => 'Geçersiz şirket türü.',
