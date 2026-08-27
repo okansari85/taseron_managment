@@ -45,6 +45,9 @@ class CompanyService
 
             return $this->repository->create([
                 'name' => $data['name'],
+                'short_name' => $data['short_name'] ?? null,
+                'description' => $data['description'] ?? null,
+                'is_active' => $data['is_active'] ?? true,
                 'company_type' => $data['company_type'] ?? null,
                 'business_entity_id' => $businessEntity->id,
             ]);
@@ -58,25 +61,22 @@ class CompanyService
         return DB::transaction(function () use ($company, $data) {
             $companyData = [];
 
-            if (array_key_exists('company_type', $data)) {
-                $companyData['company_type'] = $data['company_type'];
+            foreach ([
+                'name',
+                'short_name',
+                'description',
+                'is_active',
+                'company_type',
+            ] as $field) {
+                if (array_key_exists($field, $data)) {
+                    $companyData[$field] = $data[$field];
+                }
             }
 
-            $company = $this->repository->update(
+            return $this->repository->update(
                 $company,
                 $companyData
             );
-
-            if (
-                array_key_exists('name', $data)
-                && $company->businessEntity !== null
-            ) {
-                $company->businessEntity->update([
-                    'name' => $data['name'],
-                ]);
-            }
-
-            return $company->refresh();
         });
     }
 
