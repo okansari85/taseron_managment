@@ -36,7 +36,8 @@ class StoreOrganizationRequest extends FormRequest
             ],
 
             'slug' => [
-                'required',
+                'required_if:type,group',
+                'nullable',
                 'string',
                 'max:255',
                 Rule::unique('organizations', 'slug')
@@ -62,7 +63,7 @@ class StoreOrganizationRequest extends FormRequest
             ],
 
             'is_active' => [
-                'required',
+                'nullable',
                 'boolean',
             ],
 
@@ -74,7 +75,8 @@ class StoreOrganizationRequest extends FormRequest
             ],
 
             'color' => [
-                'required',
+                'required_if:type,group',
+                'nullable',
                 'string',
                 'regex:/^#[0-9A-Fa-f]{6}$/',
             ],
@@ -91,7 +93,7 @@ class StoreOrganizationRequest extends FormRequest
             'type.required' => 'Organizasyon tipi zorunludur.',
             'type.in' => 'Geçersiz organizasyon tipi.',
 
-            'slug.required' => 'Slug zorunludur.',
+            'slug.required_if' => 'Grup için slug zorunludur.',
             'slug.string' => 'Slug geçerli bir metin olmalıdır.',
             'slug.max' => 'Slug en fazla 255 karakter olabilir.',
             'slug.unique' => 'Bu slug tenant içerisinde zaten kullanılmaktadır.',
@@ -99,19 +101,18 @@ class StoreOrganizationRequest extends FormRequest
             'description.string' => 'Açıklama geçerli bir metin olmalıdır.',
             'description.max' => 'Açıklama en fazla 500 karakter olabilir.',
 
-            'code.string' => 'Grup kodu geçerli bir metin olmalıdır.',
-            'code.max' => 'Grup kodu en fazla 100 karakter olabilir.',
+            'code.string' => 'Kod geçerli bir metin olmalıdır.',
+            'code.max' => 'Kod en fazla 100 karakter olabilir.',
 
             'display_order.integer' => 'Sıra değeri tam sayı olmalıdır.',
             'display_order.min' => 'Sıra değeri 0 veya daha büyük olmalıdır.',
 
-            'is_active.required' => 'Aktif durumu zorunludur.',
             'is_active.boolean' => 'Aktif durumu geçerli bir boolean değer olmalıdır.',
 
             'parent_id.integer' => 'Üst organizasyon ID değeri geçerli olmalıdır.',
             'parent_id.exists' => 'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.',
 
-            'color.required' => 'Görünüm rengi zorunludur.',
+            'color.required_if' => 'Grup için görünüm rengi zorunludur.',
             'color.regex' => 'Görünüm rengi geçerli bir HEX renk değeri olmalıdır.',
         ];
     }
