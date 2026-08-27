@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Organization;
 use App\Repositories\Contracts\GroupRepositoryInterface;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 use RuntimeException;
@@ -52,7 +51,7 @@ class GroupService
                     ->find($data['parent_id']);
 
                 if (! $parent) {
-                    throw new ModelNotFoundException(
+                    throw new RuntimeException(
                         'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.'
                     );
                 }
