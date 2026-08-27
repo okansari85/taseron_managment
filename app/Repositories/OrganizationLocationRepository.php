@@ -22,7 +22,6 @@ class OrganizationLocationRepository implements OrganizationLocationRepositoryIn
     public function attach(Organization $organization, Location $location): OrganizationLocation
     {
         return OrganizationLocation::firstOrCreate([
-            'tenant_id' => $organization->tenant_id,
             'organization_id' => $organization->id,
             'location_id' => $location->id,
         ]);
