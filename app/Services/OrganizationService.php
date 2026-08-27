@@ -66,14 +66,22 @@ class OrganizationService
                 /*
                  * Parent mutlaka aynı tenant içerisinde bulunmalıdır.
                  */
-                $parentExists = Organization::query()
+                $parent = Organization::query()
                     ->where('tenant_id', $tenantId)
-                    ->whereKey($data['parent_id'])
-                    ->exists();
+                    ->find($data['parent_id']);
 
-                if (! $parentExists) {
+                if (! $parent) {
                     throw new RuntimeException(
                         'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.'
+                    );
+                }
+
+                /*
+                 * Grup yalnızca holding veya başka bir grup altında olabilir.
+                 */
+                if (($data['type'] ?? null) === 'group' && ! in_array($parent->type, ['holding', 'group'], true)) {
+                    throw new RuntimeException(
+                        'Bir grup yalnızca holding veya grup altında oluşturulabilir.'
                     );
                 }
             }
