@@ -48,21 +48,23 @@ class OrganizationService
             $data['parent_id'] ??= null;
 
             /*
-             * Tenant içerisinde yalnızca bir root organization olabilir.
-             * Root organization => parent_id = null
+             * Parent belirtilmemişse tenant'ın mevcut root organizasyonunu
+             * otomatik olarak parent kabul et.
+             *
+             * Böylece:
+             * - Root yoksa yeni organizasyon root olur.
+             * - Root varsa yeni organizasyon root'un altında oluşur.
+             * - Root'un holding veya group olması fark etmez.
              */
             if ($data['parent_id'] === null) {
-                $rootExists = Organization::query()
-                    ->where('tenant_id', $tenantId)
-                    ->whereNull('parent_id')
-                    ->exists();
+                $root = $this->repository->getRootByTenantId($tenantId);
 
-                if ($rootExists) {
-                    throw new RuntimeException(
-                        'Bu tenant için zaten bir kök organizasyon bulunmaktadır.'
-                    );
+                if ($root) {
+                    $data['parent_id'] = $root->id;
                 }
-            } else {
+            }
+
+            if ($data['parent_id'] !== null) {
                 /*
                  * Parent mutlaka aynı tenant içerisinde bulunmalıdır.
                  */
@@ -103,23 +105,14 @@ class OrganizationService
         return DB::transaction(function () use ($organization, $data) {
             $tenantId = $this->tenantContext->id();
 
-            /*
-             * Organization mevcut tenant'a ait olmalıdır.
-             */
             if ($organization->tenant_id !== $tenantId) {
                 throw new RuntimeException(
                     'Bu organizasyona erişim yetkiniz yok.'
                 );
             }
 
-            /*
-             * tenant_id hiçbir şekilde request üzerinden değiştirilemez.
-             */
             unset($data['tenant_id']);
 
-            /*
-             * parent_id update datasında yoksa mevcut parent korunur.
-             */
             if (! array_key_exists('parent_id', $data)) {
                 return $this->repository->update(
                     $organization,
@@ -129,9 +122,6 @@ class OrganizationService
 
             $parentId = $data['parent_id'];
 
-            /*
-             * Organization root yapılmak isteniyor.
-             */
             if ($parentId === null) {
                 $anotherRootExists = Organization::query()
                     ->where('tenant_id', $tenantId)
@@ -145,18 +135,12 @@ class OrganizationService
                     );
                 }
             } else {
-                /*
-                 * Kendisi kendisinin parent'ı olamaz.
-                 */
                 if ((int) $parentId === (int) $organization->id) {
                     throw new RuntimeException(
                         'Bir organizasyon kendisini üst organizasyon olarak belirleyemez.'
                     );
                 }
 
-                /*
-                 * Parent aynı tenant'a ait olmalıdır.
-                 */
                 $parentExists = Organization::query()
                     ->where('tenant_id', $tenantId)
                     ->whereKey($parentId)
