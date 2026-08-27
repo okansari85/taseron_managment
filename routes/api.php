@@ -14,6 +14,7 @@ use App\Http\Controllers\TenantOnboardingController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
 use App\Http\Controllers\OperationalRegionController;
+use App\Http\Controllers\OrganizationLocationController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -42,6 +43,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('organizations/{organization}/companies', [OrganizationCompanyController::class, 'sync']);
             Route::post('organizations/{organization}/companies/{businessEntity}', [OrganizationCompanyController::class, 'attach']);
             Route::delete('organizations/{organization}/companies/{businessEntity}', [OrganizationCompanyController::class, 'detach']);
+
+            Route::get('organizations/{organization}/locations', [OrganizationLocationController::class, 'index']);
+            Route::post('organizations/{organization}/locations', [OrganizationLocationController::class, 'store']);
+            Route::post('organizations/{organization}/locations/{location}', [OrganizationLocationController::class, 'attach']);
+            Route::delete('organizations/{organization}/locations/{location}', [OrganizationLocationController::class, 'detach']);
 
             Route::get('brands/{brand}/locations', [BrandLocationController::class, 'index']);
             Route::put('brands/{brand}/locations', [BrandLocationController::class, 'sync']);
