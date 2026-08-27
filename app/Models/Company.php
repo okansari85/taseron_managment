@@ -13,8 +13,15 @@ class Company extends Model
 
     protected $fillable = [
         'name',
+        'short_name',
+        'description',
+        'is_active',
         'company_type',
         'business_entity_id',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
     ];
 
     public function businessEntity(): BelongsTo
