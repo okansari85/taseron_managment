@@ -40,6 +40,7 @@ class StoreCompanyRequest extends FormRequest
             'company_type' => [
                 'required',
                 Rule::in([
+                    'individual',
                     'corporate',
                 ]),
             ],
