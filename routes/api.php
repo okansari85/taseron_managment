@@ -5,7 +5,6 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\TenantController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\OrganizationController;
-use App\Http\Controllers\GroupController;
 use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\LocationController;
 use App\Http\Controllers\ContractorController;
@@ -34,7 +33,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('tenant')->group(function () {
         Route::middleware('role:super-admin')->group(function () {
             Route::apiResource('organizations', OrganizationController::class);
-            Route::post('organizations/groups', [GroupController::class, 'store']);
             Route::apiResource('companies', CompanyController::class);
             Route::apiResource('contractors', ContractorController::class);
             Route::apiResource('locations', LocationController::class);
