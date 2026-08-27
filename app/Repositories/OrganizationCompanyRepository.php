@@ -25,10 +25,14 @@ class OrganizationCompanyRepository implements OrganizationCompanyRepositoryInte
             ->whereHas('businessEntity', function ($query) {
                 $query->where('type', 'company');
             })
-            ->whereHas('organizations')
+            ->whereHas('organizations', function ($query) {
+                $query->where('type', 'group');
+            })
             ->with([
                 'businessEntity',
-                'organizations',
+                'organizations' => function ($query) {
+                    $query->where('type', 'group');
+                },
             ])
             ->withCount('brands')
             ->orderBy('name')
