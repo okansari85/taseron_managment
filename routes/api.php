@@ -39,6 +39,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('brands', BrandController::class);
             Route::apiResource('locations.operational-regions', OperationalRegionController::class);
 
+            Route::get('organization-companies', [OrganizationCompanyController::class, 'indexForTenant']);
             Route::get('organizations/{organization}/companies', [OrganizationCompanyController::class, 'index']);
             Route::put('organizations/{organization}/companies', [OrganizationCompanyController::class, 'sync']);
             Route::post('organizations/{organization}/companies/{businessEntity}', [OrganizationCompanyController::class, 'attach']);
