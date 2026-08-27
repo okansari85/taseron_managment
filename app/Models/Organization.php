@@ -20,6 +20,12 @@ class Organization extends Model
         'parent_id',
         'name',
         'type',
+        'slug',
+        'description',
+        'code',
+        'display_order',
+        'is_active',
+        'color',
     ];
 
     protected static function booted(): void
