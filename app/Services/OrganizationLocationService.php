@@ -6,6 +6,7 @@ use App\Domain\Tenancy\TenantContext;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\OrganizationLocation;
+use App\Repositories\Contracts\OrganizationLocationRepositoryInterface;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Validation\ValidationException;
 
@@ -14,6 +15,7 @@ class OrganizationLocationService
     public function __construct(
         private TenantContext $tenantContext,
         private DatabaseManager $database,
+        private OrganizationLocationRepositoryInterface $repository,
     ) {
     }
 
@@ -21,11 +23,7 @@ class OrganizationLocationService
     {
         $this->assertTenantOrganization($organization);
 
-        return OrganizationLocation::query()
-            ->where('organization_id', $organization->id)
-            ->with('location')
-            ->latest('id')
-            ->get();
+        return $this->repository->list($organization);
     }
 
     public function attach(Organization $organization, Location $location): OrganizationLocation
@@ -33,11 +31,7 @@ class OrganizationLocationService
         $this->assertTenantOrganization($organization);
         $this->assertTenantLocation($location);
 
-        return OrganizationLocation::firstOrCreate([
-            'tenant_id' => $this->tenantContext->id(),
-            'organization_id' => $organization->id,
-            'location_id' => $location->id,
-        ]);
+        return $this->repository->attach($organization, $location);
     }
 
     public function detach(Organization $organization, Location $location): void
@@ -45,11 +39,7 @@ class OrganizationLocationService
         $this->assertTenantOrganization($organization);
         $this->assertTenantLocation($location);
 
-        OrganizationLocation::query()
-            ->where('tenant_id', $this->tenantContext->id())
-            ->where('organization_id', $organization->id)
-            ->where('location_id', $location->id)
-            ->delete();
+        $this->repository->detach($organization, $location);
     }
 
     public function createForOrganization(Organization $organization, array $data): Location
@@ -62,11 +52,7 @@ class OrganizationLocationService
                 'name' => $data['name'],
             ]);
 
-            OrganizationLocation::create([
-                'tenant_id' => $this->tenantContext->id(),
-                'organization_id' => $organization->id,
-                'location_id' => $location->id,
-            ]);
+            $this->repository->attach($organization, $location);
 
             return $location;
         });
