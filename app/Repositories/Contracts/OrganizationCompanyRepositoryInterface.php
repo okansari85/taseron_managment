@@ -12,6 +12,8 @@ interface OrganizationCompanyRepositoryInterface
         Organization $organization
     ): Collection;
 
+    public function allForTenant(): Collection;
+
     public function attach(
         Organization $organization,
         BusinessEntity $businessEntity
