@@ -23,6 +23,8 @@ use App\Repositories\Contracts\OperationalRegionRepositoryInterface;
 use App\Repositories\OperationalRegionRepository;
 use App\Repositories\Contracts\OrganizationLocationRepositoryInterface;
 use App\Repositories\OrganizationLocationRepository;
+use App\Repositories\Contracts\GroupRepositoryInterface;
+use App\Repositories\GroupRepository;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -38,6 +40,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(BrandRepositoryInterface::class, BrandRepository::class);
         $this->app->bind(OperationalRegionRepositoryInterface::class, OperationalRegionRepository::class);
         $this->app->bind(OrganizationLocationRepositoryInterface::class, OrganizationLocationRepository::class);
+        $this->app->bind(GroupRepositoryInterface::class, GroupRepository::class);
     }
 
     public function boot(): void
