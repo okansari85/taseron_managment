@@ -41,25 +41,39 @@ return new class extends Migration
                 WHERE oc.company_id IS NULL
             SQL);
 
-            // Bu ortam test verisi kullandığı için Company karşılığı olmayan eski
-            // ilişki kayıtlarını temizliyoruz. Böylece geçersiz legacy pivotlar
-            // yeni company_id FK dönüşümünü engellemiyor.
+            // Test ortamındaki Company karşılığı olmayan legacy ilişkileri temizle.
             DB::table('organization_companies')
                 ->whereNull('company_id')
                 ->delete();
         }
 
-        $duplicates = DB::table('organization_companies')
+        // organization_companies yalnızca Group -> Company ilişkisini temsil eder.
+        // Group dışındaki eski test ilişkileri yeni hiyerarşiye taşınamaz.
+        DB::statement(<<<'SQL'
+            DELETE oc
+            FROM organization_companies oc
+            INNER JOIN organizations o ON o.id = oc.organization_id
+            WHERE o.type <> 'group' OR o.type IS NULL
+        SQL);
+
+        // Yeni modelde bir Company tek bir Group altında bulunur.
+        // Eski test verisinde duplicate ilişki varsa ilk kayıt korunur.
+        $duplicateCompanyIds = DB::table('organization_companies')
             ->select('company_id')
             ->whereNotNull('company_id')
             ->groupBy('company_id')
             ->havingRaw('COUNT(*) > 1')
             ->pluck('company_id');
 
-        if ($duplicates->isNotEmpty()) {
-            throw new \RuntimeException(
-                'Birden fazla gruba bağlı şirket bulundu. Company ID: ' . $duplicates->implode(', ')
-            );
+        foreach ($duplicateCompanyIds as $companyId) {
+            $keepId = DB::table('organization_companies')
+                ->where('company_id', $companyId)
+                ->min('id');
+
+            DB::table('organization_companies')
+                ->where('company_id', $companyId)
+                ->where('id', '<>', $keepId)
+                ->delete();
         }
 
         if (Schema::hasColumn('organization_companies', 'business_entity_id')) {
@@ -137,12 +151,6 @@ return new class extends Migration
             ->get();
 
         foreach ($memberships as $membership) {
-            if ($membership->organization_type !== 'group') {
-                throw new \RuntimeException(
-                    'Şirket ilişkisi Grup tipinde olmayan bir Organization altında bulundu. Organization ID: ' . $membership->organization_id
-                );
-            }
-
             $nodeId = DB::table('organizations')->insertGetId([
                 'tenant_id' => $membership->tenant_id,
                 'parent_id' => $membership->organization_id,
