@@ -23,29 +23,16 @@ class UpdateOrganizationRequest extends FormRequest
         }
 
         return [
-            'name' => [
-                'required',
-                'string',
-                'max:255',
-            ],
-
+            'name' => ['required', 'string', 'max:255'],
             'type' => [
                 'required',
-                Rule::in([
-                    'holding',
-                    'group',
-                    'company',
-                    'brand',
-                    'location',
-                ]),
+                Rule::in(['holding', 'group', 'company', 'brand']),
             ],
-
             'parent_id' => [
                 'nullable',
                 'integer',
                 'different:' . $organizationId,
-                Rule::exists('organizations', 'id')
-                    ->where('tenant_id', $tenantId),
+                Rule::exists('organizations', 'id')->where('tenant_id', $tenantId),
             ],
         ];
     }
@@ -56,10 +43,8 @@ class UpdateOrganizationRequest extends FormRequest
             'name.required' => 'Organizasyon adı zorunludur.',
             'name.string' => 'Organizasyon adı geçerli bir metin olmalıdır.',
             'name.max' => 'Organizasyon adı en fazla 255 karakter olabilir.',
-
             'type.required' => 'Organizasyon tipi zorunludur.',
             'type.in' => 'Geçersiz organizasyon tipi.',
-
             'parent_id.integer' => 'Üst organizasyon ID değeri geçerli olmalıdır.',
             'parent_id.exists' => 'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.',
             'parent_id.different' => 'Bir organizasyon kendisini üst organizasyon olarak seçemez.',
