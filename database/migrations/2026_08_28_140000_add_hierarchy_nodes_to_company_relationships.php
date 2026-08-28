@@ -4,22 +4,17 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use RuntimeException;
 
 return new class extends Migration
 {
     public function up(): void
     {
-        // Keep every existing organization type (including location) and add the
-        // hierarchy node types required by the company/brand relationships.
         Schema::table('organizations', function (Blueprint $table) {
             $table->enum('type', ['holding', 'group', 'company', 'brand', 'location'])
                 ->nullable()
                 ->change();
         });
 
-        // This migration must also be safe to re-run after a failed MySQL DDL
-        // statement. The previous attempt may already have added these columns.
         if (! Schema::hasColumn('organization_companies', 'company_id')) {
             Schema::table('organization_companies', function (Blueprint $table) {
                 $table->foreignId('company_id')->nullable()->after('organization_id');
@@ -32,11 +27,9 @@ return new class extends Migration
             });
         }
 
-        // Older databases used business_entity_id on organization_companies.
-        // Map it to the real Company row before removing the legacy column.
         if (Schema::hasColumn('organization_companies', 'business_entity_id')) {
             if (! Schema::hasColumn('companies', 'business_entity_id')) {
-                throw new RuntimeException(
+                throw new \RuntimeException(
                     'organization_companies.business_entity_id bulundu ancak companies.business_entity_id bulunamadı; güvenli Company eşlemesi yapılamıyor.'
                 );
             }
@@ -53,14 +46,12 @@ return new class extends Migration
                 ->pluck('id');
 
             if ($unmapped->isNotEmpty()) {
-                throw new RuntimeException(
+                throw new \RuntimeException(
                     'Organization şirket ilişkisinin Company karşılığı bulunamadı. Kayıt ID: ' . $unmapped->implode(', ')
                 );
             }
         }
 
-        // company_id must be unique because one Company can belong to only one
-        // Group. Fail before changing indexes if existing data violates this.
         $duplicates = DB::table('organization_companies')
             ->select('company_id')
             ->whereNotNull('company_id')
@@ -69,13 +60,11 @@ return new class extends Migration
             ->pluck('company_id');
 
         if ($duplicates->isNotEmpty()) {
-            throw new RuntimeException(
+            throw new \RuntimeException(
                 'Birden fazla gruba bağlı şirket bulundu. Company ID: ' . $duplicates->implode(', ')
             );
         }
 
-        // Remove the legacy FK/index only when they actually exist. This also
-        // handles a migration that previously stopped after adding new columns.
         if (Schema::hasColumn('organization_companies', 'business_entity_id')) {
             if ($this->foreignKeyExists('organization_companies', 'business_entity_id')) {
                 Schema::table('organization_companies', function (Blueprint $table) {
@@ -135,7 +124,6 @@ return new class extends Migration
 
         $now = now();
 
-        // Backfill one company node per organization_companies relationship.
         $memberships = DB::table('organization_companies')
             ->join('companies', 'companies.id', '=', 'organization_companies.company_id')
             ->join('organizations as groups', 'groups.id', '=', 'organization_companies.organization_id')
@@ -153,7 +141,7 @@ return new class extends Migration
 
         foreach ($memberships as $membership) {
             if ($membership->organization_type !== 'group') {
-                throw new RuntimeException(
+                throw new \RuntimeException(
                     'Şirket ilişkisi Grup tipinde olmayan bir Organization altında bulundu. Organization ID: ' . $membership->organization_id
                 );
             }
@@ -175,8 +163,6 @@ return new class extends Migration
                 ->update(['company_node_id' => $nodeId]);
         }
 
-        // Backfill one brand node for every company-brand relationship. The
-        // company must already have a company node because the node is its parent.
         $brandLinks = DB::table('company_brands')
             ->join('brands', 'brands.id', '=', 'company_brands.brand_id')
             ->join('organization_companies', 'organization_companies.company_id', '=', 'company_brands.company_id')
@@ -194,7 +180,7 @@ return new class extends Migration
 
         foreach ($brandLinks as $brandLink) {
             if (! $brandLink->company_node_id) {
-                throw new RuntimeException(
+                throw new \RuntimeException(
                     'Marka ilişkisi için Company node bulunamadı. Company ID: ' . $brandLink->company_id . ', Brand ID: ' . $brandLink->brand_id
                 );
             }
@@ -239,6 +225,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        throw new RuntimeException('Bu migration, mevcut hiyerarşi düğümlerini korumak için geri alınmamalıdır.');
+        throw new \RuntimeException('Bu migration, mevcut hiyerarşi düğümlerini korumak için geri alınmamalıdır.');
     }
 };
