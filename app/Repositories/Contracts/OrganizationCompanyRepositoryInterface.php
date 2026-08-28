@@ -24,8 +24,11 @@ interface OrganizationCompanyRepositoryInterface
         Company $company
     ): void;
 
+    /**
+     * @param array<int, int> $companyIds
+     */
     public function sync(
         Organization $organization,
-        array $businessEntityIds
+        array $companyIds
     ): void;
 }
