@@ -36,9 +36,7 @@ class OrganizationService
     public function create(array $data): Organization
     {
         if (! $this->tenantContext->has()) {
-            throw new LogicException(
-                'Tenant context has not been initialized.'
-            );
+            throw new LogicException('Tenant context has not been initialized.');
         }
 
         return DB::transaction(function () use ($data) {
@@ -47,15 +45,6 @@ class OrganizationService
             $data['tenant_id'] = $tenantId;
             $data['parent_id'] ??= null;
 
-            /*
-             * Parent belirtilmemişse tenant'ın mevcut root organizasyonunu
-             * otomatik olarak parent kabul et.
-             *
-             * Böylece:
-             * - Root yoksa yeni organizasyon root olur.
-             * - Root varsa yeni organizasyon root'un altında oluşur.
-             * - Root'un holding veya group olması fark etmez.
-             */
             if ($data['parent_id'] === null) {
                 $root = $this->repository->getRootByTenantId($tenantId);
 
@@ -65,9 +54,6 @@ class OrganizationService
             }
 
             if ($data['parent_id'] !== null) {
-                /*
-                 * Parent mutlaka aynı tenant içerisinde bulunmalıdır.
-                 */
                 $parent = Organization::query()
                     ->where('tenant_id', $tenantId)
                     ->find($data['parent_id']);
@@ -78,9 +64,6 @@ class OrganizationService
                     );
                 }
 
-                /*
-                 * Grup yalnızca holding veya başka bir grup altında olabilir.
-                 */
                 if (($data['type'] ?? null) === 'group' && ! in_array($parent->type, ['holding', 'group'], true)) {
                     throw new RuntimeException(
                         'Bir grup yalnızca holding veya grup altında oluşturulabilir.'
@@ -97,27 +80,28 @@ class OrganizationService
         array $data
     ): Organization {
         if (! $this->tenantContext->has()) {
-            throw new LogicException(
-                'Tenant context has not been initialized.'
-            );
+            throw new LogicException('Tenant context has not been initialized.');
         }
 
         return DB::transaction(function () use ($organization, $data) {
             $tenantId = $this->tenantContext->id();
 
             if ($organization->tenant_id !== $tenantId) {
+                throw new RuntimeException('Bu organizasyona erişim yetkiniz yok.');
+            }
+
+            // Company/brand organizations are derived relationship nodes. They
+            // must be moved/removed through their owning relationship services.
+            if (in_array($organization->type, ['company', 'brand'], true)) {
                 throw new RuntimeException(
-                    'Bu organizasyona erişim yetkiniz yok.'
+                    'Company ve Brand düğümleri doğrudan düzenlenemez; ilgili ilişki üzerinden yönetilir.'
                 );
             }
 
             unset($data['tenant_id']);
 
             if (! array_key_exists('parent_id', $data)) {
-                return $this->repository->update(
-                    $organization,
-                    $data
-                );
+                return $this->repository->update($organization, $data);
             }
 
             $parentId = $data['parent_id'];
@@ -141,37 +125,56 @@ class OrganizationService
                     );
                 }
 
-                $parentExists = Organization::query()
+                $parent = Organization::query()
                     ->where('tenant_id', $tenantId)
-                    ->whereKey($parentId)
-                    ->exists();
+                    ->find($parentId);
 
-                if (! $parentExists) {
+                if (! $parent) {
                     throw new RuntimeException(
                         'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.'
                     );
                 }
+
+                if ($organization->type === 'group' && ! in_array($parent->type, ['holding', 'group'], true)) {
+                    throw new RuntimeException(
+                        'Bir grup yalnızca holding veya grup altında bulunabilir.'
+                    );
+                }
             }
 
-            return $this->repository->update(
-                $organization,
-                $data
-            );
+            return $this->repository->update($organization, $data);
         });
     }
 
     public function delete(Organization $organization): void
     {
         if (! $this->tenantContext->has()) {
-            throw new LogicException(
-                'Tenant context has not been initialized.'
-            );
+            throw new LogicException('Tenant context has not been initialized.');
         }
 
         DB::transaction(function () use ($organization) {
             if ($organization->tenant_id !== $this->tenantContext->id()) {
+                throw new RuntimeException('Bu organizasyona erişim yetkiniz yok.');
+            }
+
+            // Derived nodes are owned by company/brand relationship services.
+            if (in_array($organization->type, ['company', 'brand'], true)) {
                 throw new RuntimeException(
-                    'Bu organizasyona erişim yetkiniz yok.'
+                    'Company ve Brand düğümleri doğrudan silinemez; ilgili ilişki üzerinden silinir.'
+                );
+            }
+
+            if ($organization->children()->exists()) {
+                throw new RuntimeException(
+                    'Alt organizasyonları bulunan bir organizasyon silinemez.'
+                );
+            }
+
+            if (DB::table('organization_locations')
+                ->where('organization_id', $organization->id)
+                ->exists()) {
+                throw new RuntimeException(
+                    'Lokasyon bağlantısı bulunan bir organizasyon silinemez.'
                 );
             }
 
