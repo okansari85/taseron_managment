@@ -11,6 +11,7 @@ class BrandRepository implements BrandRepositoryInterface
     public function all(): Collection
     {
         return Brand::query()
+            ->with('companies.organizations')
             ->orderBy('name')
             ->get();
     }

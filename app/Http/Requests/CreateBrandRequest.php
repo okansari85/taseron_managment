@@ -30,6 +30,11 @@ class CreateBrandRequest extends FormRequest
                 'string',
                 'max:255',
             ],
+
+            'short_name' => ['nullable', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'is_active' => ['sometimes', 'boolean'],
+            'logo' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
         ];
     }
 }

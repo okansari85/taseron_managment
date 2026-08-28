@@ -30,6 +30,11 @@ class UpdateBrandRequest extends FormRequest
                 'string',
                 'max:255',
             ],
+
+            'short_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'description' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'is_active' => ['sometimes', 'boolean'],
+            'logo' => ['sometimes', 'nullable', 'file', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
         ];
     }
 }

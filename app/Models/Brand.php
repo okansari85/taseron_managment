@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Domain\Tenancy\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,7 +15,35 @@ class Brand extends Model
     protected $fillable = [
         'tenant_id',
         'name',
+        'short_name',
+        'description',
+        'is_active',
+        'logo_path',
     ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
+    protected $appends = [
+        'logo_url',
+    ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(
+            app(TenantScope::class)
+        );
+    }
+
+    public function getLogoUrlAttribute(): ?string
+    {
+        if (! $this->logo_path) {
+            return null;
+        }
+
+        return url('/storage/' . ltrim($this->logo_path, '/'));
+    }
 
     public function tenant(): BelongsTo
     {
