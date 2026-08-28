@@ -57,6 +57,6 @@ class Brand extends Model
             'company_brands',
             'brand_id',
             'company_id'
-        )->withTimestamps();
+        )->withPivot('brand_node_id')->withTimestamps();
     }
 }
