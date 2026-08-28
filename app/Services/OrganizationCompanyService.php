@@ -58,6 +58,8 @@ class OrganizationCompanyService
                     'updated_at' => now(),
                 ]);
 
+                $this->ensureBrandNodesForCompany($company, $node->id, $organization->tenant_id);
+
                 return;
             }
 
@@ -93,6 +95,11 @@ class OrganizationCompanyService
                     'organization_id' => $organization->id,
                     'updated_at' => now(),
                 ]);
+
+            // If the company had brand relationships while it was detached,
+            // recreate only missing relationship nodes under the preserved
+            // company node. Existing brand nodes are never recreated.
+            $this->ensureBrandNodesForCompany($company, $node->id, $organization->tenant_id);
         });
     }
 
@@ -126,9 +133,6 @@ class OrganizationCompanyService
                 ->pluck('brand_node_id')
                 ->map(fn ($id) => (int) $id);
 
-            // A company cannot leave its group while any of its relationship
-            // nodes are used by locations. Otherwise those location links would
-            // become invalid/orphaned.
             $locationNodeIds = collect([$companyNodeId])
                 ->merge($brandNodeIds)
                 ->unique()
@@ -142,8 +146,10 @@ class OrganizationCompanyService
                 );
             }
 
-            // Brand nodes belong to the company relationship. Remove only those
-            // nodes and their relationship rows; never delete the real Brand.
+            // The real company-brand relationships remain intact. Only their
+            // relationship nodes are removed because the company is leaving the
+            // organization hierarchy. If the company joins a group again,
+            // missing brand nodes are recreated under the same company node.
             if ($brandNodeIds->isNotEmpty()) {
                 Organization::query()->whereIn('id', $brandNodeIds)->delete();
                 DB::table('company_brands')
@@ -180,9 +186,6 @@ class OrganizationCompanyService
         }
 
         DB::transaction(function () use ($organization, $companyIds) {
-            // sync() is an exact synchronization for this group. Companies not
-            // present in the requested list are detached, which also removes
-            // their relationship nodes only after location checks pass.
             $currentCompanyIds = DB::table('organization_companies')
                 ->where('organization_id', $organization->id)
                 ->pluck('company_id')
@@ -198,6 +201,46 @@ class OrganizationCompanyService
                 $this->attach($organization, $company);
             }
         });
+    }
+
+    private function ensureBrandNodesForCompany(
+        Company $company,
+        int $companyNodeId,
+        int $tenantId
+    ): void {
+        $brandLinks = DB::table('company_brands')
+            ->join('brands', 'brands.id', '=', 'company_brands.brand_id')
+            ->where('company_brands.company_id', $company->id)
+            ->whereNull('company_brands.brand_node_id')
+            ->select(
+                'company_brands.brand_id',
+                'brands.name',
+                'brands.tenant_id'
+            )
+            ->get();
+
+        foreach ($brandLinks as $brandLink) {
+            if ((int) $brandLink->tenant_id !== $tenantId) {
+                throw new RuntimeException(
+                    'Şirket ve marka farklı tenantlara ait olamaz. Company ID: ' . $company->id . ', Brand ID: ' . $brandLink->brand_id
+                );
+            }
+
+            $brandNode = Organization::query()->create([
+                'tenant_id' => $tenantId,
+                'parent_id' => $companyNodeId,
+                'name' => $brandLink->name,
+                'type' => 'brand',
+            ]);
+
+            DB::table('company_brands')
+                ->where('company_id', $company->id)
+                ->where('brand_id', $brandLink->brand_id)
+                ->update([
+                    'brand_node_id' => $brandNode->id,
+                    'updated_at' => now(),
+                ]);
+        }
     }
 
     private function ensureGroup(Organization $organization): void
