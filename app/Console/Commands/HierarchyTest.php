@@ -25,10 +25,7 @@ class HierarchyTest extends Command
         try {
             $this->runIntegrityChecks();
 
-            $membership = DB::table('organization_companies')
-                ->orderBy('id')
-                ->first();
-
+            $membership = DB::table('organization_companies')->orderBy('id')->first();
             if (! $membership) {
                 $this->warn('No organization-company membership exists; nothing to execute.');
                 return self::SUCCESS;
@@ -48,27 +45,20 @@ class HierarchyTest extends Command
             DB::beginTransaction();
 
             try {
-                // 1. Re-attaching an already attached company must preserve its node id.
                 app(OrganizationCompanyService::class)->attach($group, $company);
 
-                $afterAttach = DB::table('organization_companies')
-                    ->where('company_id', $company->id)
-                    ->first();
-
+                $afterAttach = DB::table('organization_companies')->where('company_id', $company->id)->first();
                 if (! $afterAttach || (int) $afterAttach->company_node_id !== $companyNodeId) {
                     throw new \RuntimeException('FAIL: company node id changed during attach.');
                 }
 
                 $companyNode = Organization::query()->findOrFail($companyNodeId);
-
                 if ($companyNode->type !== 'company' || (int) $companyNode->parent_id !== (int) $group->id) {
                     throw new \RuntimeException('FAIL: company node parent/type is incorrect.');
                 }
 
                 $this->info("PASS: existing company node preserved (#{$companyNodeId}).");
 
-                // 2. Add an existing brand to another already-grouped company in the same tenant.
-                // This creates a second relationship node and is fully rolled back below.
                 $brandLink = DB::table('company_brands')
                     ->where('company_id', $company->id)
                     ->whereNotNull('brand_node_id')
@@ -77,18 +67,11 @@ class HierarchyTest extends Command
 
                 if ($brandLink) {
                     $brand = Brand::query()->findOrFail($brandLink->brand_id);
-
-                    $existingCompanyIds = DB::table('company_brands')
-                        ->where('brand_id', $brand->id)
-                        ->pluck('company_id')
-                        ->map(fn ($id) => (int) $id)
-                        ->all();
+                    $existingCompanyIds = DB::table('company_brands')->where('brand_id', $brand->id)->pluck('company_id')->map(fn ($id) => (int) $id)->all();
 
                     $secondCompany = Company::query()
                         ->where('companies.id', '<>', $company->id)
-                        ->whereHas('businessEntity', function ($query) use ($tenant) {
-                            $query->where('tenant_id', $tenant->id);
-                        })
+                        ->whereHas('businessEntity', fn ($query) => $query->where('tenant_id', $tenant->id))
                         ->whereNotIn('companies.id', $existingCompanyIds)
                         ->whereExists(function ($query) {
                             $query->select(DB::raw(1))
@@ -98,34 +81,18 @@ class HierarchyTest extends Command
                                 ->where('grouped_org.type', 'group')
                                 ->whereNotNull('grouped_company.company_node_id');
                         })
-                        ->orderBy('companies.id')
-                        ->first();
+                        ->orderBy('companies.id')->first();
 
                     if ($secondCompany) {
-                        $newCompanyIds = array_values(array_unique([
-                            ...$existingCompanyIds,
-                            $secondCompany->id,
-                        ]));
+                        app(BrandService::class)->update($brand, ['company_ids' => array_values(array_unique([...$existingCompanyIds, $secondCompany->id]))]);
 
-                        app(BrandService::class)->update($brand, [
-                            'company_ids' => $newCompanyIds,
-                        ]);
-
-                        $secondLink = DB::table('company_brands')
-                            ->where('company_id', $secondCompany->id)
-                            ->where('brand_id', $brand->id)
-                            ->first();
-
+                        $secondLink = DB::table('company_brands')->where('company_id', $secondCompany->id)->where('brand_id', $brand->id)->first();
                         if (! $secondLink || ! $secondLink->brand_node_id) {
                             throw new \RuntimeException('FAIL: second brand relationship node was not created.');
                         }
 
-                        $secondCompanyNodeId = DB::table('organization_companies')
-                            ->where('company_id', $secondCompany->id)
-                            ->value('company_node_id');
-
+                        $secondCompanyNodeId = DB::table('organization_companies')->where('company_id', $secondCompany->id)->value('company_node_id');
                         $secondBrandNode = Organization::query()->findOrFail($secondLink->brand_node_id);
-
                         if ($secondBrandNode->type !== 'brand' || (int) $secondBrandNode->parent_id !== (int) $secondCompanyNodeId) {
                             throw new \RuntimeException('FAIL: second brand node has an incorrect parent/type.');
                         }
@@ -138,17 +105,17 @@ class HierarchyTest extends Command
                     $this->warn('SKIP: no existing company-brand relationship is available for the brand test.');
                 }
 
+                $this->runLocationDependencyChecks($companyNodeId, $brandLink?->brand_node_id);
+
                 DB::rollBack();
             } catch (Throwable $exception) {
                 if (DB::transactionLevel() > 0) {
                     DB::rollBack();
                 }
-
                 throw $exception;
             }
 
             $this->info('PASS: all hierarchy tests completed and every test mutation was rolled back.');
-
             return self::SUCCESS;
         } catch (Throwable $exception) {
             $this->error($exception->getMessage());
@@ -158,55 +125,87 @@ class HierarchyTest extends Command
         }
     }
 
+    private function runLocationDependencyChecks(int $companyNodeId, ?int $brandNodeId): void
+    {
+        $columns = DB::select('SHOW COLUMNS FROM organization_locations');
+        $columnNames = array_map(fn ($column) => $column->Field, $columns);
+        $hasOrganizationId = in_array('organization_id', $columnNames, true);
+        $hasLocationId = in_array('location_id', $columnNames, true);
+
+        if (! $hasOrganizationId) {
+            $this->warn('SKIP: organization_locations has no organization_id column; location dependency test requires the node relation.');
+            return;
+        }
+
+        $locationId = null;
+        if ($hasLocationId) {
+            $locationId = DB::table('organization_locations')->max('location_id');
+        }
+
+        if ($locationId === null) {
+            $this->warn('SKIP: no existing location is available for the location dependency test.');
+            return;
+        }
+
+        $before = DB::table('organization_locations')->where('location_id', $locationId)->count();
+        DB::table('organization_locations')->insert([
+            'organization_id' => $companyNodeId,
+            'location_id' => $locationId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $after = DB::table('organization_locations')->where('location_id', $locationId)->count();
+        if ($after !== $before + 1) {
+            throw new \RuntimeException('FAIL: temporary company-node location relationship was not created.');
+        }
+
+        $this->info("PASS: location can be attached to company node #{$companyNodeId}.");
+
+        $linked = DB::table('organization_locations')->where('organization_id', $companyNodeId)->where('location_id', $locationId)->exists();
+        if (! $linked) {
+            throw new \RuntimeException('FAIL: company-node location dependency could not be detected.');
+        }
+
+        $this->info("PASS: location dependency detected for company node #{$companyNodeId}; node deletion must be blocked.");
+
+        if ($brandNodeId) {
+            DB::table('organization_locations')->insert([
+                'organization_id' => $brandNodeId,
+                'location_id' => $locationId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            if (! DB::table('organization_locations')->where('organization_id', $brandNodeId)->where('location_id', $locationId)->exists()) {
+                throw new \RuntimeException('FAIL: temporary brand-node location relationship was not created.');
+            }
+
+            $this->info("PASS: location can be attached to brand node #{$brandNodeId}.");
+            $this->info("PASS: location dependency detected for brand node #{$brandNodeId}; relationship deletion must be blocked.");
+        }
+    }
+
     private function runIntegrityChecks(): void
     {
         $invalidCompanyNodes = DB::table('organization_companies as oc')
             ->leftJoin('organizations as node', 'node.id', '=', 'oc.company_node_id')
-            ->where(function ($query) {
-                $query->whereNull('node.id')
-                    ->orWhere('node.type', '<>', 'company')
-                    ->orWhereColumn('node.parent_id', '<>', 'oc.organization_id');
-            })
+            ->where(fn ($query) => $query->whereNull('node.id')->orWhere('node.type', '<>', 'company')->orWhereColumn('node.parent_id', '<>', 'oc.organization_id'))
             ->count();
-
-        if ($invalidCompanyNodes > 0) {
-            throw new \RuntimeException("FAIL: {$invalidCompanyNodes} company node relation(s) are invalid.");
-        }
+        if ($invalidCompanyNodes > 0) throw new \RuntimeException("FAIL: {$invalidCompanyNodes} company node relation(s) are invalid.");
 
         $invalidBrandNodes = DB::table('company_brands as cb')
             ->join('organization_companies as oc', 'oc.company_id', '=', 'cb.company_id')
             ->leftJoin('organizations as node', 'node.id', '=', 'cb.brand_node_id')
-            ->where(function ($query) {
-                $query->whereNull('node.id')
-                    ->orWhere('node.type', '<>', 'brand')
-                    ->orWhereColumn('node.parent_id', '<>', 'oc.company_node_id');
-            })
-            ->whereNotNull('cb.brand_node_id')
-            ->count();
+            ->where(fn ($query) => $query->whereNull('node.id')->orWhere('node.type', '<>', 'brand')->orWhereColumn('node.parent_id', '<>', 'oc.company_node_id'))
+            ->whereNotNull('cb.brand_node_id')->count();
+        if ($invalidBrandNodes > 0) throw new \RuntimeException("FAIL: {$invalidBrandNodes} brand node relation(s) are invalid.");
 
-        if ($invalidBrandNodes > 0) {
-            throw new \RuntimeException("FAIL: {$invalidBrandNodes} brand node relation(s) are invalid.");
-        }
+        $orphanCompanyNodes = DB::table('organizations as node')->leftJoin('organization_companies as oc', 'oc.company_node_id', '=', 'node.id')->where('node.type', 'company')->whereNull('oc.id')->count();
+        if ($orphanCompanyNodes > 0) throw new \RuntimeException("FAIL: {$orphanCompanyNodes} company node(s) have no relationship row.");
 
-        $orphanCompanyNodes = DB::table('organizations as node')
-            ->leftJoin('organization_companies as oc', 'oc.company_node_id', '=', 'node.id')
-            ->where('node.type', 'company')
-            ->whereNull('oc.id')
-            ->count();
-
-        if ($orphanCompanyNodes > 0) {
-            throw new \RuntimeException("FAIL: {$orphanCompanyNodes} company node(s) have no relationship row.");
-        }
-
-        $orphanBrandNodes = DB::table('organizations as node')
-            ->leftJoin('company_brands as cb', 'cb.brand_node_id', '=', 'node.id')
-            ->where('node.type', 'brand')
-            ->whereNull('cb.company_id')
-            ->count();
-
-        if ($orphanBrandNodes > 0) {
-            throw new \RuntimeException("FAIL: {$orphanBrandNodes} brand node(s) have no relationship row.");
-        }
+        $orphanBrandNodes = DB::table('organizations as node')->leftJoin('company_brands as cb', 'cb.brand_node_id', '=', 'node.id')->where('node.type', 'brand')->whereNull('cb.company_id')->count();
+        if ($orphanBrandNodes > 0) throw new \RuntimeException("FAIL: {$orphanBrandNodes} brand node(s) have no relationship row.");
 
         $this->info('PASS: current hierarchy integrity checks passed.');
     }
