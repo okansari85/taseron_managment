@@ -27,7 +27,6 @@ class TenantDelete extends Command
         }
 
         $summary = $this->collectSummary($tenantId);
-
         $this->warn("TENANT SİLİNECEK: #{$tenant->id} - {$tenant->name}");
         $this->table(['Veri', 'Adet'], $summary);
 
@@ -37,41 +36,31 @@ class TenantDelete extends Command
         }
 
         $logoPath = $tenant->logo_path;
-        $storagePaths = [];
 
         try {
-            DB::transaction(function () use ($tenantId, &$storagePaths): void {
+            DB::transaction(function () use ($tenantId): void {
                 $organizationIds = DB::table('organizations')
                     ->where('tenant_id', $tenantId)
                     ->pluck('id')->map(fn ($id) => (int) $id)->all();
 
-                $brandIds = DB::table('brands')
-                    ->where('tenant_id', $tenantId)
+                $brandIds = DB::table('brands')->where('tenant_id', $tenantId)
+                    ->pluck('id')->map(fn ($id) => (int) $id)->all();
+                $locationIds = DB::table('locations')->where('tenant_id', $tenantId)
+                    ->pluck('id')->map(fn ($id) => (int) $id)->all();
+                $businessEntityIds = DB::table('business_entities')->where('tenant_id', $tenantId)
                     ->pluck('id')->map(fn ($id) => (int) $id)->all();
 
-                $locationIds = DB::table('locations')
-                    ->where('tenant_id', $tenantId)
+                $companyIds = $businessEntityIds === [] ? [] : DB::table('companies')
+                    ->whereIn('business_entity_id', $businessEntityIds)
                     ->pluck('id')->map(fn ($id) => (int) $id)->all();
-
-                $businessEntityIds = DB::table('business_entities')
-                    ->where('tenant_id', $tenantId)
-                    ->pluck('id')->map(fn ($id) => (int) $id)->all();
-
-                $companyIds = $businessEntityIds === []
-                    ? []
-                    : DB::table('companies')
-                        ->whereIn('business_entity_id', $businessEntityIds)
-                        ->pluck('id')->map(fn ($id) => (int) $id)->all();
-
                 $contractorIds = $businessEntityIds !== [] && $this->tableExists('contractors')
                     ? DB::table('contractors')->whereIn('business_entity_id', $businessEntityIds)->pluck('id')->map(fn ($id) => (int) $id)->all()
                     : [];
-
                 $operationalRegionIds = $locationIds !== [] && $this->tableExists('operational_regions')
                     ? DB::table('operational_regions')->whereIn('location_id', $locationIds)->pluck('id')->map(fn ($id) => (int) $id)->all()
                     : [];
 
-                // Remove all known relationship/pivot rows first.
+                // Pivots first.
                 $this->deleteByIds('organization_locations', 'organization_id', $organizationIds);
                 $this->deleteByIds('organization_locations', 'location_id', $locationIds);
                 $this->deleteByIds('organization_companies', 'organization_id', $organizationIds);
@@ -83,37 +72,46 @@ class TenantDelete extends Command
                 $this->deleteByIds('user_organizations', 'organization_id', $organizationIds);
 
                 foreach (['brand_locations', 'company_users', 'company_location_users'] as $table) {
-                    if (! $this->tableExists($table)) {
-                        continue;
-                    }
-
+                    if (! $this->tableExists($table)) continue;
                     $this->deleteByIds($table, 'brand_id', $brandIds);
                     $this->deleteByIds($table, 'company_id', $companyIds);
                     $this->deleteByIds($table, 'location_id', $locationIds);
                 }
 
-                // Delete child records that are tenant-owned.
+                // Tenant-owned child records.
                 foreach (['operational_regions' => $operationalRegionIds, 'contractors' => $contractorIds, 'companies' => $companyIds] as $table => $ids) {
                     if ($ids !== [] && $this->tableExists($table)) {
                         DB::table($table)->whereIn('id', $ids)->delete();
                     }
                 }
 
-                if ($organizationIds !== []) {
-                    DB::table('organizations')->whereIn('id', $organizationIds)->delete();
+                // Organizations are self-referencing: delete leaves before parents.
+                $remaining = $organizationIds;
+                while ($remaining !== []) {
+                    $remainingIds = array_flip($remaining);
+                    $leafIds = [];
+
+                    foreach ($remaining as $id) {
+                        $hasChild = DB::table('organizations')
+                            ->whereIn('id', $remaining)
+                            ->where('parent_id', $id)
+                            ->exists();
+                        if (! $hasChild) {
+                            $leafIds[] = $id;
+                        }
+                    }
+
+                    if ($leafIds === []) {
+                        throw new \RuntimeException('Organization hiyerarşisinde silinemeyen döngü/bağımlılık tespit edildi.');
+                    }
+
+                    DB::table('organizations')->whereIn('id', $leafIds)->delete();
+                    $remaining = array_values(array_diff($remaining, $leafIds));
                 }
 
-                if ($brandIds !== []) {
-                    DB::table('brands')->whereIn('id', $brandIds)->delete();
-                }
-
-                if ($locationIds !== []) {
-                    DB::table('locations')->whereIn('id', $locationIds)->delete();
-                }
-
-                if ($businessEntityIds !== []) {
-                    DB::table('business_entities')->whereIn('id', $businessEntityIds)->delete();
-                }
+                if ($brandIds !== []) DB::table('brands')->whereIn('id', $brandIds)->delete();
+                if ($locationIds !== []) DB::table('locations')->whereIn('id', $locationIds)->delete();
+                if ($businessEntityIds !== []) DB::table('business_entities')->whereIn('id', $businessEntityIds)->delete();
 
                 DB::table('tenants')->where('id', $tenantId)->delete();
             });
@@ -122,10 +120,7 @@ class TenantDelete extends Command
             return self::FAILURE;
         }
 
-        if ($logoPath) {
-            Storage::disk('public')->delete($logoPath);
-        }
-
+        if ($logoPath) Storage::disk('public')->delete($logoPath);
         $this->info("Tenant #{$tenantId} başarıyla silindi.");
         return self::SUCCESS;
     }
@@ -133,7 +128,6 @@ class TenantDelete extends Command
     private function collectSummary(int $tenantId): array
     {
         $businessEntityIds = DB::table('business_entities')->where('tenant_id', $tenantId)->pluck('id');
-
         return [
             ['Tenants', DB::table('tenants')->where('id', $tenantId)->count()],
             ['Organizations', DB::table('organizations')->where('tenant_id', $tenantId)->count()],
@@ -147,10 +141,7 @@ class TenantDelete extends Command
 
     private function deleteByIds(string $table, string $column, array $ids): void
     {
-        if ($ids === [] || ! $this->tableExists($table) || ! $this->columnExists($table, $column)) {
-            return;
-        }
-
+        if ($ids === [] || ! $this->tableExists($table) || ! $this->columnExists($table, $column)) return;
         DB::table($table)->whereIn($column, $ids)->delete();
     }
 
