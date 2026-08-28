@@ -19,7 +19,14 @@ class TenantService
 
     public function all(): Collection
     {
-        return $this->repository->all();
+        return $this->repository->all()->each(function (Tenant $tenant): void {
+            $tenant->setAttribute(
+                'root_organization',
+                $tenant->organizations()
+                    ->whereNull('parent_id')
+                    ->first()
+            );
+        });
     }
 
     public function find(int $id): Tenant
