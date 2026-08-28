@@ -8,8 +8,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use App\Models\BusinessEntity;
-use App\Models\Brand;
 
 class Organization extends Model
 {
@@ -61,20 +59,10 @@ class Organization extends Model
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(
-            BusinessEntity::class,
+            Company::class,
             'organization_companies',
             'organization_id',
-            'business_entity_id'
-        )
-            ->where('business_entities.type', 'company')
-            ->withTimestamps();
-    }
-
-    public function brands(): HasMany
-    {
-        return $this->hasMany(
-            Brand::class,
-            'organization_id'
-        );
+            'company_id'
+        )->withPivot('company_node_id')->withTimestamps();
     }
 }

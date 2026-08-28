@@ -42,8 +42,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('organization-companies', [OrganizationCompanyController::class, 'indexForTenant']);
             Route::get('organizations/{organization}/companies', [OrganizationCompanyController::class, 'index']);
             Route::put('organizations/{organization}/companies', [OrganizationCompanyController::class, 'sync']);
-            Route::post('organizations/{organization}/companies/{businessEntity}', [OrganizationCompanyController::class, 'attach']);
-            Route::delete('organizations/{organization}/companies/{businessEntity}', [OrganizationCompanyController::class, 'detach']);
+            Route::post('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'attach']);
+            Route::delete('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'detach']);
 
             Route::get('organizations/{organization}/locations', [OrganizationLocationController::class, 'index']);
             Route::post('organizations/{organization}/locations', [OrganizationLocationController::class, 'store']);

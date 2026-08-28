@@ -2,7 +2,6 @@
 
 namespace App\Repositories;
 
-use App\Models\BusinessEntity;
 use App\Models\Company;
 use App\Models\Organization;
 use App\Repositories\Contracts\OrganizationCompanyRepositoryInterface;
@@ -29,7 +28,6 @@ class OrganizationCompanyRepository implements OrganizationCompanyRepositoryInte
                 $query->where('type', 'group');
             })
             ->with([
-                'businessEntity',
                 'organizations' => function ($query) {
                     $query->where('type', 'group');
                 },
@@ -41,19 +39,19 @@ class OrganizationCompanyRepository implements OrganizationCompanyRepositoryInte
 
     public function attach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): void {
         $organization->companies()->syncWithoutDetaching([
-            $businessEntity->id,
+            $company->id,
         ]);
     }
 
     public function detach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): void {
         $organization->companies()->detach(
-            $businessEntity->id
+            $company->id
         );
     }
 

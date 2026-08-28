@@ -14,36 +14,19 @@ class SyncOrganizationCompaniesRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'business_entity_ids' => [
-                'required',
-                'array',
-            ],
-
-            'business_entity_ids.*' => [
-                'integer',
-                'distinct',
-                'exists:business_entities,id',
-            ],
+            'company_ids' => ['required', 'array'],
+            'company_ids.*' => ['integer', 'distinct', 'exists:companies,id'],
         ];
     }
 
     public function messages(): array
     {
         return [
-            'business_entity_ids.required' =>
-                'Şirket listesi zorunludur.',
-
-            'business_entity_ids.array' =>
-                'Şirket listesi geçerli bir dizi olmalıdır.',
-
-            'business_entity_ids.*.integer' =>
-                'Business Entity ID değeri geçerli olmalıdır.',
-
-            'business_entity_ids.*.distinct' =>
-                'Aynı şirket birden fazla kez gönderilemez.',
-
-            'business_entity_ids.*.exists' =>
-                'Seçilen şirket bulunamadı.',
+            'company_ids.required' => 'Şirket listesi zorunludur.',
+            'company_ids.array' => 'Şirket listesi geçerli bir dizi olmalıdır.',
+            'company_ids.*.integer' => 'Şirket ID değeri geçerli bir tam sayı olmalıdır.',
+            'company_ids.*.distinct' => 'Aynı şirket birden fazla kez gönderilemez.',
+            'company_ids.*.exists' => 'Seçilen şirket bulunamadı.',
         ];
     }
 }

@@ -2,7 +2,7 @@
 
 namespace App\Repositories\Contracts;
 
-use App\Models\BusinessEntity;
+use App\Models\Company;
 use App\Models\Organization;
 use Illuminate\Database\Eloquent\Collection;
 
@@ -16,12 +16,12 @@ interface OrganizationCompanyRepositoryInterface
 
     public function attach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): void;
 
     public function detach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): void;
 
     public function sync(

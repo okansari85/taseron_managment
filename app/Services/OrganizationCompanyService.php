@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\BusinessEntity;
+use App\Models\Company;
 use App\Models\Organization;
 use App\Repositories\Contracts\OrganizationCompanyRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
@@ -16,9 +16,8 @@ class OrganizationCompanyService
     ) {
     }
 
-    public function all(
-        Organization $organization
-    ): Collection {
+    public function all(Organization $organization): Collection
+    {
         $this->ensureGroup($organization);
 
         return $this->repository->all($organization);
@@ -29,104 +28,116 @@ class OrganizationCompanyService
         return $this->repository->allForTenant();
     }
 
-    public function attach(
-        Organization $organization,
-        BusinessEntity $businessEntity
-    ): void {
+    public function attach(Organization $organization, Company $company): void
+    {
         $this->ensureGroup($organization);
-        $this->ensureCompany($businessEntity);
-        $this->ensureSameTenant($organization, $businessEntity);
-        $this->ensureCompanyNotInAnotherGroup($organization, $businessEntity);
+        $this->ensureSameTenant($organization, $company);
 
-        DB::transaction(function () use ($organization, $businessEntity) {
-            $this->repository->attach($organization, $businessEntity);
+        DB::transaction(function () use ($organization, $company) {
+            $membership = DB::table('organization_companies')
+                ->where('company_id', $company->id)
+                ->first();
+
+            if ($membership === null) {
+                $node = Organization::query()->create([
+                    'tenant_id' => $organization->tenant_id,
+                    'parent_id' => $organization->id,
+                    'name' => $company->name,
+                    'type' => 'company',
+                ]);
+
+                DB::table('organization_companies')->insert([
+                    'organization_id' => $organization->id,
+                    'company_id' => $company->id,
+                    'company_node_id' => $node->id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+                return;
+            }
+
+            $node = Organization::query()->findOrFail($membership->company_node_id);
+            $node->update([
+                'parent_id' => $organization->id,
+                'name' => $company->name,
+                'type' => 'company',
+            ]);
+
+            DB::table('organization_companies')
+                ->where('company_id', $company->id)
+                ->update([
+                    'organization_id' => $organization->id,
+                    'updated_at' => now(),
+                ]);
         });
     }
 
-    public function detach(
-        Organization $organization,
-        BusinessEntity $businessEntity
-    ): void {
+    public function detach(Organization $organization, Company $company): void
+    {
         $this->ensureGroup($organization);
-        $this->ensureCompany($businessEntity);
-        $this->ensureSameTenant($organization, $businessEntity);
+        $this->ensureSameTenant($organization, $company);
 
-        DB::transaction(function () use ($organization, $businessEntity) {
-            $this->repository->detach($organization, $businessEntity);
+        $membership = DB::table('organization_companies')
+            ->where('organization_id', $organization->id)
+            ->where('company_id', $company->id)
+            ->first();
+
+        if ($membership === null) return;
+
+        $hasLocations = DB::table('organization_locations')
+            ->where('organization_id', $membership->company_node_id)
+            ->exists();
+
+        if ($hasLocations) {
+            throw new RuntimeException('Lokasyon bağlantısı olan şirket gruptan çıkarılamaz.');
+        }
+
+        DB::transaction(function () use ($membership, $organization, $company) {
+            DB::table('company_brands')
+                ->where('company_id', $company->id)
+                ->whereNotNull('brand_node_id')
+                ->pluck('brand_node_id')
+                ->each(function ($nodeId) {
+                    $hasLocations = DB::table('organization_locations')
+                        ->where('organization_id', $nodeId)
+                        ->exists();
+                    if ($hasLocations) {
+                        throw new RuntimeException('Lokasyon bağlantısı olan marka ilişkisi kaldırılamaz.');
+                    }
+                    Organization::query()->whereKey($nodeId)->delete();
+                });
+
+            DB::table('organization_companies')
+                ->where('organization_id', $organization->id)
+                ->where('company_id', $company->id)
+                ->delete();
+
+            Organization::query()->whereKey($membership->company_node_id)->delete();
         });
     }
 
-    public function sync(
-        Organization $organization,
-        array $businessEntityIds
-    ): void {
+    public function sync(Organization $organization, array $companyIds): void
+    {
         $this->ensureGroup($organization);
 
-        $businessEntityIds = array_values(array_unique($businessEntityIds));
-
-        $businessEntities = BusinessEntity::query()
-            ->whereIn('id', $businessEntityIds)
-            ->get();
-
-        if ($businessEntities->count() !== count($businessEntityIds)) {
-            throw new RuntimeException(
-                'Seçilen BusinessEntity kayıtlarından biri veya birkaçı bulunamadı.'
-            );
+        foreach (array_values(array_unique($companyIds)) as $companyId) {
+            $company = Company::query()->findOrFail($companyId);
+            $this->attach($organization, $company);
         }
-
-        foreach ($businessEntities as $businessEntity) {
-            $this->ensureCompany($businessEntity);
-            $this->ensureSameTenant($organization, $businessEntity);
-            $this->ensureCompanyNotInAnotherGroup($organization, $businessEntity);
-        }
-
-        DB::transaction(function () use ($organization, $businessEntityIds) {
-            $this->repository->sync($organization, $businessEntityIds);
-        });
     }
 
     private function ensureGroup(Organization $organization): void
     {
         if ($organization->type !== 'group') {
-            throw new RuntimeException(
-                'Şirket yalnızca Grup tipindeki Organization ile eşleştirilebilir.'
-            );
+            throw new RuntimeException('Şirket yalnızca Grup tipindeki Organization ile eşleştirilebilir.');
         }
     }
 
-    private function ensureCompany(BusinessEntity $businessEntity): void
+    private function ensureSameTenant(Organization $organization, Company $company): void
     {
-        if ($businessEntity->type !== 'company') {
-            throw new RuntimeException(
-                'Organization yalnızca company tipindeki BusinessEntity ile eşleştirilebilir.'
-            );
-        }
-    }
-
-    private function ensureSameTenant(
-        Organization $organization,
-        BusinessEntity $businessEntity
-    ): void {
-        if ($organization->tenant_id !== $businessEntity->tenant_id) {
-            throw new RuntimeException(
-                'Organization ve BusinessEntity aynı tenant içerisinde olmalıdır.'
-            );
-        }
-    }
-
-    private function ensureCompanyNotInAnotherGroup(
-        Organization $organization,
-        BusinessEntity $businessEntity
-    ): void {
-        $existing = DB::table('organization_companies')
-            ->where('business_entity_id', $businessEntity->id)
-            ->where('organization_id', '!=', $organization->id)
-            ->exists();
-
-        if ($existing) {
-            throw new RuntimeException(
-                'Bu şirket zaten başka bir gruba bağlıdır. Bir şirket yalnızca bir gruba ait olabilir.'
-            );
+        if ($company->businessEntity?->tenant_id !== $organization->tenant_id) {
+            throw new RuntimeException('Organization ve Company aynı tenant içerisinde olmalıdır.');
         }
     }
 }

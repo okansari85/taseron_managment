@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\SyncOrganizationCompaniesRequest;
-use App\Models\BusinessEntity;
+use App\Models\Company;
 use App\Models\Organization;
 use App\Services\OrganizationCompanyService;
 use Illuminate\Http\JsonResponse;
@@ -32,11 +32,11 @@ class OrganizationCompanyController extends Controller
 
     public function attach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): JsonResponse {
         $this->service->attach(
             $organization,
-            $businessEntity
+            $company
         );
 
         return response()->json([
@@ -47,11 +47,11 @@ class OrganizationCompanyController extends Controller
 
     public function detach(
         Organization $organization,
-        BusinessEntity $businessEntity
+        Company $company
     ): JsonResponse {
         $this->service->detach(
             $organization,
-            $businessEntity
+            $company
         );
 
         return response()->json([
@@ -66,7 +66,7 @@ class OrganizationCompanyController extends Controller
     ): JsonResponse {
         $this->service->sync(
             $organization,
-            $request->validated('business_entity_ids')
+            $request->validated('company_ids')
         );
 
         return response()->json([

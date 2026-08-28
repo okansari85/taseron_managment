@@ -37,11 +37,11 @@ class Company extends Model
         return $this->belongsToMany(
             Organization::class,
             'organization_companies',
-            'business_entity_id',
+            'company_id',
             'organization_id',
-            'business_entity_id',
+            'id',
             'id'
-        )->withTimestamps();
+        )->withPivot('company_node_id')->withTimestamps();
     }
 
     public function brands(): BelongsToMany
@@ -51,6 +51,6 @@ class Company extends Model
             'company_brands',
             'company_id',
             'brand_id'
-        )->withTimestamps();
+        )->withPivot('brand_node_id')->withTimestamps();
     }
 }

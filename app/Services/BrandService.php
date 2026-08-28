@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\Organization;
 use App\Repositories\Contracts\BrandRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
@@ -119,6 +120,13 @@ class BrandService
                     $this->syncCompanies($brand, $companyIds);
                 }
 
+                Organization::query()
+                    ->whereIn('id', DB::table('company_brands')
+                        ->where('brand_id', $brand->id)
+                        ->whereNotNull('brand_node_id')
+                        ->pluck('brand_node_id'))
+                    ->update(['name' => $brand->name]);
+
                 return $brand->load('companies.organizations');
             });
 
@@ -146,13 +154,25 @@ class BrandService
 
         $logoPath = $brand->logo_path;
 
-        DB::transaction(function () use ($brand) {
+        $brandNodeIds = DB::table('company_brands')
+            ->where('brand_id', $brand->id)
+            ->whereNotNull('brand_node_id')
+            ->pluck('brand_node_id');
+
+        if (DB::table('organization_locations')
+            ->whereIn('organization_id', $brandNodeIds)
+            ->exists()) {
+            throw new RuntimeException('Lokasyon bağlantısı olan marka silinemez.');
+        }
+
+        DB::transaction(function () use ($brand, $brandNodeIds) {
             if ($brand->tenant_id !== $this->tenantContext->id()) {
                 throw new RuntimeException(
                     'Bu markaya erişim yetkiniz yok.'
                 );
             }
 
+            Organization::query()->whereIn('id', $brandNodeIds)->delete();
             $this->repository->delete($brand);
         });
 
@@ -166,11 +186,6 @@ class BrandService
      */
     private function syncCompanies(Brand $brand, array $companyIds): void
     {
-        if ($companyIds === []) {
-            $brand->companies()->sync([]);
-            return;
-        }
-
         $ids = array_values(array_unique(array_map('intval', $companyIds)));
 
         $validIds = Company::query()
@@ -187,6 +202,46 @@ class BrandService
             );
         }
 
-        $brand->companies()->sync($validIds);
+        $existing = DB::table('company_brands')
+            ->where('brand_id', $brand->id)
+            ->get()
+            ->keyBy('company_id');
+
+        foreach ($existing->keys()->diff($validIds) as $companyId) {
+            $nodeId = $existing[$companyId]->brand_node_id;
+
+            if ($nodeId && DB::table('organization_locations')->where('organization_id', $nodeId)->exists()) {
+                throw new RuntimeException('Lokasyon bağlantısı olan marka ilişkisi kaldırılamaz.');
+            }
+
+            if ($nodeId) Organization::query()->whereKey($nodeId)->delete();
+            DB::table('company_brands')->where('company_id', $companyId)->where('brand_id', $brand->id)->delete();
+        }
+
+        foreach ($validIds as $companyId) {
+            $current = $existing->get($companyId);
+            if ($current?->brand_node_id) continue;
+
+            $companyNodeId = DB::table('organization_companies')
+                ->where('company_id', $companyId)
+                ->value('company_node_id');
+
+            if (! $companyNodeId) {
+                throw new RuntimeException('Marka eklenmeden önce şirket bir gruba bağlanmalıdır.');
+            }
+
+            $companyNode = Organization::query()->findOrFail($companyNodeId);
+            $brandNode = Organization::query()->create([
+                'tenant_id' => $companyNode->tenant_id,
+                'parent_id' => $companyNode->id,
+                'name' => $brand->name,
+                'type' => 'brand',
+            ]);
+
+            DB::table('company_brands')->updateOrInsert(
+                ['company_id' => $companyId, 'brand_id' => $brand->id],
+                ['brand_node_id' => $brandNode->id, 'updated_at' => now(), 'created_at' => now()]
+            );
+        }
     }
 }
