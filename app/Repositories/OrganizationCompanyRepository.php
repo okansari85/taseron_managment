@@ -55,12 +55,15 @@ class OrganizationCompanyRepository implements OrganizationCompanyRepositoryInte
         );
     }
 
+    /**
+     * @param array<int, int> $companyIds
+     */
     public function sync(
         Organization $organization,
-        array $businessEntityIds
+        array $companyIds
     ): void {
         $organization->companies()->sync(
-            $businessEntityIds
+            $companyIds
         );
     }
 }
