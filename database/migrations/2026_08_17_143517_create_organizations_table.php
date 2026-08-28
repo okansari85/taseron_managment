@@ -27,7 +27,6 @@ return new class extends Migration
                 'group',
                 'company',
                 'brand',
-                'location',
             ]);
 
             $table->timestamps();
