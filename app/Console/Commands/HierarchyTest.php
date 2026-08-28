@@ -67,7 +67,7 @@ class HierarchyTest extends Command
 
                 $this->info("PASS: existing company node preserved (#{$companyNodeId}).");
 
-                // 2. Add an existing brand to another company in the same tenant.
+                // 2. Add an existing brand to another already-grouped company in the same tenant.
                 // This creates a second relationship node and is fully rolled back below.
                 $brandLink = DB::table('company_brands')
                     ->where('company_id', $company->id)
@@ -85,12 +85,20 @@ class HierarchyTest extends Command
                         ->all();
 
                     $secondCompany = Company::query()
-                        ->where('id', '<>', $company->id)
+                        ->where('companies.id', '<>', $company->id)
                         ->whereHas('businessEntity', function ($query) use ($tenant) {
                             $query->where('tenant_id', $tenant->id);
                         })
-                        ->whereNotIn('id', $existingCompanyIds)
-                        ->orderBy('id')
+                        ->whereNotIn('companies.id', $existingCompanyIds)
+                        ->whereExists(function ($query) {
+                            $query->select(DB::raw(1))
+                                ->from('organization_companies as grouped_company')
+                                ->join('organizations as grouped_org', 'grouped_org.id', '=', 'grouped_company.organization_id')
+                                ->whereColumn('grouped_company.company_id', 'companies.id')
+                                ->where('grouped_org.type', 'group')
+                                ->whereNotNull('grouped_company.company_node_id');
+                        })
+                        ->orderBy('companies.id')
                         ->first();
 
                     if ($secondCompany) {
@@ -124,7 +132,7 @@ class HierarchyTest extends Command
 
                         $this->info("PASS: second brand node created (#{$secondBrandNode->id}) under company node #{$secondCompanyNodeId}.");
                     } else {
-                        $this->warn('SKIP: no second company is available for the multi-company brand test.');
+                        $this->warn('SKIP: no second grouped company is available for the multi-company brand test.');
                     }
                 } else {
                     $this->warn('SKIP: no existing company-brand relationship is available for the brand test.');
@@ -168,7 +176,7 @@ class HierarchyTest extends Command
         $invalidBrandNodes = DB::table('company_brands as cb')
             ->join('organization_companies as oc', 'oc.company_id', '=', 'cb.company_id')
             ->leftJoin('organizations as node', 'node.id', '=', 'cb.brand_node_id')
-            ->where(function ($query) use ($invalidCompanyNodes) {
+            ->where(function ($query) {
                 $query->whereNull('node.id')
                     ->orWhere('node.type', '<>', 'brand')
                     ->orWhereColumn('node.parent_id', '<>', 'oc.company_node_id');
