@@ -20,12 +20,12 @@ class TenantService
     public function all(): Collection
     {
         return $this->repository->all()->each(function (Tenant $tenant): void {
-            $tenant->setAttribute(
-                'root_organization',
-                $tenant->organizations()
-                    ->whereNull('parent_id')
-                    ->first()
-            );
+            $rootOrganization = $tenant->organizations()
+                ->whereNull('parent_id')
+                ->first();
+
+            $tenant->setAttribute('root_organization', $rootOrganization);
+            $tenant->setAttribute('onboarding_type', $rootOrganization?->type);
         });
     }
 
