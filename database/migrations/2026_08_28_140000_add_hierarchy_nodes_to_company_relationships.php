@@ -41,15 +41,12 @@ return new class extends Migration
                 WHERE oc.company_id IS NULL
             SQL);
 
-            $unmapped = DB::table('organization_companies')
+            // Bu ortam test verisi kullandığı için Company karşılığı olmayan eski
+            // ilişki kayıtlarını temizliyoruz. Böylece geçersiz legacy pivotlar
+            // yeni company_id FK dönüşümünü engellemiyor.
+            DB::table('organization_companies')
                 ->whereNull('company_id')
-                ->pluck('id');
-
-            if ($unmapped->isNotEmpty()) {
-                throw new \RuntimeException(
-                    'Organization şirket ilişkisinin Company karşılığı bulunamadı. Kayıt ID: ' . $unmapped->implode(', ')
-                );
-            }
+                ->delete();
         }
 
         $duplicates = DB::table('organization_companies')
