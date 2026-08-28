@@ -74,8 +74,8 @@ class CompanyService
 
             $updated = $this->repository->update($company, $companyData);
 
-            // There is one company node per Company because company_id is unique
-            // in organization_companies. Update the existing node in place.
+            // A Company has one organization membership and therefore one company node.
+            // Update the existing node in place so all location/child relationships survive.
             $nodeId = DB::table('organization_companies')
                 ->where('company_id', $company->id)
                 ->value('company_node_id');
@@ -86,7 +86,7 @@ class CompanyService
                     ->update(['name' => $updated->name]);
             }
 
-            // Keep the legacy BusinessEntity name synchronized as well.
+            // BusinessEntity remains the legacy identity source for the Company model.
             if ($updated->business_entity_id) {
                 BusinessEntity::query()
                     ->whereKey($updated->business_entity_id)
@@ -107,40 +107,39 @@ class CompanyService
                 ->lockForUpdate()
                 ->first();
 
-            if ($membership) {
-                if (! $membership->company_node_id) {
-                    throw new LogicException(
-                        'Şirket ilişkisi company node olmadan bulundu. Veri kaybını önlemek için silme durduruldu.'
-                    );
-                }
+            $companyNodeId = $membership?->company_node_id
+                ? (int) $membership->company_node_id
+                : null;
 
-                $companyNodeId = (int) $membership->company_node_id;
+            // Collect every relationship node belonging to this Company's brand links,
+            // even if the company membership is already missing. This prevents orphan
+            // brand nodes from surviving a Company deletion.
+            $brandNodeIds = DB::table('company_brands')
+                ->where('company_id', $company->id)
+                ->whereNotNull('brand_node_id')
+                ->pluck('brand_node_id')
+                ->map(fn ($id) => (int) $id);
 
-                $brandNodeIds = DB::table('company_brands')
-                    ->where('company_id', $company->id)
-                    ->whereNotNull('brand_node_id')
-                    ->pluck('brand_node_id')
-                    ->map(fn ($id) => (int) $id);
+            $nodeIds = collect($companyNodeId ? [$companyNodeId] : [])
+                ->merge($brandNodeIds)
+                ->unique()
+                ->values();
 
-                $nodeIds = collect([$companyNodeId])
-                    ->merge($brandNodeIds)
-                    ->unique()
-                    ->values();
+            if ($nodeIds->isNotEmpty() && DB::table('organization_locations')
+                ->whereIn('organization_id', $nodeIds)
+                ->exists()) {
+                throw new LogicException(
+                    'Lokasyon bağlantısı olan şirket veya marka ilişkisi silinemez.'
+                );
+            }
 
-                if (DB::table('organization_locations')
-                    ->whereIn('organization_id', $nodeIds)
-                    ->exists()) {
-                    throw new LogicException(
-                        'Lokasyon bağlantısı olan şirket veya marka ilişkisi silinemez.'
-                    );
-                }
+            // Only relationship nodes are removed here. Real Brand records are never
+            // deleted by deleting a Company, even when that Brand belongs to other Companies.
+            if ($brandNodeIds->isNotEmpty()) {
+                Organization::query()->whereIn('id', $brandNodeIds)->delete();
+            }
 
-                // Delete relationship nodes only. The real Brand records remain;
-                // company_brands is removed by the Company relationship cleanup.
-                if ($brandNodeIds->isNotEmpty()) {
-                    Organization::query()->whereIn('id', $brandNodeIds)->delete();
-                }
-
+            if ($companyNodeId) {
                 Organization::query()->whereKey($companyNodeId)->delete();
             }
 
