@@ -13,10 +13,8 @@ class Location extends Model
 {
     use HasFactory;
 
-    protected $fillable = [
-        'tenant_id',
-        'name',
-    ];
+    protected $fillable = ['tenant_id', 'name'];
+    protected $appends = ['organization'];
 
     protected static function booted(): void
     {
@@ -38,6 +36,11 @@ class Location extends Model
         )->withTimestamps();
     }
 
+    public function getOrganizationAttribute(): ?Organization
+    {
+        return $this->organizations->first();
+    }
+
     public function operationalRegions(): HasMany
     {
         return $this->hasMany(OperationalRegion::class, 'location_id');
@@ -52,13 +55,7 @@ class Location extends Model
             'business_entity_id'
         )
             ->using(LocationBusinessEntity::class)
-            ->withPivot([
-                'id',
-                'operational_region_id',
-                'nace_code',
-                'hazard_class',
-                'sgk_workplace_number',
-            ])
+            ->withPivot(['id', 'operational_region_id', 'nace_code', 'hazard_class', 'sgk_workplace_number'])
             ->withTimestamps();
     }
 }
