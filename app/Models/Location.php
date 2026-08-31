@@ -13,24 +13,7 @@ class Location extends Model
 {
     use HasFactory;
 
-    protected $fillable = [
-        'tenant_id',
-        'name',
-        'image',
-        'address',
-        'city_id',
-        'district_id',
-        'latitude',
-        'longitude',
-        'is_active',
-    ];
-
-    protected $casts = [
-        'latitude' => 'decimal:7',
-        'longitude' => 'decimal:7',
-        'is_active' => 'boolean',
-    ];
-
+    protected $fillable = ['tenant_id', 'name'];
     protected $appends = ['organization'];
 
     protected static function booted(): void
@@ -41,16 +24,6 @@ class Location extends Model
     public function tenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class);
-    }
-
-    public function city(): BelongsTo
-    {
-        return $this->belongsTo(City::class);
-    }
-
-    public function district(): BelongsTo
-    {
-        return $this->belongsTo(District::class);
     }
 
     public function organizations(): BelongsToMany
