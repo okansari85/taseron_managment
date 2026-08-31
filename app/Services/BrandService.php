@@ -202,6 +202,21 @@ class BrandService
             );
         }
 
+        $groupIds = DB::table('organization_companies as oc')
+            ->join('organizations as o', 'o.id', '=', 'oc.organization_id')
+            ->whereIn('oc.company_id', $ids)
+            ->where('o.tenant_id', $this->tenantContext->id())
+            ->where('o.type', 'group')
+            ->pluck('oc.organization_id')
+            ->unique()
+            ->values();
+
+        if ($ids !== [] && ($groupIds->count() !== 1 || $groupIds->count() !== count($ids))) {
+            throw new RuntimeException(
+                'Bir marka yalnızca aynı grup içerisindeki şirketlere bağlanabilir.'
+            );
+        }
+
         $existing = DB::table('company_brands')
             ->where('brand_id', $brand->id)
             ->get()
