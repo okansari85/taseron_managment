@@ -12,10 +12,12 @@ use LogicException;
 
 class LocationService
 {
+    private const IMAGE_DIRECTORY = 'location-images';
+
     public function __construct(
         private LocationRepositoryInterface $repository,
         private TenantContext $tenantContext,
-        private LocationImageService $imageService
+        private ImageService $imageService
     ) {}
 
     public function all(): Collection { return $this->repository->all(); }
@@ -30,7 +32,7 @@ class LocationService
         $imagePath = null;
 
         try {
-            if ($image instanceof UploadedFile) $imagePath = $this->imageService->upload($image);
+            if ($image instanceof UploadedFile) $imagePath = $this->imageService->upload($image, self::IMAGE_DIRECTORY);
             if ($imagePath) $data['image'] = $imagePath;
             return DB::transaction(fn () => $this->repository->create($data));
         } catch (\Throwable $e) {
@@ -51,7 +53,7 @@ class LocationService
         $oldImagePath = $location->image;
 
         try {
-            if ($image instanceof UploadedFile) $newImagePath = $this->imageService->upload($image);
+            if ($image instanceof UploadedFile) $newImagePath = $this->imageService->upload($image, self::IMAGE_DIRECTORY);
             if ($newImagePath) $data['image'] = $newImagePath;
             $updated = DB::transaction(fn () => $this->repository->update($location, $data));
             if ($newImagePath && $oldImagePath) $this->imageService->delete($oldImagePath);
