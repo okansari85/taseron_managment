@@ -16,20 +16,15 @@ use App\Http\Controllers\BrandLocationController;
 use App\Http\Controllers\OperationalRegionController;
 use App\Http\Controllers\OrganizationLocationController;
 
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
-
+Route::get('/user', function (Request $request) { return $request->user(); })->middleware('auth:sanctum');
 Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
-
     Route::middleware('role:super-admin')->group(function () {
         Route::apiResource('tenants', TenantController::class);
         Route::post('tenant-onboarding', [TenantOnboardingController::class, 'store']);
     });
-
     Route::middleware('tenant')->group(function () {
         Route::middleware('role:super-admin')->group(function () {
             Route::apiResource('organizations', OrganizationController::class);
@@ -46,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'detach']);
 
             Route::get('organizations/{organization}/locations', [OrganizationLocationController::class, 'index']);
+            Route::put('organizations/{organization}/locations', [OrganizationLocationController::class, 'sync']);
             Route::post('organizations/{organization}/locations', [OrganizationLocationController::class, 'store']);
             Route::post('organizations/{organization}/locations/{location}', [OrganizationLocationController::class, 'attach']);
             Route::delete('organizations/{organization}/locations/{location}', [OrganizationLocationController::class, 'detach']);

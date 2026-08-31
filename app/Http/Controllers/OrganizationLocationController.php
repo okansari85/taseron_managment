@@ -17,36 +17,35 @@ class OrganizationLocationController extends Controller
 
     public function index(Organization $organization): JsonResponse
     {
-        return response()->json(
-            $this->service->list($organization)
-        );
+        return response()->json($this->service->list($organization));
     }
 
     public function attach(Organization $organization, Location $location): JsonResponse
     {
-        return response()->json(
-            $this->service->attach($organization, $location),
-            201
-        );
+        return response()->json($this->service->attach($organization, $location), 201);
     }
 
     public function detach(Organization $organization, Location $location): JsonResponse
     {
         $this->service->detach($organization, $location);
 
-        return response()->json([
-            'message' => 'Lokasyon organizasyondan ayrıldı.',
+        return response()->json(['message' => 'Lokasyon organizasyondan ayrıldı.']);
+    }
+
+    public function sync(Request $request, Organization $organization): JsonResponse
+    {
+        $data = $request->validate([
+            'location_ids' => ['required', 'array', 'min:1'],
+            'location_ids.*' => ['integer', 'distinct'],
         ]);
+
+        return response()->json($this->service->sync($organization, $data['location_ids']));
     }
 
     public function store(Request $request, Organization $organization): JsonResponse
     {
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-        ]);
-
+        $data = $request->validate(['name' => ['required', 'string', 'max:255']]);
         $location = $this->service->createForOrganization($organization, $data);
-
         return response()->json($location, 201);
     }
 }
