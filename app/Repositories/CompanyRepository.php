@@ -11,6 +11,8 @@ class CompanyRepository implements CompanyRepositoryInterface
     public function all(): Collection
     {
         return Company::query()
+            ->with('organizations')
+            ->withCount('brands')
             ->orderBy('name')
             ->get();
     }
