@@ -8,7 +8,13 @@ use Illuminate\Database\Eloquent\Collection;
 
 class LocationRepository implements LocationRepositoryInterface
 {
-    private const RELATIONS = ['city:id,name', 'district:id,name', 'organizations:id,name'];
+    private const RELATIONS = [
+        'city:id,name',
+        'district:id,city_id,name',
+        'businessEntities:id,name,type',
+        'businessEntities.company:id,name,business_entity_id',
+        'businessEntities.company.brands:id,name',
+    ];
 
     public function all(): Collection
     {
