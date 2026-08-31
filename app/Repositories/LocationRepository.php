@@ -8,32 +8,28 @@ use Illuminate\Database\Eloquent\Collection;
 
 class LocationRepository implements LocationRepositoryInterface
 {
+    private const RELATIONS = ['city:id,name', 'district:id,name', 'organizations:id,name'];
+
     public function all(): Collection
     {
-        return Location::query()
-            ->with('organizations:id,name')
-            ->orderBy('name')
-            ->get();
+        return Location::query()->with(self::RELATIONS)->orderBy('name')->get();
     }
 
     public function find(int $id): Location
     {
-        return Location::query()->with('organizations:id,name')->findOrFail($id);
+        return Location::query()->with(self::RELATIONS)->findOrFail($id);
     }
 
     public function create(array $data): Location
     {
-        return Location::query()->create($data);
+        return Location::query()->create($data)->load(self::RELATIONS);
     }
 
     public function update(Location $location, array $data): Location
     {
         $location->update($data);
-        return $location->refresh()->load('organizations:id,name');
+        return $location->refresh()->load(self::RELATIONS);
     }
 
-    public function delete(Location $location): void
-    {
-        $location->delete();
-    }
+    public function delete(Location $location): void { $location->delete(); }
 }
