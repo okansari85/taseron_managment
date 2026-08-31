@@ -15,6 +15,8 @@ use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
 use App\Http\Controllers\OperationalRegionController;
 use App\Http\Controllers\OrganizationLocationController;
+use App\Models\City;
+use App\Models\District;
 
 Route::get('/user', function (Request $request) { return $request->user(); })->middleware('auth:sanctum');
 Route::post('login', [AuthController::class, 'login']);
@@ -27,6 +29,8 @@ Route::middleware('auth:sanctum')->group(function () {
     });
     Route::middleware('tenant')->group(function () {
         Route::middleware('role:super-admin')->group(function () {
+            Route::get('cities', fn () => response()->json(City::query()->orderBy('name')->get(['id','name'])));
+            Route::get('cities/{city}/districts', fn (City $city) => response()->json($city->districts()->orderBy('name')->get(['id','city_id','name'])));
             Route::apiResource('organizations', OrganizationController::class);
             Route::apiResource('companies', CompanyController::class);
             Route::apiResource('contractors', ContractorController::class);
