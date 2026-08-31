@@ -20,9 +20,7 @@ class Location extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(
-            app(TenantScope::class)
-        );
+        static::addGlobalScope(app(TenantScope::class));
     }
 
     public function tenant(): BelongsTo
@@ -30,12 +28,19 @@ class Location extends Model
         return $this->belongsTo(Tenant::class);
     }
 
+    public function organizations(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Organization::class,
+            'organization_locations',
+            'location_id',
+            'organization_id'
+        )->withTimestamps();
+    }
+
     public function operationalRegions(): HasMany
     {
-        return $this->hasMany(
-            OperationalRegion::class,
-            'location_id'
-        );
+        return $this->hasMany(OperationalRegion::class, 'location_id');
     }
 
     public function businessEntities(): BelongsToMany
