@@ -22,6 +22,11 @@ class LocationBusinessEntity extends Pivot
         return $this->belongsTo(BusinessEntity::class);
     }
 
+    public function operationalRegion(): BelongsTo
+    {
+        return $this->belongsTo(OperationalRegion::class);
+    }
+
     public function brands(): BelongsToMany
     {
         return $this->belongsToMany(
