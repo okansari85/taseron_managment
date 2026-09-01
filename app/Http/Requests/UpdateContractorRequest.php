@@ -15,30 +15,16 @@ class UpdateContractorRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => [
-                'required',
-                'string',
-                'max:255',
-            ],
-
-            'short_name' => [
-                'nullable',
-                'string',
-                'max:255',
-            ],
-
-            'logo' => [
-                'nullable',
-                'image',
-                'max:5120',
-            ],
-
+            'name' => ['required', 'string', 'max:255'],
+            'short_name' => ['nullable', 'string', 'max:255'],
+            'logo' => ['nullable', 'image', 'max:5120'],
             'contractor_type' => [
                 'required',
-                Rule::in([
-                    'permanent',
-                    'temporary',
-                ]),
+                Rule::in(['permanent', 'temporary']),
+            ],
+            'status' => [
+                'required',
+                Rule::in(['active', 'passive']),
             ],
         ];
     }
@@ -46,32 +32,17 @@ class UpdateContractorRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'name.required' =>
-                'Taşeron firma adı zorunludur.',
-
-            'name.string' =>
-                'Taşeron firma adı geçerli bir metin olmalıdır.',
-
-            'name.max' =>
-                'Taşeron firma adı en fazla 255 karakter olabilir.',
-
-            'short_name.string' =>
-                'Kısa ad geçerli bir metin olmalıdır.',
-
-            'short_name.max' =>
-                'Kısa ad en fazla 255 karakter olabilir.',
-
-            'logo.image' =>
-                'Logo geçerli bir görsel dosyası olmalıdır.',
-
-            'logo.max' =>
-                'Logo en fazla 5 MB olabilir.',
-
-            'contractor_type.required' =>
-                'Taşeron türü zorunludur.',
-
-            'contractor_type.in' =>
-                'Geçersiz taşeron türü.',
+            'name.required' => 'Taşeron firma adı zorunludur.',
+            'name.string' => 'Taşeron firma adı geçerli bir metin olmalıdır.',
+            'name.max' => 'Taşeron firma adı en fazla 255 karakter olabilir.',
+            'short_name.string' => 'Kısa ad geçerli bir metin olmalıdır.',
+            'short_name.max' => 'Kısa ad en fazla 255 karakter olabilir.',
+            'logo.image' => 'Logo geçerli bir görsel dosyası olmalıdır.',
+            'logo.max' => 'Logo en fazla 5 MB olabilir.',
+            'contractor_type.required' => 'Taşeron türü zorunludur.',
+            'contractor_type.in' => 'Geçersiz taşeron türü.',
+            'status.required' => 'Durum zorunludur.',
+            'status.in' => 'Geçersiz taşeron durumu.',
         ];
     }
 }
