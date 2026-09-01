@@ -13,6 +13,8 @@ class Contractor extends Model
     protected $fillable = [
         'business_entity_id',
         'contractor_type',
+        'short_name',
+        'logo_path',
     ];
 
     public function businessEntity(): BelongsTo
