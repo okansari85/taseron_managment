@@ -21,6 +21,18 @@ class StoreContractorRequest extends FormRequest
                 'max:255',
             ],
 
+            'short_name' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'logo' => [
+                'nullable',
+                'image',
+                'max:5120',
+            ],
+
             'contractor_type' => [
                 'required',
                 Rule::in([
@@ -42,6 +54,18 @@ class StoreContractorRequest extends FormRequest
 
             'name.max' =>
                 'Taşeron firma adı en fazla 255 karakter olabilir.',
+
+            'short_name.string' =>
+                'Kısa ad geçerli bir metin olmalıdır.',
+
+            'short_name.max' =>
+                'Kısa ad en fazla 255 karakter olabilir.',
+
+            'logo.image' =>
+                'Logo geçerli bir görsel dosyası olmalıdır.',
+
+            'logo.max' =>
+                'Logo en fazla 5 MB olabilir.',
 
             'contractor_type.required' =>
                 'Taşeron türü zorunludur.',
