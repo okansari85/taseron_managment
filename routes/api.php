@@ -10,7 +10,7 @@ use App\Http\Controllers\LocationController;
 use App\Http\Controllers\ContractorController;
 use App\Http\Controllers\LocationBusinessEntityController;
 use App\Http\Controllers\OrganizationCompanyController;
-use App\Http\Controllers\OrganizationBusinessEntityController;
+use App\Http\Controllers\OrganizationContractorController;
 use App\Http\Controllers\TenantOnboardingController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
@@ -45,9 +45,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'attach']);
             Route::delete('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'detach']);
 
-            Route::get('organization-business-entities/contractors', [OrganizationBusinessEntityController::class, 'contractorsForTenant']);
-            Route::post('organizations/{organization}/business-entities/{businessEntity}', [OrganizationBusinessEntityController::class, 'attach']);
-            Route::delete('organizations/{organization}/business-entities/{businessEntity}', [OrganizationBusinessEntityController::class, 'detach']);
+            Route::get('organization-contractors', [OrganizationContractorController::class, 'contractorsForTenant']);
+            Route::get('organizations/{organization}/contractors', [OrganizationContractorController::class, 'index']);
+            Route::post('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'attach']);
+            Route::delete('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'detach']);
 
             Route::get('organizations/{organization}/locations', [OrganizationLocationController::class, 'index']);
             Route::put('organizations/{organization}/locations', [OrganizationLocationController::class, 'sync']);
