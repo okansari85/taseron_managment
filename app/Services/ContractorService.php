@@ -36,9 +36,7 @@ class ContractorService
     public function create(array $data): Contractor
     {
         if (! $this->tenantContext->has()) {
-            throw new LogicException(
-                'Tenant context has not been initialized.'
-            );
+            throw new LogicException('Tenant context has not been initialized.');
         }
 
         $logoPath = null;
@@ -63,6 +61,7 @@ class ContractorService
                     'contractor_type' => $data['contractor_type'],
                     'short_name' => $data['short_name'] ?? null,
                     'logo_path' => $logoPath,
+                    'status' => $data['status'],
                 ]);
             });
         } catch (Throwable $e) {
@@ -71,10 +70,8 @@ class ContractorService
         }
     }
 
-    public function update(
-        Contractor $contractor,
-        array $data
-    ): Contractor {
+    public function update(Contractor $contractor, array $data): Contractor
+    {
         $newLogoPath = null;
         $oldLogoPath = null;
 
@@ -88,15 +85,11 @@ class ContractorService
                 $contractor->load('businessEntity');
 
                 if ($contractor->businessEntity === null) {
-                    throw new LogicException(
-                        'Contractor için Business Entity bulunamadı.'
-                    );
+                    throw new LogicException('Contractor için Business Entity bulunamadı.');
                 }
 
                 if ($contractor->businessEntity->type !== 'contractor') {
-                    throw new LogicException(
-                        'Business Entity contractor tipinde değil.'
-                    );
+                    throw new LogicException('Business Entity contractor tipinde değil.');
                 }
 
                 $oldLogoPath = $contractor->logo_path;
@@ -114,6 +107,7 @@ class ContractorService
                         'contractor_type' => $data['contractor_type'],
                         'short_name' => $data['short_name'] ?? null,
                         'logo_path' => $newLogoPath ?? $oldLogoPath,
+                        'status' => $data['status'],
                     ]
                 );
 
@@ -143,9 +137,7 @@ class ContractorService
             $this->repository->delete($contractor);
 
             if ($businessEntityId !== null) {
-                BusinessEntity::query()
-                    ->whereKey($businessEntityId)
-                    ->delete();
+                BusinessEntity::query()->whereKey($businessEntityId)->delete();
             }
         });
     }
