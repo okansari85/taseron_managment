@@ -33,6 +33,11 @@ return new class extends Migration
             $table->foreignId('company_id')->nullable(false)->change();
         });
 
+        // Contractor was never a valid Organization node in the intended model.
+        DB::table('organizations')
+            ->where('type', 'contractor')
+            ->delete();
+
         DB::statement("ALTER TABLE organizations MODIFY type ENUM('holding','group','company','brand') NOT NULL");
     }
 
