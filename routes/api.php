@@ -47,6 +47,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::get('organization-contractors', [OrganizationContractorController::class, 'contractorsForTenant']);
             Route::get('organizations/{organization}/contractors', [OrganizationContractorController::class, 'index']);
+            Route::post('organizations/{organization}/contractors/bulk', [OrganizationContractorController::class, 'bulkAttach']);
             Route::post('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'attach']);
             Route::delete('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'detach']);
 
