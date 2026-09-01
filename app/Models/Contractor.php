@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Contractor extends Model
 {
@@ -24,5 +25,10 @@ class Contractor extends Model
             BusinessEntity::class,
             'business_entity_id'
         );
+    }
+
+    public function organizationContractors(): HasMany
+    {
+        return $this->hasMany(OrganizationContractor::class);
     }
 }
