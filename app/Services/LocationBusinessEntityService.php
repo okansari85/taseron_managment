@@ -25,7 +25,7 @@ class LocationBusinessEntityService
 
         $businessEntities->each(function (BusinessEntity $businessEntity): void {
             if ($businessEntity->pivot instanceof Pivot) {
-                $businessEntity->pivot->load('brands');
+                $businessEntity->pivot->load(['brands', 'operationalRegion']);
             }
         });
 
