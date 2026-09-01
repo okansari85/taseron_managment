@@ -15,6 +15,7 @@ class Contractor extends Model
         'contractor_type',
         'short_name',
         'logo_path',
+        'status',
     ];
 
     public function businessEntity(): BelongsTo
