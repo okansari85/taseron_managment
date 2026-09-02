@@ -8,17 +8,13 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Spatie\Permission\Traits\HasRoles;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable, HasRoles, HasForbiddenPermissions {
-        HasForbiddenPermissions::hasPermissionTo insteadof HasRoles;
-        HasRoles::hasPermissionTo as protected spatieHasPermissionTo;
-    }
+    use HasApiTokens, HasFactory, Notifiable, HasForbiddenPermissions;
 
     protected $fillable = [
         'name',
