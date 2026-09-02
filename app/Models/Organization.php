@@ -48,14 +48,6 @@ class Organization extends Model
         return $this->hasMany(Organization::class, 'parent_id');
     }
 
-    public function users(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            User::class,
-            'user_organizations'
-        )->withTimestamps();
-    }
-
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(
