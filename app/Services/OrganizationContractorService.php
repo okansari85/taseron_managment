@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Contractor;
+use App\Models\Location;
 use App\Models\Organization;
 use App\Models\OrganizationContractor;
 use Illuminate\Database\Eloquent\Collection;
@@ -32,6 +33,42 @@ class OrganizationContractorService
     {
         $this->assertTenantOrganization($organization);
         return OrganizationContractor::query()->where('organization_id', $organization->id)->with('contractor.businessEntity')->get();
+    }
+
+    public function contractorsForLocation(Location $location): Collection
+    {
+        if ($location->tenant_id !== $this->tenantContext->id()) {
+            throw ValidationException::withMessages([
+                'location' => 'Lokasyon mevcut tenant kapsamında değil.',
+            ]);
+        }
+
+        $organization = $location->organizations()->first();
+
+        if ($organization === null) {
+            return new Collection();
+        }
+
+        $organizationIds = [];
+        $current = $organization;
+
+        while ($current !== null) {
+            $organizationIds[] = $current->id;
+            $current = $current->parent;
+        }
+
+        return Contractor::query()
+            ->where('contractor_type', 'permanent')
+            ->whereHas('businessEntity', fn ($query) => $query->where('tenant_id', $this->tenantContext->id()))
+            ->whereHas('organizationContractors', fn ($query) => $query->whereIn('organization_id', $organizationIds))
+            ->with('businessEntity')
+            ->orderBy('id')
+            ->get()
+            ->each(function (Contractor $contractor): void {
+                $contractor->setAttribute('name', $contractor->businessEntity?->name ?? '');
+                $contractor->setAttribute('tenant_id', $contractor->businessEntity?->tenant_id);
+                $contractor->setAttribute('contractor_type', 'permanent');
+            });
     }
 
     public function attach(Organization $organization, Contractor $contractor): OrganizationContractor
