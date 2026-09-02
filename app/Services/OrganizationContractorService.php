@@ -49,18 +49,10 @@ class OrganizationContractorService
             return new Collection();
         }
 
-        $organizationIds = [];
-        $current = $organization;
-
-        while ($current !== null) {
-            $organizationIds[] = $current->id;
-            $current = $current->parent;
-        }
-
         return Contractor::query()
             ->where('contractor_type', 'permanent')
             ->whereHas('businessEntity', fn ($query) => $query->where('tenant_id', $this->tenantContext->id()))
-            ->whereHas('organizationContractors', fn ($query) => $query->whereIn('organization_id', $organizationIds))
+            ->whereHas('organizationContractors', fn ($query) => $query->where('organization_id', $organization->id))
             ->with('businessEntity')
             ->orderBy('id')
             ->get()
