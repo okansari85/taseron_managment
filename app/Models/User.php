@@ -9,7 +9,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 use Laravel\Sanctum\HasApiTokens;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class User extends Authenticatable
 {
@@ -50,11 +50,8 @@ class User extends Authenticatable
         ];
     }
 
-    public function organizations(): BelongsToMany
+    public function scopes(): HasMany
     {
-        return $this->belongsToMany(
-            Organization::class,
-            'user_organizations'
-        )->withTimestamps();
+        return $this->hasMany(UserScope::class);
     }
 }
