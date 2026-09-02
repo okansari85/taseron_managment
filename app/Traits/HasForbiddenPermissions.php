@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Collection;
 use Spatie\Permission\Contracts\Permission;
-use Spatie\Permission\PermissionRegistrar;
 
 trait HasForbiddenPermissions
 {
@@ -37,19 +36,13 @@ trait HasForbiddenPermissions
 
     public function forbiddenPermissions(): BelongsToMany
     {
-        $relation = $this->morphToMany(
+        return $this->morphToMany(
             config('permission.models.permission'),
             'model',
-            config('permission.table_names.model_has_forbidden_permissions'),
-            config('permission.column_names.model_morph_key'),
-            PermissionRegistrar::$pivotPermission
+            'model_has_forbidden_permissions',
+            config('permission.column_names.model_morph_key', 'model_id'),
+            'permission_id'
         );
-
-        if (! PermissionRegistrar::$teams) {
-            return $relation;
-        }
-
-        return $relation->wherePivot(PermissionRegistrar::$teamsKey, getPermissionsTeamId());
     }
 
     public function hasPermissionTo($permission, ?string $guardName = null): bool
