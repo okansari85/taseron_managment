@@ -74,6 +74,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('users/{user}/authorization', [UserAuthorizationController::class, 'show']);
             Route::post('users/{user}/role', [UserAuthorizationController::class, 'assignRole']);
             Route::put('users/{user}/permissions', [UserAuthorizationController::class, 'permissions']);
+            Route::put('users/{user}/forbidden-permissions', [UserAuthorizationController::class, 'forbiddenPermissions']);
             Route::get('roles', [UserAuthorizationController::class, 'roles']);
             Route::get('permissions', [UserAuthorizationController::class, 'permissionList']);
             Route::put('roles/{role}/permissions', [UserAuthorizationController::class, 'updateRolePermissions']);
