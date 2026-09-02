@@ -51,11 +51,13 @@ class RolePermissionSeeder extends Seeder
                 'guard_name' => 'web',
             ]);
 
-            $role->syncPermissions(
-                collect($permissionNamesForRole)
+            $permissionsForRole = $roleName === 'super-admin'
+                ? $permissions->values()->all()
+                : collect($permissionNamesForRole)
                     ->map(fn (string $name) => $permissions[$name])
-                    ->all()
-            );
+                    ->all();
+
+            $role->syncPermissions($permissionsForRole);
         }
     }
 }
