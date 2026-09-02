@@ -28,4 +28,8 @@ class Location extends Model
     {
         return $this->belongsToMany(BusinessEntity::class, 'location_business_entities', 'location_id', 'business_entity_id')->using(LocationBusinessEntity::class)->withPivot(['id', 'operational_region_id', 'activity', 'sub_activity', 'nace_code', 'hazard_class', 'sgk_workplace_number'])->withTimestamps();
     }
+    public function experts(): HasMany
+    {
+        return $this->hasMany(LocationExpert::class);
+    }
 }
