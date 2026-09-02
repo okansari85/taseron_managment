@@ -47,20 +47,21 @@ class UserAuthorizationRepository
     public function syncUserPermissions(User $user, array $permissionNames): User
     {
         $permissionNames = array_values(array_unique($permissionNames));
-        $guard = $user->getDefaultGuardName();
         $permissions = Permission::query()
             ->whereIn('name', $permissionNames)
-            ->where('guard_name', $guard)
+            ->where('guard_name', $user->getDefaultGuardName())
             ->get();
 
         if ($permissions->count() !== count($permissionNames)) {
             abort(422, 'Bir veya daha fazla permission bulunamadı.');
         }
 
-        $rolePermissions = $user->getPermissionsViaRoles();
+        $rolePermissions = $user->roles()->with('permissions')->get()
+            ->flatMap(fn (Role $role) => $role->permissions)
+            ->unique('id')
+            ->values();
         $rolePermissionNames = $rolePermissions->pluck('name')->all();
         $selected = array_flip($permissionNames);
-        $rolePermissionIds = $rolePermissions->pluck('id')->all();
 
         $directPermissions = $permissions
             ->reject(fn (Permission $permission): bool => in_array($permission->name, $rolePermissionNames, true))
