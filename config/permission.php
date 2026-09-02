@@ -30,18 +30,18 @@ return [
     ],
 
     'register_permission_check_method' => true,
+    'register_octane_reset_listener' => false,
     'events_enabled' => false,
     'teams' => false,
     'team_resolver' => DefaultTeamResolver::class,
+    'use_passport_client_credentials' => false,
     'display_permission_in_exception' => false,
     'display_role_in_exception' => false,
     'enable_wildcard_permission' => false,
-    'wildcard_permission' => [
-        'separator' => '.',
-        'values' => 'default',
-    ],
+
+    /* Cache-specific settings */
     'cache' => [
-        'expiration_time' => \DateInterval::createFromDateString('24 hours'),
+        'expiration_time' => DateInterval::createFromDateString('24 hours'),
         'key' => 'spatie.permission.cache',
         'store' => 'default',
     ],
