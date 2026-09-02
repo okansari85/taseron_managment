@@ -62,6 +62,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('brands/{brand}/locations/{location}', [BrandLocationController::class, 'attach']);
             Route::delete('brands/{brand}/locations/{location}', [BrandLocationController::class, 'detach']);
 
+            Route::get('locations/{location}/organization-contractors', [LocationController::class, 'organizationContractors']);
             Route::get('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'index']);
             Route::post('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'store']);
             Route::put('locations/{location}/business-entities/{businessEntity}', [LocationBusinessEntityController::class, 'update']);
