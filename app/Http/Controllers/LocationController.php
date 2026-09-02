@@ -6,12 +6,14 @@ use App\Http\Requests\StoreLocationRequest;
 use App\Http\Requests\UpdateLocationRequest;
 use App\Models\Location;
 use App\Services\LocationService;
+use App\Services\OrganizationContractorService;
 use Illuminate\Http\JsonResponse;
 
 class LocationController extends Controller
 {
     public function __construct(
-        private LocationService $service
+        private LocationService $service,
+        private OrganizationContractorService $organizationContractorService
     ) {
     }
 
@@ -40,6 +42,13 @@ class LocationController extends Controller
     ): JsonResponse {
         return response()->json(
             $this->service->find($location->id)
+        );
+    }
+
+    public function organizationContractors(Location $location): JsonResponse
+    {
+        return response()->json(
+            $this->organizationContractorService->contractorsForLocation($location)
         );
     }
 
