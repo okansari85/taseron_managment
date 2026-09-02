@@ -34,6 +34,11 @@ class UserAuthorizationService
 
     public function syncPermissions(User $user, array $permissionNames): User
     {
+        return $this->repository->syncUserPermissions($user, array_values(array_unique($permissionNames)));
+    }
+
+    public function syncDirectPermissions(User $user, array $permissionNames): User
+    {
         return $this->repository->syncDirectPermissions($user, array_values(array_unique($permissionNames)));
     }
 
