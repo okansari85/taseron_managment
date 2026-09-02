@@ -36,4 +36,9 @@ class UserAuthorizationService
     {
         return $this->repository->syncDirectPermissions($user, array_values(array_unique($permissionNames)));
     }
+
+    public function syncForbiddenPermissions(User $user, array $permissionNames): User
+    {
+        return $this->repository->syncForbiddenPermissions($user, array_values(array_unique($permissionNames)));
+    }
 }
