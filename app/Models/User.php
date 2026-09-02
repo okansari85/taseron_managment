@@ -15,10 +15,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable, HasRoles {
+    use HasApiTokens, HasFactory, Notifiable, HasRoles, HasForbiddenPermissions {
+        HasForbiddenPermissions::hasPermissionTo insteadof HasRoles;
         HasRoles::hasPermissionTo as protected spatieHasPermissionTo;
     }
-    use HasForbiddenPermissions;
 
     protected $fillable = [
         'name',
