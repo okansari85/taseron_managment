@@ -48,6 +48,16 @@ class UserAuthorizationController extends Controller
         return response()->json($this->users->syncPermissions($user, $data['permissions']));
     }
 
+    public function forbiddenPermissions(Request $request, User $user): JsonResponse
+    {
+        $data = $request->validate([
+            'permissions' => ['required', 'array'],
+            'permissions.*' => ['string', 'distinct'],
+        ]);
+
+        return response()->json($this->users->syncForbiddenPermissions($user, $data['permissions']));
+    }
+
     public function roles(): JsonResponse
     {
         return response()->json($this->roles->roles());
