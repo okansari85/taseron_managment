@@ -35,6 +35,8 @@ class LocationBusinessEntityController extends Controller
             [
                 'brand_ids' => $request->validated('brand_ids', []),
                 'operational_region_id' => $request->validated('operational_region_id'),
+                'activity' => $request->validated('activity'),
+                'sub_activity' => $request->validated('sub_activity'),
                 'nace_code' => $request->validated('nace_code'),
                 'hazard_class' => $request->validated('hazard_class'),
                 'sgk_workplace_number' => $request->validated('sgk_workplace_number'),
