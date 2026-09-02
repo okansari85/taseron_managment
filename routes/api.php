@@ -16,6 +16,8 @@ use App\Http\Controllers\BrandController;
 use App\Http\Controllers\BrandLocationController;
 use App\Http\Controllers\OperationalRegionController;
 use App\Http\Controllers\OrganizationLocationController;
+use App\Http\Controllers\UserAuthorizationController;
+use App\Http\Controllers\LocationExpertController;
 use App\Models\City;
 use App\Models\District;
 
@@ -67,6 +69,22 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'store']);
             Route::put('locations/{location}/business-entities/{businessEntity}', [LocationBusinessEntityController::class, 'update']);
             Route::delete('locations/{location}/business-entities/{businessEntity}', [LocationBusinessEntityController::class, 'destroy']);
+
+            Route::get('users/authorization', [UserAuthorizationController::class, 'index']);
+            Route::get('users/{user}/authorization', [UserAuthorizationController::class, 'show']);
+            Route::post('users/{user}/role', [UserAuthorizationController::class, 'assignRole']);
+            Route::put('users/{user}/permissions', [UserAuthorizationController::class, 'permissions']);
+            Route::get('roles', [UserAuthorizationController::class, 'roles']);
+            Route::get('permissions', [UserAuthorizationController::class, 'permissionList']);
+            Route::put('roles/{role}/permissions', [UserAuthorizationController::class, 'updateRolePermissions']);
+            Route::get('users/{user}/scopes', [UserAuthorizationController::class, 'scopes']);
+            Route::put('users/{user}/scopes', [UserAuthorizationController::class, 'syncScopes']);
+            Route::post('users/{user}/scopes', [UserAuthorizationController::class, 'attachScope']);
+            Route::delete('users/{user}/scopes', [UserAuthorizationController::class, 'detachScope']);
+
+            Route::get('locations/{location}/experts', [LocationExpertController::class, 'index']);
+            Route::post('locations/{location}/experts', [LocationExpertController::class, 'attach']);
+            Route::delete('locations/{location}/experts/{user}', [LocationExpertController::class, 'detach']);
         });
     });
 });
