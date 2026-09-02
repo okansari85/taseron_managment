@@ -58,6 +58,7 @@ class OrganizationContractorService
             ->get()
             ->each(function (Contractor $contractor): void {
                 $contractor->setAttribute('name', $contractor->businessEntity?->name ?? '');
+                $contractor->setAttribute('business_entity_id', $contractor->business_entity_id);
                 $contractor->setAttribute('tenant_id', $contractor->businessEntity?->tenant_id);
                 $contractor->setAttribute('contractor_type', 'permanent');
             });
