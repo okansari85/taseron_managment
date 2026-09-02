@@ -53,6 +53,8 @@ class BusinessEntity extends Model
             ->withPivot([
                 'id',
                 'operational_region_id',
+                'activity',
+                'sub_activity',
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
