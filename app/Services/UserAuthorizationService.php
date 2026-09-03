@@ -63,4 +63,9 @@ class UserAuthorizationService
     {
         return $this->repository->syncForbiddenPermissions($user, array_values(array_unique($permissionNames)));
     }
+
+    public function delete(User $user): void
+    {
+        $user->delete();
+    }
 }
