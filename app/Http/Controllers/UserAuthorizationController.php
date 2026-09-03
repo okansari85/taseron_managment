@@ -39,7 +39,7 @@ class UserAuthorizationController extends Controller
                 'nullable',
                 'string',
                 Rule::exists('roles', 'name')->where(
-                    fn ($query) => $query->where('guard_name', config('auth.defaults.guard', 'web'))
+                    fn ($query) => $query->where('guard_name', 'web')
                 ),
             ],
         ]);
