@@ -82,6 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('users/authorization', [UserAuthorizationController::class, 'index']);
             Route::post('users', [UserAuthorizationController::class, 'store']);
             Route::get('users/{user}/authorization', [UserAuthorizationController::class, 'show']);
+            Route::delete('users/{user}', [UserAuthorizationController::class, 'destroy']);
             Route::post('users/{user}/role', [UserAuthorizationController::class, 'assignRole']);
             Route::put('users/{user}/permissions', [UserAuthorizationController::class, 'permissions']);
             Route::put('users/{user}/forbidden-permissions', [UserAuthorizationController::class, 'forbiddenPermissions']);
