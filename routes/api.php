@@ -35,10 +35,13 @@ Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
+
     Route::middleware('web-role:super-admin')->group(function () {
+        Route::post('users/{user}/impersonate', [UserAuthorizationController::class, 'impersonate']);
         Route::apiResource('tenants', TenantController::class);
         Route::post('tenant-onboarding', [TenantOnboardingController::class, 'store']);
     });
+
     Route::middleware('tenant')->group(function () {
         Route::middleware('web-role:super-admin')->group(function () {
             Route::get('cities', fn () => response()->json(City::query()->orderBy('name')->get(['id','name'])));
