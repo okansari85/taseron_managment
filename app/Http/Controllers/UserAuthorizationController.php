@@ -59,6 +59,28 @@ class UserAuthorizationController extends Controller
         return response()->json(['message' => 'User deleted.']);
     }
 
+    public function impersonate(Request $request, User $user): JsonResponse
+    {
+        $actor = $request->user();
+
+        abort_unless($actor && $actor->hasRole('super-admin'), 403, 'Only super admin can impersonate users.');
+        abort_if($actor->id === $user->id, 422, 'Cannot impersonate yourself.');
+        abort_if($user->hasRole('super-admin'), 422, 'Cannot impersonate another super admin.');
+
+        $token = $user->createToken('impersonation')->plainTextToken;
+
+        return response()->json([
+            'message' => 'User impersonation started.',
+            'token' => $token,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->getRoleNames(),
+            ],
+        ]);
+    }
+
     public function assignRole(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
