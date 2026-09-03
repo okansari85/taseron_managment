@@ -52,6 +52,13 @@ class UserAuthorizationController extends Controller
         ), 201);
     }
 
+    public function destroy(User $user): JsonResponse
+    {
+        $this->users->delete($user);
+
+        return response()->json(['message' => 'User deleted.']);
+    }
+
     public function assignRole(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
