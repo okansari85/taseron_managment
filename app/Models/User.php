@@ -37,7 +37,7 @@ class User extends Authenticatable
 
     public function getDefaultGuardName(): string
     {
-        return (string) config('auth.defaults.guard', 'web');
+        return 'web';
     }
 
     public function scopes(): HasMany
