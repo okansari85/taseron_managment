@@ -62,6 +62,6 @@ class RolePermissionRepository
 
     private function defaultGuardName(): string
     {
-        return (string) config('auth.defaults.guard', 'web');
+        return 'web';
     }
 }
