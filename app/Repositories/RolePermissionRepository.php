@@ -18,9 +18,15 @@ class RolePermissionRepository
         return Permission::query()->orderBy('name')->get();
     }
 
-    public function findRole(string $roleName): Role
+    public function findRole(string $roleName, ?string $guardName = null): Role
     {
-        return Role::query()->where('name', $roleName)->firstOrFail();
+        $query = Role::query()->where('name', $roleName);
+
+        if ($guardName !== null && $guardName !== '') {
+            $query->where('guard_name', $guardName);
+        }
+
+        return $query->firstOrFail();
     }
 
     public function syncRolePermissions(Role $role, array $permissionNames): Role
