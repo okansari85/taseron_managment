@@ -35,6 +35,11 @@ class User extends Authenticatable
         ];
     }
 
+    public function getDefaultGuardName(): string
+    {
+        return (string) config('auth.defaults.guard', 'web');
+    }
+
     public function scopes(): HasMany
     {
         return $this->hasMany(UserScope::class);
