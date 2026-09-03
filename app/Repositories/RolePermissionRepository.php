@@ -2,31 +2,47 @@
 
 namespace App\Repositories;
 
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
-use Illuminate\Database\Eloquent\Collection;
 
 class RolePermissionRepository
 {
     public function roles(): Collection
     {
-        return Role::query()->with('permissions')->orderBy('name')->get();
+        return Role::query()
+            ->where('guard_name', $this->defaultGuardName())
+            ->with('permissions')
+            ->orderBy('name')
+            ->get();
     }
 
     public function permissions(): Collection
     {
-        return Permission::query()->orderBy('name')->get();
+        return Permission::query()
+            ->where('guard_name', $this->defaultGuardName())
+            ->orderBy('name')
+            ->get();
     }
 
     public function findRole(string $roleName, ?string $guardName = null): Role
     {
-        $query = Role::query()->where('name', $roleName);
+        $guardName = $guardName ?: $this->defaultGuardName();
+        $roleName = trim($roleName);
 
-        if ($guardName !== null && $guardName !== '') {
-            $query->where('guard_name', $guardName);
+        $role = Role::query()
+            ->where('name', $roleName)
+            ->where('guard_name', $guardName)
+            ->first();
+
+        if ($role !== null) {
+            return $role;
         }
 
-        return $query->firstOrFail();
+        throw ValidationException::withMessages([
+            'role' => "'{$roleName}' rolü '{$guardName}' guard'ı ile bulunamadı.",
+        ]);
     }
 
     public function syncRolePermissions(Role $role, array $permissionNames): Role
@@ -42,5 +58,10 @@ class RolePermissionRepository
 
         $role->syncPermissions($permissions->all());
         return $role->load('permissions');
+    }
+
+    private function defaultGuardName(): string
+    {
+        return (string) config('auth.defaults.guard', 'web');
     }
 }
