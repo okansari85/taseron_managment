@@ -35,7 +35,13 @@ class UserAuthorizationController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
-            'role' => ['nullable', 'string', 'exists:roles,name'],
+            'role' => [
+                'nullable',
+                'string',
+                Rule::exists('roles', 'name')->where(
+                    fn ($query) => $query->where('guard_name', config('auth.defaults.guard', 'web'))
+                ),
+            ],
         ]);
 
         return response()->json($this->users->create(
@@ -49,7 +55,13 @@ class UserAuthorizationController extends Controller
     public function assignRole(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
-            'role' => ['required', 'string', 'exists:roles,name'],
+            'role' => [
+                'required',
+                'string',
+                Rule::exists('roles', 'name')->where(
+                    fn ($query) => $query->where('guard_name', $user->getDefaultGuardName())
+                ),
+            ],
         ]);
 
         return response()->json($this->users->assignRole($user, $data['role']));
