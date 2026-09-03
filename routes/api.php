@@ -26,12 +26,12 @@ Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
-    Route::middleware('role:super-admin,web')->group(function () {
+    Route::middleware('web-role:super-admin')->group(function () {
         Route::apiResource('tenants', TenantController::class);
         Route::post('tenant-onboarding', [TenantOnboardingController::class, 'store']);
     });
     Route::middleware('tenant')->group(function () {
-        Route::middleware('role:super-admin,web')->group(function () {
+        Route::middleware('web-role:super-admin')->group(function () {
             Route::get('cities', fn () => response()->json(City::query()->orderBy('name')->get(['id','name'])));
             Route::get('cities/{city}/districts', fn (City $city) => response()->json($city->districts()->orderBy('name')->get(['id','city_id','name'])));
             Route::apiResource('organizations', OrganizationController::class);
