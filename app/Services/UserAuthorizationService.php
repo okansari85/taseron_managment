@@ -3,13 +3,16 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Repositories\RolePermissionRepository;
 use App\Repositories\UserAuthorizationRepository;
 use Spatie\Permission\Models\Role;
 
 class UserAuthorizationService
 {
-    public function __construct(private UserAuthorizationRepository $repository)
-    {
+    public function __construct(
+        private UserAuthorizationRepository $repository,
+        private RolePermissionRepository $roleRepository,
+    ) {
     }
 
     public function all()
@@ -31,11 +34,8 @@ class UserAuthorizationService
         ]);
 
         if ($roleName !== null && $roleName !== '') {
-            $role = Role::query()
-                ->where('name', $roleName)
-                ->where('guard_name', $user->getDefaultGuardName())
-                ->firstOrFail();
-            $user->syncRoles([$role]);
+            $role = $this->roleRepository->findRole($roleName, $user->getDefaultGuardName());
+            $user->roles()->sync([$role->getKey()]);
         }
 
         return $this->repository->find($user->id);
@@ -43,12 +43,10 @@ class UserAuthorizationService
 
     public function assignRole(User $user, string $roleName): User
     {
-        $role = Role::query()
-            ->where('name', $roleName)
-            ->where('guard_name', $user->getDefaultGuardName())
-            ->firstOrFail();
+        $role = $this->roleRepository->findRole($roleName, $user->getDefaultGuardName());
+        $user->roles()->sync([$role->getKey()]);
 
-        return $this->repository->assignRole($user, $role);
+        return $this->repository->find($user->id);
     }
 
     public function syncPermissions(User $user, array $permissionNames): User
