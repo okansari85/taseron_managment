@@ -21,7 +21,16 @@ use App\Http\Controllers\LocationExpertController;
 use App\Models\City;
 use App\Models\District;
 
-Route::get('/user', function (Request $request) { return $request->user(); })->middleware('auth:sanctum');
+Route::get('/user', function (Request $request) {
+    $user = $request->user();
+
+    return response()->json([
+        'id' => $user->id,
+        'name' => $user->name,
+        'email' => $user->email,
+        'roles' => $user->getRoleNames(),
+    ]);
+})->middleware('auth:sanctum');
 Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
