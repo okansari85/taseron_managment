@@ -56,9 +56,13 @@ class UserAuthorizationController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
         ]);
 
-        $user->update(['name' => trim($data['name'])]);
+        $user->update([
+            'name' => trim($data['name']),
+            'email' => trim($data['email']),
+        ]);
 
         return response()->json($this->users->find($user->id));
     }
