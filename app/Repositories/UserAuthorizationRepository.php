@@ -11,20 +11,20 @@ class UserAuthorizationRepository
 {
     public function all(): Collection
     {
-        return User::query()->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes'])->orderBy('name')->get()
+        return User::query()->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor'])->orderBy('name')->get()
             ->each(fn (User $user) => $user->setRelation('permissions', $user->getAllPermissions()));
     }
 
     public function find(int $id): User
     {
-        $user = User::query()->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes'])->findOrFail($id);
+        $user = User::query()->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor'])->findOrFail($id);
         return $user->setRelation('permissions', $user->getAllPermissions());
     }
 
     public function assignRole(User $user, Role $role): User
     {
         $user->syncRoles([$role]);
-        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes']);
+        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor']);
         return $user->setRelation('permissions', $user->getAllPermissions());
     }
 
@@ -40,7 +40,7 @@ class UserAuthorizationRepository
         }
 
         $user->syncPermissions($permissions->all());
-        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes']);
+        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor']);
         return $user->setRelation('permissions', $user->getAllPermissions());
     }
 
@@ -74,7 +74,7 @@ class UserAuthorizationRepository
 
         $user->syncPermissions($directPermissions->all());
         $user->forbiddenPermissions()->sync($forbiddenPermissionIds);
-        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes']);
+        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor']);
 
         return $user->setRelation('permissions', $user->getAllPermissions());
     }
@@ -91,7 +91,7 @@ class UserAuthorizationRepository
         }
 
         $user->forbiddenPermissions()->sync($permissions->modelKeys());
-        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes']);
+        $user->load(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor']);
         return $user->setRelation('permissions', $user->getAllPermissions());
     }
 }
