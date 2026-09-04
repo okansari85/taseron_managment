@@ -42,6 +42,12 @@ class UserAuthorizationController extends Controller
                     fn ($query) => $query->where('guard_name', 'web')
                 ),
             ],
+            'contractor_id' => [
+                'nullable',
+                'integer',
+                'exists:contractors,id',
+                'required_if:role,contractor',
+            ],
         ]);
 
         return response()->json($this->users->create(
@@ -49,6 +55,7 @@ class UserAuthorizationController extends Controller
             $data['email'],
             $data['password'],
             $data['role'] ?? null,
+            isset($data['contractor_id']) ? (int) $data['contractor_id'] : null,
         ), 201);
     }
 
