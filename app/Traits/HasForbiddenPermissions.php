@@ -66,7 +66,7 @@ trait HasForbiddenPermissions
 
     public function forbidPermissionTo(string|array|Collection $permissions = []): static
     {
-        $permissions = $this->collectPermissions($permissions);
+        $permissions = $this->collectForbiddenPermissions($permissions);
         $model = $this->getModel();
 
         if ($model->exists) {
@@ -88,7 +88,7 @@ trait HasForbiddenPermissions
 
     public function unforbidPermissionTo(string|array|Collection $permissions): static
     {
-        $this->forbiddenPermissions()->detach(array_keys($this->collectPermissions($permissions)));
+        $this->forbiddenPermissions()->detach(array_keys($this->collectForbiddenPermissions($permissions)));
         $this->load('forbiddenPermissions');
         return $this;
     }
@@ -138,7 +138,7 @@ trait HasForbiddenPermissions
         return $this->forbiddenPermissions->pluck('name');
     }
 
-    private function collectPermissions(string|array|Collection $permissions): array
+    private function collectForbiddenPermissions(string|array|Collection $permissions): array
     {
         return collect($permissions)->flatten()->reduce(function (array $array, $permission): array {
             if (empty($permission)) {
