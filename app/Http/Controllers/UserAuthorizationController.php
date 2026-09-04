@@ -52,6 +52,17 @@ class UserAuthorizationController extends Controller
         ), 201);
     }
 
+    public function updateProfile(Request $request, User $user): JsonResponse
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+        ]);
+
+        $user->update(['name' => trim($data['name'])]);
+
+        return response()->json($this->users->find($user->id));
+    }
+
     public function destroy(User $user): JsonResponse
     {
         $this->users->delete($user);
