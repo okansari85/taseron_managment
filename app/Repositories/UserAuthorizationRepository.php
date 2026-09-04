@@ -69,7 +69,8 @@ class UserAuthorizationRepository
 
         $forbiddenPermissionIds = $rolePermissions
             ->filter(fn (Permission $permission): bool => ! isset($selected[$permission->name]))
-            ->modelKeys();
+            ->pluck('id')
+            ->all();
 
         $user->syncPermissions($directPermissions->all());
         $user->forbiddenPermissions()->sync($forbiddenPermissionIds);
