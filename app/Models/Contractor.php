@@ -31,4 +31,9 @@ class Contractor extends Model
     {
         return $this->hasMany(OrganizationContractor::class);
     }
+
+    public function users(): HasMany
+    {
+        return $this->hasMany(User::class);
+    }
 }
