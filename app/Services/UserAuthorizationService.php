@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\User;
 use App\Repositories\RolePermissionRepository;
 use App\Repositories\UserAuthorizationRepository;
-use Spatie\Permission\Models\Role;
 
 class UserAuthorizationService
 {
@@ -25,12 +24,13 @@ class UserAuthorizationService
         return $this->repository->find($id);
     }
 
-    public function create(string $name, string $email, string $password, ?string $roleName = null): User
+    public function create(string $name, string $email, string $password, ?string $roleName = null, ?int $contractorId = null): User
     {
         $user = User::query()->create([
             'name' => $name,
             'email' => $email,
             'password' => $password,
+            'contractor_id' => $contractorId,
         ]);
 
         if ($roleName !== null && $roleName !== '') {
