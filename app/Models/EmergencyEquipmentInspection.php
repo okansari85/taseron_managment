@@ -52,4 +52,9 @@ class EmergencyEquipmentInspection extends Model
     {
         return $this->hasMany(EmergencyEquipmentInspectionItem::class, 'inspection_id');
     }
+
+    public function photos(): HasMany
+    {
+        return $this->hasMany(EmergencyEquipmentInspectionPhoto::class, 'inspection_id')->orderBy('order_no');
+    }
 }

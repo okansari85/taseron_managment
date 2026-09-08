@@ -8,15 +8,19 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class EmergencyEquipmentInspectionItem extends Model
+class FieldFinding extends Model
 {
     use HasFactory;
 
     protected $fillable = [
         'tenant_id',
-        'inspection_id',
-        'checklist_item_id',
-        'note',
+        'location_business_entity_id',
+        'category',
+        'location_note',
+        'description',
+        'severity',
+        'status',
+        'reported_by_user_id',
     ];
 
     protected static function booted(): void
@@ -31,18 +35,18 @@ class EmergencyEquipmentInspectionItem extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    public function inspection(): BelongsTo
+    public function locationBusinessEntity(): BelongsTo
     {
-        return $this->belongsTo(EmergencyEquipmentInspection::class, 'inspection_id');
+        return $this->belongsTo(LocationBusinessEntity::class);
     }
 
-    public function checklistItem(): BelongsTo
+    public function reportedByUser(): BelongsTo
     {
-        return $this->belongsTo(EmergencyEquipmentTypeChecklistItem::class, 'checklist_item_id');
+        return $this->belongsTo(User::class, 'reported_by_user_id');
     }
 
     public function photos(): HasMany
     {
-        return $this->hasMany(EmergencyEquipmentInspectionPhoto::class, 'inspection_item_id')->orderBy('order_no');
+        return $this->hasMany(FieldFindingPhoto::class)->orderBy('order_no');
     }
 }

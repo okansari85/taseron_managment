@@ -34,6 +34,7 @@ class LocationBusinessEntityService
         $businessEntities->each(function (BusinessEntity $businessEntity): void {
             if ($businessEntity->pivot instanceof Pivot) {
                 $businessEntity->pivot->load(['brands', 'operationalRegion', 'photos']);
+                $businessEntity->pivot->loadCount(['emergencyEquipment as equipment_count' => fn ($query) => $query->where('is_active', true)]);
             }
         });
 

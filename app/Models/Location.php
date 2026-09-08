@@ -28,7 +28,7 @@ class Location extends Model
     public function operationalRegions(): HasMany { return $this->hasMany(OperationalRegion::class, 'location_id'); }
     public function businessEntities(): BelongsToMany
     {
-        return $this->belongsToMany(BusinessEntity::class, 'location_business_entities', 'location_id', 'business_entity_id')->using(LocationBusinessEntity::class)->withPivot(['id', 'operational_region_id', 'activity', 'sub_activity', 'nace_code', 'hazard_class', 'sgk_workplace_number', 'address', 'is_active'])->withTimestamps();
+        return $this->belongsToMany(BusinessEntity::class, 'location_business_entities', 'location_id', 'business_entity_id')->using(LocationBusinessEntity::class)->withPivot(['id', 'code', 'floor', 'operational_region_id', 'activity', 'sub_activity', 'nace_code', 'hazard_class', 'sgk_workplace_number', 'address', 'is_active'])->withTimestamps();
     }
     public function experts(): HasManyThrough
     {

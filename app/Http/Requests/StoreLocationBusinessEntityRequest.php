@@ -15,6 +15,8 @@ class StoreLocationBusinessEntityRequest extends FormRequest
     {
         return [
             'business_entity_id' => ['required', 'integer', 'exists:business_entities,id'],
+            'code' => ['nullable', 'string', 'max:50'],
+            'floor' => ['nullable', 'string', 'max:100'],
             'brand_ids' => ['sometimes', 'array'],
             'brand_ids.*' => ['integer', 'exists:brands,id'],
             'operational_region_id' => ['nullable', 'integer', 'exists:operational_regions,id'],

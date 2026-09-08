@@ -4,7 +4,7 @@ namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-class StoreEmergencyEquipmentInspectionRequest extends FormRequest
+class UpdateEmergencyEquipmentInspectionRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -15,13 +15,15 @@ class StoreEmergencyEquipmentInspectionRequest extends FormRequest
     {
         return [
             'items' => ['nullable', 'array'],
+            'items.*.id' => ['nullable', 'integer', 'exists:emergency_equipment_inspection_items,id'],
             'items.*.checklist_item_id' => ['required', 'integer', 'exists:emergency_equipment_type_checklist_items,id'],
             'items.*.note' => ['nullable', 'string', 'max:500'],
             'items.*.photo' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
+            'items.*.remove_photo' => ['nullable', 'boolean'],
             'notes' => ['nullable', 'string', 'max:2000'],
             'inspected_at' => ['nullable', 'date'],
-            'inspected_by_user_id' => ['nullable', 'integer', 'exists:users,id'],
-            'inspected_by_name' => ['nullable', 'string', 'max:255'],
+            'remove_photo_ids' => ['nullable', 'array'],
+            'remove_photo_ids.*' => ['integer', 'exists:emergency_equipment_inspection_photos,id'],
             'photos' => ['sometimes', 'array'],
             'photos.*' => ['file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
         ];
@@ -37,10 +39,6 @@ class StoreEmergencyEquipmentInspectionRequest extends FormRequest
             'notes.string' => 'Notlar geçerli bir metin olmalıdır.',
             'notes.max' => 'Notlar en fazla 2000 karakter olabilir.',
             'inspected_at.date' => 'Kontrol tarihi geçerli bir tarih olmalıdır.',
-            'inspected_by_user_id.integer' => 'Denetçi geçerli olmalıdır.',
-            'inspected_by_user_id.exists' => 'Seçilen denetçi bulunamadı.',
-            'inspected_by_name.string' => 'Denetçi adı geçerli bir metin olmalıdır.',
-            'inspected_by_name.max' => 'Denetçi adı en fazla 255 karakter olabilir.',
         ];
     }
 }

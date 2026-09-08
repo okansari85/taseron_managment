@@ -44,7 +44,42 @@ class LocationService
             $locations = $locations->where('id', $this->workspaceContext->selectedLocationId())->values();
         }
 
+        $this->attachCounts($locations);
+
         return $locations;
+    }
+
+    // İSG masaüstü Lokasyon Seç ekranındaki "X şube / Y ekipman" rozetleri için —
+    // her Location'a şube (company tipi LBE) ve aktif ekipman sayısını iki toplu
+    // sorguyla ekler (N+1'den kaçınmak için tek tek ilişki saymak yerine).
+    private function attachCounts(Collection $locations): void
+    {
+        if ($locations->isEmpty()) {
+            return;
+        }
+
+        $locationIds = $locations->pluck('id');
+
+        $branchCounts = DB::table('location_business_entities')
+            ->join('business_entities', 'business_entities.id', '=', 'location_business_entities.business_entity_id')
+            ->whereIn('location_business_entities.location_id', $locationIds)
+            ->where('business_entities.type', 'company')
+            ->select('location_business_entities.location_id', DB::raw('count(*) as aggregate'))
+            ->groupBy('location_business_entities.location_id')
+            ->pluck('aggregate', 'location_id');
+
+        $equipmentCounts = DB::table('location_emergency_equipment')
+            ->join('location_business_entities', 'location_business_entities.id', '=', 'location_emergency_equipment.location_business_entity_id')
+            ->whereIn('location_business_entities.location_id', $locationIds)
+            ->where('location_emergency_equipment.is_active', true)
+            ->select('location_business_entities.location_id', DB::raw('count(*) as aggregate'))
+            ->groupBy('location_business_entities.location_id')
+            ->pluck('aggregate', 'location_id');
+
+        $locations->each(function (Location $location) use ($branchCounts, $equipmentCounts): void {
+            $location->setAttribute('branch_count', (int) ($branchCounts[$location->id] ?? 0));
+            $location->setAttribute('equipment_count', (int) ($equipmentCounts[$location->id] ?? 0));
+        });
     }
 
     // "Yeni Şube" akışındaki "mevcut bina" seçici için: aktif context'ten

@@ -40,6 +40,8 @@ class LocationBusinessEntityController extends Controller
             $location,
             $businessEntity,
             [
+                'code' => $request->validated('code'),
+                'floor' => $request->validated('floor'),
                 'brand_ids' => $request->validated('brand_ids', []),
                 'operational_region_id' => $request->validated('operational_region_id'),
                 'activity' => $request->validated('activity'),

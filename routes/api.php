@@ -30,6 +30,7 @@ use App\Http\Controllers\EmergencyEquipmentTypeTipOptionController;
 use App\Http\Controllers\EmergencyEquipmentTypeChecklistItemController;
 use App\Http\Controllers\EmergencyEquipmentTypeController;
 use App\Http\Controllers\LocationEmergencyEquipmentController;
+use App\Http\Controllers\FieldFindingController;
 use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
 use App\Models\District;
@@ -93,7 +94,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('brands/{brand}/locations/{location}', [BrandLocationController::class, 'detach']);
 
             Route::get('locations/{location}/organization-contractors', [LocationController::class, 'organizationContractors']);
-            Route::get('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'index']);
             Route::post('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'store']);
             Route::put('locations/{location}/business-entities/{locationBusinessEntity}', [LocationBusinessEntityController::class, 'update']);
             Route::delete('locations/{location}/business-entities/{locationBusinessEntity}', [LocationBusinessEntityController::class, 'destroy']);
@@ -123,8 +123,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Faaliyetler / evrak tanımlamaları — hem süper admin hem de gerçek
         // tenant (grup yöneticisi) rolü kendi verilerini yönetebilsin diye
-        // super-admin'e özel gruptan AYRI tutuldu.
-        Route::middleware('web-role:super-admin,tenant')->group(function () {
+        // super-admin'e özel gruptan AYRI tutuldu. 'isg' burada eklendi çünkü
+        // Yangın Denetimi akışı (mobil-uyumlu isg-portal) lokasyon/şube/ekipman/
+        // denetim okuma+yazma erişimine ihtiyaç duyuyor — isg-portal UI'ı zaten
+        // sadece kendi denetim ekranlarını gösteriyor, admin ekranlarına (ör.
+        // ekipman türü tanımlama) bağlantı vermiyor.
+        Route::middleware('web-role:super-admin,tenant,isg')->group(function () {
             // Lokasyonlar listesi + il/ilçe dropdown'ları — tenant (grup yöneticisi)
             // de kendi lokasyonlarını görebilsin/yönetebilsin diye süper admin'e
             // özel gruptan taşındı (aynı sebep/desen: organizations, contractors).
@@ -135,6 +139,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('locations/multi-branch-buildings', [LocationController::class, 'multiBranchBuildings']);
             Route::apiResource('locations', LocationController::class);
             Route::get('location-business-entities', [LocationBusinessEntityController::class, 'forTenant']);
+            // "Şube Seç" ekranı (Yangın Denetimi akışı) için — CRUD admin
+            // grubunda kalıyor, sadece bu okuma isg'ye de açıldı.
+            Route::get('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'index']);
             // "Yeni Şube" ekranındaki Grup/Firma/Marka seçimi için — grup ve
             // şirket CRUD'u süper admin'de kalıyor, sadece bu salt-okuma liste
             // tenant rolüne açıldı (locations ile aynı sebep/desen).
@@ -165,6 +172,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
             Route::get('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'index']);
             Route::post('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'store']);
+            Route::put('emergency-equipment-inspections/{inspection}', [EmergencyEquipmentInspectionController::class, 'update']);
+
+            Route::get('location-business-entities/{locationBusinessEntity}/field-findings', [FieldFindingController::class, 'index']);
+            Route::post('location-business-entities/{locationBusinessEntity}/field-findings', [FieldFindingController::class, 'store']);
+            Route::put('field-findings/{fieldFinding}', [FieldFindingController::class, 'update']);
+            Route::delete('field-findings/{fieldFinding}', [FieldFindingController::class, 'destroy']);
 
             Route::get('fire-safety/dashboard', [FireSafetyDashboardController::class, 'show']);
 

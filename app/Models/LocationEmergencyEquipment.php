@@ -24,10 +24,17 @@ class LocationEmergencyEquipment extends Model
         'install_date',
         'status',
         'is_active',
+        'last_fill_date',
+        'last_annual_maintenance_date',
+        'next_annual_maintenance_date',
+        'service_company',
     ];
 
     protected $casts = [
         'install_date' => 'date',
+        'last_fill_date' => 'date',
+        'last_annual_maintenance_date' => 'date',
+        'next_annual_maintenance_date' => 'date',
         'is_active' => 'boolean',
     ];
 
