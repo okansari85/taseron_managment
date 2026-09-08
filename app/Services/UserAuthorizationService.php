@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Domain\Tenancy\TenantContext;
 use App\Models\User;
 use App\Repositories\RolePermissionRepository;
 use App\Repositories\UserAuthorizationRepository;
@@ -11,12 +12,14 @@ class UserAuthorizationService
     public function __construct(
         private UserAuthorizationRepository $repository,
         private RolePermissionRepository $roleRepository,
+        private UserScopeService $scopeService,
+        private TenantContext $tenantContext,
     ) {
     }
 
     public function all()
     {
-        return $this->repository->all();
+        return $this->repository->all($this->tenantContext->id());
     }
 
     public function find(int $id): User
@@ -24,19 +27,22 @@ class UserAuthorizationService
         return $this->repository->find($id);
     }
 
-    public function create(string $name, string $email, string $password, ?string $roleName = null, ?int $contractorId = null): User
+    public function create(string $name, string $email, string $password, ?string $roleName = null, ?int $contractorId = null, bool $isExpert = false): User
     {
         $user = User::query()->create([
             'name' => $name,
             'email' => $email,
             'password' => $password,
             'contractor_id' => $contractorId,
+            'is_expert' => $isExpert,
         ]);
 
         if ($roleName !== null && $roleName !== '') {
             $role = $this->roleRepository->findRole($roleName, $user->getDefaultGuardName());
             $user->roles()->sync([$role->getKey()]);
         }
+
+        $this->scopeService->attach($user, 'tenant', $this->tenantContext->id());
 
         return $this->repository->find($user->id);
     }

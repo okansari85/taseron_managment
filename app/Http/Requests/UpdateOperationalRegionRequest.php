@@ -18,7 +18,7 @@ class UpdateOperationalRegionRequest extends FormRequest
             'name' => ['sometimes', 'string', 'max:255'],
             'type' => [
                 'sometimes',
-                Rule::in(['facility', 'warehouse', 'business', 'depot', 'office', 'store']),
+                Rule::in(['facility', 'warehouse', 'business', 'depot', 'office', 'store', 'branch']),
             ],
             'is_active' => ['sometimes', 'boolean'],
         ];

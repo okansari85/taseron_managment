@@ -40,6 +40,7 @@ class TenantController extends Controller
     public function show(Tenant $tenant): JsonResponse
     {
         $tenant = $this->service->find($tenant->id);
+        $tenant->load('featuredBrand');
         $rootOrganization = $this->organizationService
             ->getRootByTenantId($tenant->id);
 
@@ -59,6 +60,7 @@ class TenantController extends Controller
             $tenant,
             $request->validated()
         );
+        $tenant->load('featuredBrand');
 
         return response()->json([
             'message' => 'Tenant updated successfully.',

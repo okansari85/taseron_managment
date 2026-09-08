@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Location;
+use App\Models\OperationalRegion;
 use App\Models\Organization;
 use App\Models\Tenant;
 use App\Models\User;
@@ -13,7 +14,7 @@ use Illuminate\Validation\ValidationException;
 
 class UserScopeService
 {
-    private const TYPES = ['tenant', 'organization', 'location'];
+    private const TYPES = ['tenant', 'organization', 'location', 'operational_region'];
 
     public function __construct(
         private UserScopeRepository $repository,
@@ -73,6 +74,7 @@ class UserScopeService
             'tenant' => Tenant::query()->whereKey($id)->exists(),
             'organization' => Organization::query()->whereKey($id)->exists(),
             'location' => Location::query()->whereKey($id)->exists(),
+            'operational_region' => OperationalRegion::query()->whereKey($id)->exists(),
         };
 
         if (!$exists) {

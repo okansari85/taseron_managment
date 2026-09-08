@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
-use App\Models\Location;
+use App\Models\LocationBusinessEntity;
 use App\Models\User;
 use App\Repositories\LocationExpertRepository;
 use Illuminate\Database\Eloquent\Collection;
@@ -17,31 +17,39 @@ class LocationExpertService
     ) {
     }
 
-    public function all(Location $location): Collection
+    public function all(LocationBusinessEntity $locationBusinessEntity): Collection
     {
-        $this->assertLocationTenant($location);
-        return $this->repository->all($location);
+        $this->assertEntityTenant($locationBusinessEntity);
+        return $this->repository->all($locationBusinessEntity);
     }
 
-    public function attach(Location $location, User $user): Collection
+    public function attach(LocationBusinessEntity $locationBusinessEntity, User $user): Collection
     {
-        $this->assertLocationTenant($location);
-        $this->repository->attach($location, $user);
-        return $this->repository->all($location);
+        $this->assertEntityTenant($locationBusinessEntity);
+        $this->repository->attach($locationBusinessEntity, $user);
+        return $this->repository->all($locationBusinessEntity);
     }
 
-    public function detach(Location $location, User $user): Collection
+    public function detach(LocationBusinessEntity $locationBusinessEntity, User $user): Collection
     {
-        $this->assertLocationTenant($location);
-        $this->repository->detach($location, $user);
-        return $this->repository->all($location);
+        $this->assertEntityTenant($locationBusinessEntity);
+        $this->repository->detach($locationBusinessEntity, $user);
+        return $this->repository->all($locationBusinessEntity);
     }
 
-    private function assertLocationTenant(Location $location): void
+    public function forUser(User $user): Collection
     {
-        if ($location->tenant_id !== $this->tenantContext->id()) {
+        return $this->repository->forUser($user, $this->tenantContext->id());
+    }
+
+    private function assertEntityTenant(LocationBusinessEntity $locationBusinessEntity): void
+    {
+        $tenantId = $locationBusinessEntity->location?->tenant_id
+            ?? $locationBusinessEntity->location()->value('tenant_id');
+
+        if ($tenantId !== $this->tenantContext->id()) {
             throw ValidationException::withMessages([
-                'location' => 'Lokasyon mevcut tenant kapsamında değil.',
+                'location_business_entity' => 'Bu kayıt mevcut tenant kapsamında değil.',
             ]);
         }
     }

@@ -10,11 +10,11 @@ class LocationExpert extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['location_id', 'user_id'];
+    protected $fillable = ['location_business_entity_id', 'user_id'];
 
-    public function location(): BelongsTo
+    public function locationBusinessEntity(): BelongsTo
     {
-        return $this->belongsTo(Location::class);
+        return $this->belongsTo(LocationBusinessEntity::class);
     }
 
     public function user(): BelongsTo

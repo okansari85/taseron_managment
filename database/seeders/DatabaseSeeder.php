@@ -15,6 +15,7 @@ class DatabaseSeeder extends Seeder
             RolePermissionSeeder::class,
             SuperAdminSeeder::class,
             TurkeyLocationReferenceSeeder::class,
+            NaceHazardClassSeeder::class,
         ]);
     }
 }

@@ -6,12 +6,14 @@ use App\Http\Requests\StoreContractorRequest;
 use App\Http\Requests\UpdateContractorRequest;
 use App\Models\Contractor;
 use App\Services\ContractorService;
+use App\Services\OrganizationContractorService;
 use Illuminate\Http\JsonResponse;
 
 class ContractorController extends Controller
 {
     public function __construct(
-        private ContractorService $service
+        private ContractorService $service,
+        private OrganizationContractorService $organizationContractorService
     ) {
     }
 
@@ -54,6 +56,14 @@ class ContractorController extends Controller
 
         return response()->json(
             $contractor->load('businessEntity')
+        );
+    }
+
+    public function locations(
+        Contractor $contractor
+    ): JsonResponse {
+        return response()->json(
+            $this->organizationContractorService->locationsForContractor($contractor)
         );
     }
 

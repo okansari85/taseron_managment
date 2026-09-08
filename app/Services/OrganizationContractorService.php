@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Contractor;
 use App\Models\Location;
+use App\Models\LocationBusinessEntity;
 use App\Models\Organization;
 use App\Models\OrganizationContractor;
 use Illuminate\Database\Eloquent\Collection;
@@ -62,6 +63,80 @@ class OrganizationContractorService
                 $contractor->setAttribute('tenant_id', $contractor->businessEntity?->tenant_id);
                 $contractor->setAttribute('contractor_type', 'permanent');
             });
+    }
+
+    /**
+     * Bir taşeronun bağlı olduğu organizasyonların (holding/grup) tüm alt ağacındaki
+     * gerçek lokasyon/şube (LocationBusinessEntity) kayıtlarını döner. Mock veri değildir —
+     * organization_contractors + organization_locations + location_business_entities
+     * tablolarından gerçek zamanlı hesaplanır.
+     */
+    public function locationsForContractor(Contractor $contractor): Collection
+    {
+        $this->assertTenantContractor($contractor);
+        $tenantId = $this->tenantContext->id();
+
+        $rootOrganizationIds = OrganizationContractor::query()
+            ->where('contractor_id', $contractor->id)
+            ->pluck('organization_id')
+            ->all();
+
+        if (empty($rootOrganizationIds)) {
+            return new Collection();
+        }
+
+        $allOrganizationIds = $this->collectDescendantOrganizationIds($rootOrganizationIds, $tenantId);
+
+        $locationIds = DB::table('organization_locations')
+            ->whereIn('organization_id', $allOrganizationIds)
+            ->pluck('location_id')
+            ->unique()
+            ->values();
+
+        if ($locationIds->isEmpty()) {
+            return new Collection();
+        }
+
+        return LocationBusinessEntity::query()
+            ->whereIn('location_id', $locationIds)
+            ->whereHas('location', fn ($query) => $query->where('tenant_id', $tenantId))
+            ->with([
+                'location:id,name,address,city_id,district_id,is_active',
+                'location.city:id,name',
+                'location.district:id,name',
+                'businessEntity:id,name,type',
+                'brands:id,name',
+                'operationalRegion:id,name,type',
+            ])
+            ->get();
+    }
+
+    /**
+     * @param array<int, int> $rootIds
+     * @return array<int, int>
+     */
+    private function collectDescendantOrganizationIds(array $rootIds, int $tenantId): array
+    {
+        $all = collect($rootIds)->map(fn ($id) => (int) $id)->unique()->values();
+        $frontier = $all->all();
+
+        while (! empty($frontier)) {
+            $children = Organization::query()
+                ->where('tenant_id', $tenantId)
+                ->whereIn('parent_id', $frontier)
+                ->pluck('id')
+                ->diff($all)
+                ->values();
+
+            if ($children->isEmpty()) {
+                break;
+            }
+
+            $all = $all->merge($children)->unique()->values();
+            $frontier = $children->all();
+        }
+
+        return $all->all();
     }
 
     public function attach(Organization $organization, Contractor $contractor): OrganizationContractor

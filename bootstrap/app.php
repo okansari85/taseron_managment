@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'tenant' => \App\Http\Middleware\ResolveTenant::class,
+            'workspace-context' => \App\Http\Middleware\ResolveWorkspaceContext::class,
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'web-role' => \App\Http\Middleware\EnsureWebRole::class,
         ]);

@@ -18,7 +18,7 @@ class StoreOperationalRegionRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'type' => [
                 'required',
-                Rule::in(['facility', 'warehouse', 'business', 'depot', 'office', 'store']),
+                Rule::in(['facility', 'warehouse', 'business', 'depot', 'office', 'store', 'branch']),
             ],
             'is_active' => ['sometimes', 'boolean'],
         ];

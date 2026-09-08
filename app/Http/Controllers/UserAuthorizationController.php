@@ -48,6 +48,7 @@ class UserAuthorizationController extends Controller
                 'exists:contractors,id',
                 'required_if:role,contractor',
             ],
+            'is_expert' => ['nullable', 'boolean'],
         ]);
 
         return response()->json($this->users->create(
@@ -56,6 +57,7 @@ class UserAuthorizationController extends Controller
             $data['password'],
             $data['role'] ?? null,
             isset($data['contractor_id']) ? (int) $data['contractor_id'] : null,
+            (bool) ($data['is_expert'] ?? false),
         ), 201);
     }
 
@@ -167,7 +169,7 @@ class UserAuthorizationController extends Controller
     {
         $data = $request->validate([
             'scopes' => ['required', 'array'],
-            'scopes.*.scope_type' => ['required', Rule::in(['tenant', 'organization', 'location'])],
+            'scopes.*.scope_type' => ['required', Rule::in(['tenant', 'organization', 'location', 'operational_region'])],
             'scopes.*.scope_id' => ['required', 'integer', 'min:1'],
         ]);
 
@@ -177,7 +179,7 @@ class UserAuthorizationController extends Controller
     public function attachScope(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
-            'scope_type' => ['required', Rule::in(['tenant', 'organization', 'location'])],
+            'scope_type' => ['required', Rule::in(['tenant', 'organization', 'location', 'operational_region'])],
             'scope_id' => ['required', 'integer', 'min:1'],
         ]);
 
@@ -187,7 +189,7 @@ class UserAuthorizationController extends Controller
     public function detachScope(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
-            'scope_type' => ['required', Rule::in(['tenant', 'organization', 'location'])],
+            'scope_type' => ['required', Rule::in(['tenant', 'organization', 'location', 'operational_region'])],
             'scope_id' => ['required', 'integer', 'min:1'],
         ]);
 

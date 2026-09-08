@@ -8,9 +8,10 @@ use Illuminate\Database\Eloquent\Collection;
 
 class ContractorRepository implements ContractorRepositoryInterface
 {
-    public function all(): Collection
+    public function all(int $tenantId): Collection
     {
         return Contractor::query()
+            ->whereHas('businessEntity', fn ($query) => $query->where('tenant_id', $tenantId))
             ->with('businessEntity')
             ->orderByDesc('id')
             ->get();

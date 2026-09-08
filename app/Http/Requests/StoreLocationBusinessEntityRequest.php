@@ -23,6 +23,10 @@ class StoreLocationBusinessEntityRequest extends FormRequest
             'nace_code' => ['nullable', 'string', 'max:50'],
             'hazard_class' => ['required', 'string', 'max:100'],
             'sgk_workplace_number' => ['nullable', 'string', 'max:50'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'is_active' => ['sometimes', 'boolean'],
+            'photos' => ['sometimes', 'array'],
+            'photos.*' => ['file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
         ];
     }
 
@@ -48,6 +52,11 @@ class StoreLocationBusinessEntityRequest extends FormRequest
             'hazard_class.max' => 'Tehlike sınıfı en fazla 100 karakter olabilir.',
             'sgk_workplace_number.string' => 'SGK işyeri numarası geçerli bir metin olmalıdır.',
             'sgk_workplace_number.max' => 'SGK işyeri numarası en fazla 50 karakter olabilir.',
+            'photos.array' => 'Şube fotoğrafları liste olarak gönderilmelidir.',
+            'photos.*.file' => 'Şube fotoğrafı geçerli bir dosya olmalıdır.',
+            'photos.*.image' => 'Şube fotoğrafı bir görsel dosyası olmalıdır.',
+            'photos.*.mimes' => 'Şube fotoğrafı jpg, jpeg, png veya webp formatında olmalıdır.',
+            'photos.*.max' => 'Şube fotoğrafı en fazla 4 MB olabilir.',
         ];
     }
 }

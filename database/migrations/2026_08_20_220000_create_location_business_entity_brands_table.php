@@ -15,8 +15,9 @@ return new class extends Migration
         Schema::create('location_business_entity_brands', function (Blueprint $table) {
             $table->id();
 
-            $table->foreignId('location_business_entity_id')
-                ->constrained('location_business_entities')
+            $table->foreignId('location_business_entity_id');
+            $table->foreign('location_business_entity_id', 'lbe_brands_business_entity_fk')
+                ->references('id')->on('location_business_entities')
                 ->cascadeOnDelete();
 
             $table->foreignId('brand_id')

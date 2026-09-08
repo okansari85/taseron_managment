@@ -20,6 +20,11 @@ class AuthController extends Controller
         }
 
         $user = Auth::user();
+        $user->loadMissing('contractor.businessEntity');
+
+        // bkz. routes/api.php /user endpoint'indeki aynı yorum - tenant_id
+        // taşeron olmayan personel rolleri için UserScope('tenant')'tan gelir.
+        $scopeTenantId = $user->scopes()->where('scope_type', 'tenant')->value('scope_id');
 
         $token = $user->createToken('api')->plainTextToken;
 
@@ -31,6 +36,14 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'roles' => $user->getRoleNames(),
+                'contractor_id' => $user->contractor_id,
+                'contractor' => $user->contractor ? [
+                    'id' => $user->contractor->id,
+                    'name' => $user->contractor->businessEntity?->name,
+                    'contractor_type' => $user->contractor->contractor_type,
+                    'tenant_id' => $user->contractor->businessEntity?->tenant_id,
+                ] : null,
+                'tenant_id' => $scopeTenantId ? (int) $scopeTenantId : null,
             ],
         ]);
     }

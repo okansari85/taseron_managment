@@ -58,6 +58,8 @@ class BusinessEntity extends Model
                 'nace_code',
                 'hazard_class',
                 'sgk_workplace_number',
+                'address',
+                'is_active',
             ])
             ->withTimestamps();
     }

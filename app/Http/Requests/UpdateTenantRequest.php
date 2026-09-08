@@ -28,6 +28,14 @@ class UpdateTenantRequest extends FormRequest
             ],
             'status' => ['sometimes', 'boolean'],
             'logo' => ['sometimes', 'nullable', 'image', 'mimes:jpg,jpeg,png,webp,svg', 'max:2048'],
+            'featured_brand_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::exists('brands', 'id')->where('tenant_id', $tenant?->id),
+            ],
+            'operational_area_enabled' => ['sometimes', 'boolean'],
+            'location_view_mode' => ['sometimes', Rule::in(['location', 'business_entity'])],
         ];
     }
 }

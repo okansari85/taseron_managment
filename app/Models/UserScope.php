@@ -35,4 +35,9 @@ class UserScope extends Model
     {
         return $this->scope_type === 'location';
     }
+
+    public function isOperationalRegion(): bool
+    {
+        return $this->scope_type === 'operational_region';
+    }
 }

@@ -18,24 +18,57 @@ class LocationRepository implements LocationRepositoryInterface
 
     public function all(): Collection
     {
-        return Location::query()->with(self::RELATIONS)->orderBy('name')->get();
+        $locations = Location::query()->with(self::RELATIONS)->orderBy('name')->get();
+        $this->loadPivotBrands($locations);
+
+        return $locations;
     }
 
     public function find(int $id): Location
     {
-        return Location::query()->with(self::RELATIONS)->findOrFail($id);
+        $location = Location::query()->with(self::RELATIONS)->findOrFail($id);
+        $this->loadPivotBrands(Collection::make([$location]));
+
+        return $location;
     }
 
     public function create(array $data): Location
     {
-        return Location::query()->create($data)->load(self::RELATIONS);
+        $location = Location::query()->create($data)->load(self::RELATIONS);
+        $this->loadPivotBrands(Collection::make([$location]));
+
+        return $location;
     }
 
     public function update(Location $location, array $data): Location
     {
         $location->update($data);
-        return $location->refresh()->load(self::RELATIONS);
+        $location = $location->refresh()->load(self::RELATIONS);
+        $this->loadPivotBrands(Collection::make([$location]));
+
+        return $location;
     }
 
     public function delete(Location $location): void { $location->delete(); }
+
+    /**
+     * Her lokasyonun businessEntities listesindeki pivot (LocationBusinessEntity) satırına
+     * o şubeye ÖZEL atanmış markaları ('brands' many-to-many, location_business_entity_brands
+     * üzerinden) yükler. 'businessEntities.company.brands' (yukarıdaki RELATIONS) şirketin
+     * TÜM markalarını taşır — burada eklenen ise sadece o spesifik şube kaydına atanmış
+     * tekil/çoklu markayı taşır, frontend'in lokasyon listesinde doğru marka rozetini
+     * gösterebilmesi için gereken asıl veri budur.
+     */
+    private function loadPivotBrands(Collection $locations): void
+    {
+        $pivots = $locations->flatMap(
+            fn (Location $location) => $location->businessEntities->map(fn ($entity) => $entity->pivot)
+        )->filter();
+
+        if ($pivots->isEmpty()) {
+            return;
+        }
+
+        Collection::make($pivots->all())->loadMissing('brands:id,name,logo_path');
+    }
 }

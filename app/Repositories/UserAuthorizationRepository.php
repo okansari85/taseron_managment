@@ -2,6 +2,8 @@
 
 namespace App\Repositories;
 
+use App\Models\Location;
+use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
 use Spatie\Permission\Models\Permission;
@@ -9,9 +11,30 @@ use Spatie\Permission\Models\Role;
 
 class UserAuthorizationRepository
 {
-    public function all(): Collection
+    // A user is listed under a tenant if they are a global super-admin, or if
+    // one of their scopes resolves to this tenant (a direct tenant scope, an
+    // organization scope belonging to this tenant, or a location scope
+    // belonging to this tenant). This keeps users created under one tenant
+    // from leaking into another tenant's user list.
+    public function all(int $tenantId): Collection
     {
-        return User::query()->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor'])->orderBy('name')->get()
+        return User::query()
+            ->with(['roles', 'permissions', 'forbiddenPermissions', 'scopes', 'contractor'])
+            ->where(function ($query) use ($tenantId) {
+                $query->whereHas('roles', fn ($role) => $role->where('name', 'super-admin'))
+                    ->orWhereHas('scopes', function ($scope) use ($tenantId) {
+                        $scope->where(function ($match) use ($tenantId) {
+                            $match->where('scope_type', 'tenant')->where('scope_id', $tenantId);
+                        })->orWhere(function ($match) use ($tenantId) {
+                            $match->where('scope_type', 'organization')
+                                ->whereIn('scope_id', Organization::query()->where('tenant_id', $tenantId)->select('id'));
+                        })->orWhere(function ($match) use ($tenantId) {
+                            $match->where('scope_type', 'location')
+                                ->whereIn('scope_id', Location::query()->where('tenant_id', $tenantId)->select('id'));
+                        });
+                    });
+            })
+            ->orderBy('name')->get()
             ->each(fn (User $user) => $user->setRelation('permissions', $user->getAllPermissions()));
     }
 

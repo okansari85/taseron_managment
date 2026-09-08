@@ -3,7 +3,10 @@
 namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
+use App\Domain\Tenancy\WorkspaceContext;
 use App\Models\Location;
+use App\Models\Organization;
+use App\Models\UserScope;
 use App\Repositories\Contracts\LocationRepositoryInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
@@ -17,10 +20,45 @@ class LocationService
     public function __construct(
         private LocationRepositoryInterface $repository,
         private TenantContext $tenantContext,
-        private ImageService $imageService
+        private WorkspaceContext $workspaceContext,
+        private ImageService $imageService,
+        private OrganizationService $organizationService,
+        private OrganizationLocationService $organizationLocationService,
     ) {}
 
-    public function all(): Collection { return $this->repository->all(); }
+    // Header'daki aktif Organizasyon/Lokasyon seçimine göre listeyi daraltır.
+    // WorkspaceContext boşsa (context header'ı gönderilmediyse — süper admin
+    // dahil çoğu çağrı) davranış tamamen eskisiyle aynıdır. Sadece bu liste
+    // metodu etkilenir; find/update/delete ve diğer servislerin Location'a
+    // iç referansları bundan etkilenmez (bkz. WorkspaceContext docblock'u).
+    public function all(): Collection
+    {
+        $locations = $this->repository->all();
+
+        if ($this->workspaceContext->hasOrganizationFilter()) {
+            $allowedIds = $this->workspaceContext->allowedLocationIds();
+            $locations = $locations->whereIn('id', $allowedIds)->values();
+        }
+
+        if ($this->workspaceContext->selectedLocationId() !== null) {
+            $locations = $locations->where('id', $this->workspaceContext->selectedLocationId())->values();
+        }
+
+        return $locations;
+    }
+
+    // "Yeni Şube" akışındaki "mevcut bina" seçici için: aktif context'ten
+    // BAĞIMSIZ olarak tenant'taki tüm çok-şubeli binaları döner (müstakil
+    // lokasyonlar hariç — onlara ikinci bir şube eklenmesi anlamsız).
+    public function multiBranchBuildings(): Collection
+    {
+        return Location::query()
+            ->where('allows_multiple_branches', true)
+            ->with(['city:id,name', 'district:id,name'])
+            ->orderBy('name')
+            ->get();
+    }
+
     public function find(int $id): Location { return $this->repository->find($id); }
 
     public function create(array $data): Location
@@ -34,11 +72,45 @@ class LocationService
         try {
             if ($image instanceof UploadedFile) $imagePath = $this->imageService->upload($image, self::IMAGE_DIRECTORY);
             if ($imagePath) $data['image'] = $imagePath;
-            return DB::transaction(fn () => $this->repository->create($data));
+            return DB::transaction(function () use ($data) {
+                $location = $this->repository->create($data);
+                $this->attachToScopedOrganization($location);
+                return $location;
+            });
         } catch (\Throwable $e) {
             if ($imagePath) $this->imageService->delete($imagePath);
             throw $e;
         }
+    }
+
+    // Locations must always land under some organization node so a group/company
+    // manager's own scope doesn't leave them orphaned. Location itself is never an
+    // Organization node (see 2026_08_28_220000_remove_location_type_from_organizations) -
+    // this attaches directly to whichever node the creating user is scoped to, falling
+    // back to the tenant root when they have no organization scope.
+    private function attachToScopedOrganization(Location $location): void
+    {
+        $user = auth()->user();
+
+        $organizationId = $user
+            ? UserScope::query()
+                ->where('user_id', $user->id)
+                ->where('scope_type', 'organization')
+                ->orderBy('id')
+                ->value('scope_id')
+            : null;
+
+        $organization = $organizationId
+            ? Organization::query()->where('tenant_id', $location->tenant_id)->find($organizationId)
+            : null;
+
+        $organization ??= $this->organizationService->getRootByTenantId($location->tenant_id);
+
+        if ($organization === null) {
+            return;
+        }
+
+        $this->organizationLocationService->attach($organization, $location);
     }
 
     public function update(Location $location, array $data): Location

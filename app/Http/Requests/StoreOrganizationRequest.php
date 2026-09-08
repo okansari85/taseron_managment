@@ -45,6 +45,11 @@ class StoreOrganizationRequest extends FormRequest
                 'string',
                 'regex:/^#[0-9A-Fa-f]{6}$/',
             ],
+            'default_brand_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('brands', 'id')->where('tenant_id', $tenantId),
+            ],
         ];
     }
 
@@ -71,6 +76,8 @@ class StoreOrganizationRequest extends FormRequest
             'parent_id.exists' => 'Seçilen üst organizasyon bu tenant içerisinde bulunamadı.',
             'color.required_if' => 'Grup için görünüm rengi zorunludur.',
             'color.regex' => 'Görünüm rengi geçerli bir HEX renk değeri olmalıdır.',
+            'default_brand_id.integer' => 'Varsayılan marka ID değeri geçerli olmalıdır.',
+            'default_brand_id.exists' => 'Seçilen marka bu tenant içerisinde bulunamadı.',
         ];
     }
 }

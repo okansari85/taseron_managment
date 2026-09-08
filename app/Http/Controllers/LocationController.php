@@ -24,6 +24,13 @@ class LocationController extends Controller
         );
     }
 
+    public function multiBranchBuildings(): JsonResponse
+    {
+        return response()->json(
+            $this->service->multiBranchBuildings()
+        );
+    }
+
     public function store(
         StoreLocationRequest $request
     ): JsonResponse {

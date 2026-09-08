@@ -1,0 +1,36 @@
+<?php
+
+namespace App\Models;
+
+use App\Domain\Tenancy\TenantScope;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class DocumentType extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'tenant_id',
+        'name',
+        'type',
+        'is_active',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(
+            app(TenantScope::class)
+        );
+    }
+
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Tenant::class);
+    }
+}

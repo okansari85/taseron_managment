@@ -6,6 +6,8 @@ use App\Http\Requests\StoreLocationBusinessEntityRequest;
 use App\Http\Requests\UpdateLocationBusinessEntityRequest;
 use App\Models\BusinessEntity;
 use App\Models\Location;
+use App\Models\LocationBusinessEntity;
+use App\Domain\Tenancy\TenantContext;
 use App\Services\LocationBusinessEntityService;
 use Illuminate\Http\JsonResponse;
 
@@ -19,6 +21,11 @@ class LocationBusinessEntityController extends Controller
     public function index(Location $location): JsonResponse
     {
         return response()->json($this->service->all($location));
+    }
+
+    public function forTenant(TenantContext $tenantContext): JsonResponse
+    {
+        return response()->json($this->service->forTenant($tenantContext->id()));
     }
 
     public function store(
@@ -40,6 +47,9 @@ class LocationBusinessEntityController extends Controller
                 'nace_code' => $request->validated('nace_code'),
                 'hazard_class' => $request->validated('hazard_class'),
                 'sgk_workplace_number' => $request->validated('sgk_workplace_number'),
+                'address' => $request->validated('address'),
+                'is_active' => $request->validated('is_active', true),
+                'photos' => $request->file('photos', []),
             ]
         );
 
@@ -51,11 +61,11 @@ class LocationBusinessEntityController extends Controller
     public function update(
         UpdateLocationBusinessEntityRequest $request,
         Location $location,
-        BusinessEntity $businessEntity
+        LocationBusinessEntity $locationBusinessEntity
     ): JsonResponse {
         $this->service->update(
             $location,
-            $businessEntity,
+            $locationBusinessEntity,
             $request->validated()
         );
 
@@ -66,9 +76,9 @@ class LocationBusinessEntityController extends Controller
 
     public function destroy(
         Location $location,
-        BusinessEntity $businessEntity
+        LocationBusinessEntity $locationBusinessEntity
     ): JsonResponse {
-        $this->service->detach($location, $businessEntity);
+        $this->service->detach($location, $locationBusinessEntity);
 
         return response()->json([
             'message' => 'Business Entity lokasyondan başarıyla çıkarıldı.',

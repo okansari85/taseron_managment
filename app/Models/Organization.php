@@ -24,6 +24,7 @@ class Organization extends Model
         'display_order',
         'is_active',
         'color',
+        'default_brand_id',
     ];
 
     protected static function booted(): void
@@ -46,6 +47,11 @@ class Organization extends Model
     public function children(): HasMany
     {
         return $this->hasMany(Organization::class, 'parent_id');
+    }
+
+    public function defaultBrand(): BelongsTo
+    {
+        return $this->belongsTo(Brand::class);
     }
 
     public function companies(): BelongsToMany

@@ -18,17 +18,45 @@ use App\Http\Controllers\OperationalRegionController;
 use App\Http\Controllers\OrganizationLocationController;
 use App\Http\Controllers\UserAuthorizationController;
 use App\Http\Controllers\LocationExpertController;
+use App\Http\Controllers\TenantBrandingController;
+use App\Http\Controllers\WorkspaceContextController;
+use App\Http\Controllers\WorkspaceThemeController;
+use App\Http\Controllers\ActivityController;
+use App\Http\Controllers\ActivityDocumentTypeController;
+use App\Http\Controllers\EmergencyEquipmentInspectionController;
+use App\Http\Controllers\FireSafetyDashboardController;
+use App\Http\Controllers\EmergencyEquipmentTypeChecklistExclusionController;
+use App\Http\Controllers\EmergencyEquipmentTypeTipOptionController;
+use App\Http\Controllers\EmergencyEquipmentTypeChecklistItemController;
+use App\Http\Controllers\EmergencyEquipmentTypeController;
+use App\Http\Controllers\LocationEmergencyEquipmentController;
+use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
 use App\Models\District;
 
 Route::get('/user', function (Request $request) {
     $user = $request->user();
+    $user->loadMissing('contractor.businessEntity');
+
+    // Taşeron kullanıcısı tenant_id'yi kendi businessEntity'sinden alır.
+    // Diğer personel rolleri (isg, security, operation, tenant) için tenant_id
+    // Yetkilendirme ekranından atanan UserScope('tenant') kaydından okunur -
+    // super-admin için bu daima null'dır (birden fazla tenant'a erişebilir).
+    $scopeTenantId = $user->scopes()->where('scope_type', 'tenant')->value('scope_id');
 
     return response()->json([
         'id' => $user->id,
         'name' => $user->name,
         'email' => $user->email,
         'roles' => $user->getRoleNames(),
+        'contractor_id' => $user->contractor_id,
+        'contractor' => $user->contractor ? [
+            'id' => $user->contractor->id,
+            'name' => $user->contractor->businessEntity?->name,
+            'contractor_type' => $user->contractor->contractor_type,
+            'tenant_id' => $user->contractor->businessEntity?->tenant_id,
+        ] : null,
+        'tenant_id' => $scopeTenantId ? (int) $scopeTenantId : null,
     ]);
 })->middleware('auth:sanctum');
 Route::post('login', [AuthController::class, 'login']);
@@ -42,28 +70,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('tenant-onboarding', [TenantOnboardingController::class, 'store']);
     });
 
-    Route::middleware('tenant')->group(function () {
+    Route::middleware(['tenant', 'workspace-context'])->group(function () {
         Route::middleware('web-role:super-admin')->group(function () {
-            Route::get('cities', fn () => response()->json(City::query()->orderBy('name')->get(['id','name'])));
-            Route::get('cities/{city}/districts', fn (City $city) => response()->json($city->districts()->orderBy('name')->get(['id','city_id','name'])));
-            Route::apiResource('organizations', OrganizationController::class);
             Route::apiResource('companies', CompanyController::class);
-            Route::apiResource('contractors', ContractorController::class);
-            Route::apiResource('locations', LocationController::class);
             Route::apiResource('brands', BrandController::class);
             Route::apiResource('locations.operational-regions', OperationalRegionController::class);
 
-            Route::get('organization-companies', [OrganizationCompanyController::class, 'indexForTenant']);
             Route::get('organizations/{organization}/companies', [OrganizationCompanyController::class, 'index']);
             Route::put('organizations/{organization}/companies', [OrganizationCompanyController::class, 'sync']);
             Route::post('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'attach']);
             Route::delete('organizations/{organization}/companies/{company}', [OrganizationCompanyController::class, 'detach']);
-
-            Route::get('organization-contractors', [OrganizationContractorController::class, 'contractorsForTenant']);
-            Route::post('organization-contractors/bulk', [OrganizationContractorController::class, 'bulkAttach']);
-            Route::get('organizations/{organization}/contractors', [OrganizationContractorController::class, 'index']);
-            Route::post('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'attach']);
-            Route::delete('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'detach']);
 
             Route::get('organizations/{organization}/locations', [OrganizationLocationController::class, 'index']);
             Route::put('organizations/{organization}/locations', [OrganizationLocationController::class, 'sync']);
@@ -79,8 +95,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('locations/{location}/organization-contractors', [LocationController::class, 'organizationContractors']);
             Route::get('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'index']);
             Route::post('locations/{location}/business-entities', [LocationBusinessEntityController::class, 'store']);
-            Route::put('locations/{location}/business-entities/{businessEntity}', [LocationBusinessEntityController::class, 'update']);
-            Route::delete('locations/{location}/business-entities/{businessEntity}', [LocationBusinessEntityController::class, 'destroy']);
+            Route::put('locations/{location}/business-entities/{locationBusinessEntity}', [LocationBusinessEntityController::class, 'update']);
+            Route::delete('locations/{location}/business-entities/{locationBusinessEntity}', [LocationBusinessEntityController::class, 'destroy']);
 
             Route::get('users/authorization', [UserAuthorizationController::class, 'index']);
             Route::post('users', [UserAuthorizationController::class, 'store']);
@@ -98,9 +114,109 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('users/{user}/scopes', [UserAuthorizationController::class, 'attachScope']);
             Route::delete('users/{user}/scopes', [UserAuthorizationController::class, 'detachScope']);
 
-            Route::get('locations/{location}/experts', [LocationExpertController::class, 'index']);
-            Route::post('locations/{location}/experts', [LocationExpertController::class, 'attach']);
-            Route::delete('locations/{location}/experts/{user}', [LocationExpertController::class, 'detach']);
+            Route::get('users/{user}/location-experts', [LocationExpertController::class, 'forUser']);
+
+            Route::get('location-business-entities/{locationBusinessEntity}/experts', [LocationExpertController::class, 'index']);
+            Route::post('location-business-entities/{locationBusinessEntity}/experts', [LocationExpertController::class, 'attach']);
+            Route::delete('location-business-entities/{locationBusinessEntity}/experts/{user}', [LocationExpertController::class, 'detach']);
         });
+
+        // Faaliyetler / evrak tanımlamaları — hem süper admin hem de gerçek
+        // tenant (grup yöneticisi) rolü kendi verilerini yönetebilsin diye
+        // super-admin'e özel gruptan AYRI tutuldu.
+        Route::middleware('web-role:super-admin,tenant')->group(function () {
+            // Lokasyonlar listesi + il/ilçe dropdown'ları — tenant (grup yöneticisi)
+            // de kendi lokasyonlarını görebilsin/yönetebilsin diye süper admin'e
+            // özel gruptan taşındı (aynı sebep/desen: organizations, contractors).
+            Route::get('cities', fn () => response()->json(City::query()->orderBy('name')->get(['id','name'])));
+            Route::get('cities/{city}/districts', fn (City $city) => response()->json($city->districts()->orderBy('name')->get(['id','city_id','name'])));
+            // apiResource'tan ÖNCE tanımlanmalı, yoksa 'locations/{location}'
+            // route-model-binding'i bu path'i bir id sanmaya çalışır.
+            Route::get('locations/multi-branch-buildings', [LocationController::class, 'multiBranchBuildings']);
+            Route::apiResource('locations', LocationController::class);
+            Route::get('location-business-entities', [LocationBusinessEntityController::class, 'forTenant']);
+            // "Yeni Şube" ekranındaki Grup/Firma/Marka seçimi için — grup ve
+            // şirket CRUD'u süper admin'de kalıyor, sadece bu salt-okuma liste
+            // tenant rolüne açıldı (locations ile aynı sebep/desen).
+            Route::get('organization-companies', [OrganizationCompanyController::class, 'indexForTenant']);
+
+            Route::apiResource('activities', ActivityController::class);
+            Route::get('activities/{activity}/document-types', [ActivityDocumentTypeController::class, 'index']);
+            Route::post('activities/{activity}/document-types', [ActivityDocumentTypeController::class, 'store']);
+            Route::put('activities/{activity}/document-types/{activityDocumentType}', [ActivityDocumentTypeController::class, 'update']);
+            Route::delete('activities/{activity}/document-types/{activityDocumentType}', [ActivityDocumentTypeController::class, 'destroy']);
+        
+            Route::apiResource('emergency-equipment-types', EmergencyEquipmentTypeController::class);
+            Route::get('emergency-equipment-types/{emergencyEquipmentType}/checklist-items', [EmergencyEquipmentTypeChecklistItemController::class, 'index']);
+            Route::post('emergency-equipment-types/{emergencyEquipmentType}/checklist-items', [EmergencyEquipmentTypeChecklistItemController::class, 'store']);
+            Route::put('emergency-equipment-types/{emergencyEquipmentType}/checklist-items/{checklistItem}', [EmergencyEquipmentTypeChecklistItemController::class, 'update']);
+            Route::delete('emergency-equipment-types/{emergencyEquipmentType}/checklist-items/{checklistItem}', [EmergencyEquipmentTypeChecklistItemController::class, 'destroy']);
+            Route::post('emergency-equipment-types/{emergencyEquipmentType}/checklist-exclusions/{checklistItem}', [EmergencyEquipmentTypeChecklistExclusionController::class, 'store']);
+            Route::delete('emergency-equipment-types/{emergencyEquipmentType}/checklist-exclusions/{checklistItem}', [EmergencyEquipmentTypeChecklistExclusionController::class, 'destroy']);
+            Route::get('emergency-equipment-types/{emergencyEquipmentType}/tip-options', [EmergencyEquipmentTypeTipOptionController::class, 'index']);
+            Route::post('emergency-equipment-types/{emergencyEquipmentType}/tip-options', [EmergencyEquipmentTypeTipOptionController::class, 'store']);
+            Route::put('emergency-equipment-types/{emergencyEquipmentType}/tip-options/{tipOption}', [EmergencyEquipmentTypeTipOptionController::class, 'update']);
+            Route::delete('emergency-equipment-types/{emergencyEquipmentType}/tip-options/{tipOption}', [EmergencyEquipmentTypeTipOptionController::class, 'destroy']);
+
+            Route::get('location-business-entities/{locationBusinessEntity}/emergency-equipment', [LocationEmergencyEquipmentController::class, 'index']);
+            Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment', [LocationEmergencyEquipmentController::class, 'store']);
+            Route::put('emergency-equipment/{locationEmergencyEquipment}', [LocationEmergencyEquipmentController::class, 'update']);
+            Route::delete('emergency-equipment/{locationEmergencyEquipment}', [LocationEmergencyEquipmentController::class, 'destroy']);
+
+            Route::get('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'index']);
+            Route::post('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'store']);
+
+            Route::get('fire-safety/dashboard', [FireSafetyDashboardController::class, 'show']);
+
+            // Taşeron Yönetimi — organizasyonlar, taşeronlar, organizasyon-taşeron eşleştirmesi
+            // ve iş talepleri. Faaliyetler/Yangın Modülü ile aynı sebeple: tenant (grup yöneticisi)
+            // kendi taşeron portalını kullanabilsin diye süper admin'e özel gruptan taşındı (2026-09-06).
+            Route::apiResource('organizations', OrganizationController::class);
+            Route::apiResource('contractors', ContractorController::class);
+            Route::get('contractors/{contractor}/locations', [ContractorController::class, 'locations']);
+
+            Route::get('work-requests', [WorkRequestController::class, 'index']);
+            Route::post('work-requests', [WorkRequestController::class, 'store']);
+            Route::patch('work-requests/{workRequest}/status', [WorkRequestController::class, 'updateStatus']);
+            Route::patch('work-requests/{workRequest}/accept-proposed-date', [WorkRequestController::class, 'acceptProposedDate']);
+            Route::delete('work-requests/{workRequest}', [WorkRequestController::class, 'destroy']);
+
+            Route::get('organization-contractors', [OrganizationContractorController::class, 'contractorsForTenant']);
+            Route::post('organization-contractors/bulk', [OrganizationContractorController::class, 'bulkAttach']);
+            Route::get('organizations/{organization}/contractors', [OrganizationContractorController::class, 'index']);
+            Route::post('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'attach']);
+            Route::delete('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'detach']);
+        });
+
+        // Taşeron Portalı — taşeron rolündeki kullanıcı SADECE kendi taşeronuna ait iş
+        // taleplerini görür ve (henüz karara bağlanmamışsa) alternatif tarih önerebilir.
+        // Personel/araç/ekipman/kimyasal beyanı bu gruba KASITLI OLARAK eklenmedi —
+        // bkz. proje dokümanındaki Personel/MYK/SGK referans liste beklemesi.
+        Route::middleware('web-role:contractor')->group(function () {
+            Route::get('my/work-requests', [WorkRequestController::class, 'myRequests']);
+            Route::patch('my/work-requests/{workRequest}/propose-date', [WorkRequestController::class, 'proposeDate']);
+        });
+
+        // Operasyon Portalı — iş talebi onay akışı taşeron ile operation rolü arasındadır
+        // (İSG'nin bu akışla ilgisi yok; İSG'nin işi evrak onayıdır, o da henüz kurulmadı
+        // çünkü Evrak Profili + Personel modülleri hâlâ yazılmadı — bkz. proje dokümanı).
+        Route::middleware('web-role:operation')->group(function () {
+            Route::get('operation/work-requests', [WorkRequestController::class, 'index']);
+            Route::patch('operation/work-requests/{workRequest}/status', [WorkRequestController::class, 'updateStatus']);
+        });
+
+        // Sadece görsel marka bilgisi (logo) — hassas veri değil, bu yüzden
+        // super-admin dışındaki roller (ör. contractor) için de açık.
+        Route::get('tenant-branding', [TenantBrandingController::class, 'show']);
+
+        // Kimliği doğrulanmış kullanıcının sidebar/header teması (grup rengi + varsayılan marka logosu).
+        Route::get('workspace-theme', [WorkspaceThemeController::class, 'show']);
+
+        // Header'daki aktif çalışma bağlamı seçici (Organizasyon → Lokasyon → Operasyonel Alan).
+        // Sadece kullanıcının kendi scope'undan okur, salt-okuma.
+        Route::get('workspace-context', [WorkspaceContextController::class, 'bootstrap']);
+        Route::get('workspace-context/organizations', [WorkspaceContextController::class, 'organizations']);
+        Route::get('workspace-context/locations', [WorkspaceContextController::class, 'locations']);
+        Route::get('workspace-context/operational-areas', [WorkspaceContextController::class, 'operationalAreas']);
     });
 });

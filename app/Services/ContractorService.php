@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use LogicException;
+use RuntimeException;
 use Throwable;
 
 class ContractorService
@@ -25,12 +26,20 @@ class ContractorService
 
     public function all(): Collection
     {
-        return $this->repository->all();
+        if (! $this->tenantContext->has()) {
+            throw new LogicException('Tenant context has not been initialized.');
+        }
+
+        return $this->repository->all($this->tenantContext->id());
     }
 
     public function find(int $id): Contractor
     {
-        return $this->repository->find($id);
+        $contractor = $this->repository->find($id);
+
+        $this->ensureTenantContractor($contractor);
+
+        return $contractor;
     }
 
     public function create(array $data): Contractor
@@ -72,6 +81,8 @@ class ContractorService
 
     public function update(Contractor $contractor, array $data): Contractor
     {
+        $this->ensureTenantContractor($contractor);
+
         $newLogoPath = null;
         $oldLogoPath = null;
 
@@ -131,6 +142,8 @@ class ContractorService
 
     public function delete(Contractor $contractor): void
     {
+        $this->ensureTenantContractor($contractor);
+
         DB::transaction(function () use ($contractor) {
             $businessEntityId = $contractor->business_entity_id;
 
@@ -140,5 +153,19 @@ class ContractorService
                 BusinessEntity::query()->whereKey($businessEntityId)->delete();
             }
         });
+    }
+
+    private function ensureTenantContractor(Contractor $contractor): void
+    {
+        if (! $this->tenantContext->has()) {
+            throw new LogicException('Tenant context has not been initialized.');
+        }
+
+        $tenantId = $contractor->businessEntity?->tenant_id
+            ?? $contractor->businessEntity()->value('tenant_id');
+
+        if ($tenantId !== $this->tenantContext->id()) {
+            throw new RuntimeException('Bu alt yükleniciye erişim yetkiniz yok.');
+        }
     }
 }

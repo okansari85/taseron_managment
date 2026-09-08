@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Collection;
 
 interface ContractorRepositoryInterface
 {
-    public function all(): Collection;
+    public function all(int $tenantId): Collection;
 
     public function find(int $id): Contractor;
 

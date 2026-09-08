@@ -31,6 +31,7 @@ class OrganizationCompanyRepository implements OrganizationCompanyRepositoryInte
                 'organizations' => function ($query) {
                     $query->where('type', 'group');
                 },
+                'brands',
             ])
             ->withCount('brands')
             ->orderBy('name')

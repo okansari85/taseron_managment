@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Location;
+use App\Models\LocationBusinessEntity;
 use App\Models\User;
 use App\Services\LocationExpertService;
 use Illuminate\Http\JsonResponse;
@@ -14,21 +14,26 @@ class LocationExpertController extends Controller
     {
     }
 
-    public function index(Location $location): JsonResponse
+    public function index(LocationBusinessEntity $locationBusinessEntity): JsonResponse
     {
-        return response()->json($this->service->all($location));
+        return response()->json($this->service->all($locationBusinessEntity));
     }
 
-    public function attach(Request $request, Location $location): JsonResponse
+    public function attach(Request $request, LocationBusinessEntity $locationBusinessEntity): JsonResponse
     {
         $data = $request->validate(['user_id' => ['required', 'integer', 'exists:users,id']]);
         $user = User::query()->findOrFail($data['user_id']);
 
-        return response()->json($this->service->attach($location, $user), 201);
+        return response()->json($this->service->attach($locationBusinessEntity, $user), 201);
     }
 
-    public function detach(Location $location, User $user): JsonResponse
+    public function detach(LocationBusinessEntity $locationBusinessEntity, User $user): JsonResponse
     {
-        return response()->json($this->service->detach($location, $user));
+        return response()->json($this->service->detach($locationBusinessEntity, $user));
+    }
+
+    public function forUser(User $user): JsonResponse
+    {
+        return response()->json($this->service->forUser($user));
     }
 }
