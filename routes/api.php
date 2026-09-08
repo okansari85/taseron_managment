@@ -35,15 +35,18 @@ use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
 use App\Models\District;
 
-Route::get('/user', function (Request $request) {
+Route::get('/user', function (Request $request, \App\Services\UserScopeService $userScopeService) {
     $user = $request->user();
     $user->loadMissing('contractor.businessEntity');
 
     // Taşeron kullanıcısı tenant_id'yi kendi businessEntity'sinden alır.
     // Diğer personel rolleri (isg, security, operation, tenant) için tenant_id
-    // Yetkilendirme ekranından atanan UserScope('tenant') kaydından okunur -
-    // super-admin için bu daima null'dır (birden fazla tenant'a erişebilir).
-    $scopeTenantId = $user->scopes()->where('scope_type', 'tenant')->value('scope_id');
+    // Yetkilendirme ekranından atanan scope'lardan türetilir (önce açık
+    // 'tenant' scope'u, yoksa organization/location/operational_region
+    // scope'unun bağlı olduğu tenant — bkz. UserScopeService::resolveTenantId)
+    // - süper admin gibi hiç scope'u olmayanlar için hâlâ null'dır (birden
+    // fazla tenant'a erişebilir).
+    $scopeTenantId = $userScopeService->resolveTenantId($user);
 
     return response()->json([
         'id' => $user->id,
@@ -57,7 +60,7 @@ Route::get('/user', function (Request $request) {
             'contractor_type' => $user->contractor->contractor_type,
             'tenant_id' => $user->contractor->businessEntity?->tenant_id,
         ] : null,
-        'tenant_id' => $scopeTenantId ? (int) $scopeTenantId : null,
+        'tenant_id' => $scopeTenantId,
     ]);
 })->middleware('auth:sanctum');
 Route::post('login', [AuthController::class, 'login']);

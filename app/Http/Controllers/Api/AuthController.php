@@ -4,11 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\LoginRequest;
+use App\Services\UserScopeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private UserScopeService $userScopeService,
+    ) {
+    }
+
     public function login(LoginRequest $request): JsonResponse
     {
         $credentials = $request->validated();
@@ -23,8 +29,8 @@ class AuthController extends Controller
         $user->loadMissing('contractor.businessEntity');
 
         // bkz. routes/api.php /user endpoint'indeki aynı yorum - tenant_id
-        // taşeron olmayan personel rolleri için UserScope('tenant')'tan gelir.
-        $scopeTenantId = $user->scopes()->where('scope_type', 'tenant')->value('scope_id');
+        // taşeron olmayan personel rolleri için scope'lardan türetilir.
+        $scopeTenantId = $this->userScopeService->resolveTenantId($user);
 
         $token = $user->createToken('api')->plainTextToken;
 
@@ -43,7 +49,7 @@ class AuthController extends Controller
                     'contractor_type' => $user->contractor->contractor_type,
                     'tenant_id' => $user->contractor->businessEntity?->tenant_id,
                 ] : null,
-                'tenant_id' => $scopeTenantId ? (int) $scopeTenantId : null,
+                'tenant_id' => $scopeTenantId,
             ],
         ]);
     }

@@ -66,6 +66,52 @@ class UserScopeService
         return $this->all($user);
     }
 
+    // Taşeron olmayan personel rolleri için tenant_id, önceki halinde SADECE
+    // açık bir scope_type='tenant' satırından okunuyordu. Bir kullanıcıya
+    // Yetkilendirme ekranından sadece 'organization'/'location'/
+    // 'operational_region' scope'u verilip ayrıca 'tenant' scope'u eklenmezse
+    // (kolayca unutulabilecek bir adım), tenant_id null dönüyor ve frontend'de
+    // X-Tenant-ID hiç set edilemediği için TenantScope filtresiz kalıp TÜM
+    // tenant'ların verisi görünüyordu (bkz. Serkan/Beko lokasyon sızıntısı).
+    // Burada 'tenant' satırı yoksa diğer scope tiplerinden (en genelden en
+    // özele) tenant'a geriye doğru türetilir — süper admin gibi hiç scope'u
+    // olmayan kullanıcılar için hâlâ null döner, davranışları değişmez.
+    public function resolveTenantId(User $user): ?int
+    {
+        $scopes = $this->all($user);
+
+        $tenantScopeId = $scopes->firstWhere('scope_type', 'tenant')?->scope_id;
+        if ($tenantScopeId) {
+            return (int) $tenantScopeId;
+        }
+
+        $organizationScopeId = $scopes->firstWhere('scope_type', 'organization')?->scope_id;
+        if ($organizationScopeId) {
+            $tenantId = Organization::query()->whereKey($organizationScopeId)->value('tenant_id');
+            if ($tenantId) {
+                return (int) $tenantId;
+            }
+        }
+
+        $locationScopeId = $scopes->firstWhere('scope_type', 'location')?->scope_id;
+        if ($locationScopeId) {
+            $tenantId = Location::query()->whereKey($locationScopeId)->value('tenant_id');
+            if ($tenantId) {
+                return (int) $tenantId;
+            }
+        }
+
+        $regionScopeId = $scopes->firstWhere('scope_type', 'operational_region')?->scope_id;
+        if ($regionScopeId) {
+            $tenantId = OperationalRegion::query()->whereKey($regionScopeId)->value('tenant_id');
+            if ($tenantId) {
+                return (int) $tenantId;
+            }
+        }
+
+        return null;
+    }
+
     private function assertBelongsToTenant(string $type, int $id): void
     {
         $tenantId = $this->tenantContext->id();
