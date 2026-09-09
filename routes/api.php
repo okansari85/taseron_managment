@@ -206,6 +206,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports/analyze', [FireSuppressionReportController::class, 'analyze']);
             Route::get('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'show']);
             Route::delete('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'destroy']);
+            Route::get('fire-suppression-control-item-templates', [FireSuppressionReportController::class, 'controlItemTemplates']);
 
             Route::get('fire-safety/dashboard', [FireSafetyDashboardController::class, 'show']);
 

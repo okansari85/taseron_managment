@@ -17,9 +17,11 @@ class FireSuppressionReport extends Model
         'tenant_id',
         'location_business_entity_id',
         'report_date',
+        'report_no',
         'next_control_date',
         'covered_categories',
         'overall_result',
+        'inspection_company_name',
         'file_path',
         'file_name',
         'uploaded_by_user_id',
@@ -69,6 +71,16 @@ class FireSuppressionReport extends Model
             'report_id',
             'inventory_item_id'
         )->withTimestamps();
+    }
+
+    public function controlItems(): HasMany
+    {
+        return $this->hasMany(FireSuppressionReportControlItem::class, 'report_id');
+    }
+
+    public function files(): HasMany
+    {
+        return $this->hasMany(FireSuppressionReportFile::class, 'report_id');
     }
 
     public function getFileUrlAttribute(): ?string

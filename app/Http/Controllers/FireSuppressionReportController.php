@@ -13,6 +13,7 @@ use App\Services\FireSuppressionReportService;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
 class FireSuppressionReportController extends Controller
@@ -94,17 +95,38 @@ class FireSuppressionReportController extends Controller
         StoreFireSuppressionReportRequest $request,
         LocationBusinessEntity $locationBusinessEntity
     ): JsonResponse {
+        $validated = $request->validated();
+        $additionalFiles = collect($validated['additional_files'] ?? [])
+            ->map(fn (array $entry, int $index) => [
+                'file' => $request->file("additional_files.{$index}.file"),
+                'type' => $entry['type'],
+                'description' => $entry['description'] ?? null,
+            ])
+            ->all();
+
         $report = $this->service->create(
             $locationBusinessEntity,
-            $request->validated(),
+            $validated,
             $request->file('file'),
-            $request->user()
+            $request->user(),
+            $additionalFiles
         );
 
         return response()->json([
             'message' => 'Rapor başarıyla yüklendi.',
             'data' => $report,
         ], 201);
+    }
+
+    // Rapor yükleme sihirbazının "Kontrol ve Onay" adımında kullanılacak
+    // standart checklist — kullanıcı seçtiği kategorilere göre filtrelenir.
+    public function controlItemTemplates(Request $request): JsonResponse
+    {
+        $categories = array_filter((array) $request->query('categories', []));
+
+        return response()->json([
+            'data' => $this->service->controlItemTemplates($categories),
+        ]);
     }
 
     public function destroy(FireSuppressionReport $fireSuppressionReport): JsonResponse

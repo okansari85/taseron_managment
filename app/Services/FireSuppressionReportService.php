@@ -3,8 +3,11 @@
 namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
+use App\Models\FireSuppressionControlItemTemplate;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReport;
+use App\Models\FireSuppressionReportControlItem;
+use App\Models\FireSuppressionReportFile;
 use App\Models\FireSuppressionReportFinding;
 use App\Models\LocationBusinessEntity;
 use App\Models\User;
@@ -19,6 +22,7 @@ use Throwable;
 class FireSuppressionReportService
 {
     private const FILE_DIRECTORY = 'fire-suppression-reports';
+    private const ADDITIONAL_FILE_DIRECTORY = 'fire-suppression-reports/additional';
 
     public function __construct(
         private TenantContext $tenantContext,
@@ -51,10 +55,29 @@ class FireSuppressionReportService
     {
         $this->assertOwnership($report);
 
-        return $report->load(['findings.affectedItems', 'inventoryItems', 'uploadedByUser:id,name']);
+        return $report->load([
+            'findings.affectedItems',
+            'inventoryItems',
+            'uploadedByUser:id,name',
+            'controlItems' => fn ($q) => $q->orderBy('category')->orderBy('sort_order'),
+            'files.uploadedByUser:id,name',
+        ]);
     }
 
-    public function create(LocationBusinessEntity $locationBusinessEntity, array $data, UploadedFile $file, ?User $actingUser): FireSuppressionReport
+    // Rapor yükleme sihirbazının "Kontrol ve Onay" adımında, kullanıcının
+    // seçtiği kategoriler için gösterilecek standart checklist — tenant'a
+    // bağlı değil, sadece referans olarak okunur.
+    public function controlItemTemplates(array $categories = []): Collection
+    {
+        return FireSuppressionControlItemTemplate::query()
+            ->when($categories !== [], fn ($q) => $q->whereIn('category', $categories))
+            ->orderBy('category')
+            ->orderBy('sort_order')
+            ->get();
+    }
+
+    // $additionalFiles: [['file' => UploadedFile, 'type' => 'fotograf'|'ek_belge'|'diger', 'description' => ?string], ...]
+    public function create(LocationBusinessEntity $locationBusinessEntity, array $data, UploadedFile $file, ?User $actingUser, array $additionalFiles = []): FireSuppressionReport
     {
         $this->assertEntityTenant($locationBusinessEntity);
 
@@ -64,6 +87,7 @@ class FireSuppressionReportService
 
         $tenantId = $this->tenantContext->id();
         $findingsInput = $data['findings'] ?? [];
+        $controlItemsInput = $data['control_items'] ?? [];
         $coveredInventoryItemIds = array_map('intval', $data['covered_inventory_item_ids'] ?? []);
 
         $this->assertItemsBelongToBranch($locationBusinessEntity, array_unique(array_merge(
@@ -72,23 +96,57 @@ class FireSuppressionReportService
         )));
 
         $filePath = null;
+        $storedAdditionalPaths = [];
 
         try {
-            return DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $coveredInventoryItemIds, $tenantId, $file, &$filePath) {
+            return DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $tenantId, $file, $additionalFiles, &$filePath, &$storedAdditionalPaths) {
                 $filePath = $file->store(self::FILE_DIRECTORY, 'public');
 
                 $report = FireSuppressionReport::query()->create([
                     'tenant_id' => $tenantId,
                     'location_business_entity_id' => $locationBusinessEntity->id,
                     'report_date' => $data['report_date'],
+                    'report_no' => $data['report_no'] ?? null,
                     'next_control_date' => $data['next_control_date'] ?? null,
                     'covered_categories' => $data['covered_categories'] ?? null,
                     'overall_result' => $data['overall_result'] ?? null,
+                    'inspection_company_name' => $data['inspection_company_name'] ?? null,
                     'file_path' => $filePath,
                     'file_name' => $file->getClientOriginalName(),
                     'uploaded_by_user_id' => $actingUser?->id,
                     'notes' => $data['notes'] ?? null,
                 ]);
+
+                foreach ($additionalFiles as $index => $additional) {
+                    $storedPath = $additional['file']->store(self::ADDITIONAL_FILE_DIRECTORY, 'public');
+                    $storedAdditionalPaths[] = $storedPath;
+
+                    FireSuppressionReportFile::query()->create([
+                        'tenant_id' => $tenantId,
+                        'report_id' => $report->id,
+                        'file_type' => $additional['type'],
+                        'file_path' => $storedPath,
+                        'file_name' => $additional['file']->getClientOriginalName(),
+                        'file_size' => $additional['file']->getSize(),
+                        'description' => $additional['description'] ?? null,
+                        'uploaded_by_user_id' => $actingUser?->id,
+                    ]);
+                }
+
+                foreach ($controlItemsInput as $index => $controlItem) {
+                    FireSuppressionReportControlItem::query()->create([
+                        'tenant_id' => $tenantId,
+                        'report_id' => $report->id,
+                        'template_id' => $controlItem['template_id'] ?? null,
+                        'category' => $controlItem['category'] ?? null,
+                        'code' => $controlItem['code'] ?? null,
+                        'section' => $controlItem['section'] ?? null,
+                        'title' => $controlItem['title'],
+                        'status' => $controlItem['status'],
+                        'description' => $controlItem['description'] ?? null,
+                        'sort_order' => $index,
+                    ]);
+                }
 
                 $affectedItemIds = [];
 
@@ -134,6 +192,10 @@ class FireSuppressionReportService
                 Storage::disk('public')->delete($filePath);
             }
 
+            if ($storedAdditionalPaths !== []) {
+                Storage::disk('public')->delete($storedAdditionalPaths);
+            }
+
             throw $exception;
         }
     }
@@ -155,6 +217,7 @@ class FireSuppressionReportService
             ->unique();
 
         $filePath = $report->file_path;
+        $additionalPaths = $report->files()->pluck('file_path')->all();
         $report->delete();
 
         foreach ($affectedItemIds as $itemId) {
@@ -166,6 +229,10 @@ class FireSuppressionReportService
 
         if ($filePath) {
             Storage::disk('public')->delete($filePath);
+        }
+
+        if ($additionalPaths !== []) {
+            Storage::disk('public')->delete($additionalPaths);
         }
     }
 
