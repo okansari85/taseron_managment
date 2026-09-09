@@ -29,6 +29,7 @@ class UpdateLocationEmergencyEquipmentRequest extends FormRequest
             'status' => ['nullable', 'string', 'in:active,inactive,needs_replacement'],
             'is_active' => ['nullable', 'boolean'],
             'last_fill_date' => ['nullable', 'date'],
+            'next_fill_date' => ['nullable', 'date'],
             'last_annual_maintenance_date' => ['nullable', 'date'],
             'next_annual_maintenance_date' => ['nullable', 'date'],
             'service_company' => ['nullable', 'string', 'max:255'],

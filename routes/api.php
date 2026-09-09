@@ -24,6 +24,7 @@ use App\Http\Controllers\WorkspaceThemeController;
 use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\ActivityDocumentTypeController;
 use App\Http\Controllers\EmergencyEquipmentInspectionController;
+use App\Http\Controllers\EmergencyEquipmentAnnualControlController;
 use App\Http\Controllers\FireSafetyDashboardController;
 use App\Http\Controllers\EmergencyEquipmentTypeChecklistExclusionController;
 use App\Http\Controllers\EmergencyEquipmentTypeTipOptionController;
@@ -31,6 +32,8 @@ use App\Http\Controllers\EmergencyEquipmentTypeChecklistItemController;
 use App\Http\Controllers\EmergencyEquipmentTypeController;
 use App\Http\Controllers\LocationEmergencyEquipmentController;
 use App\Http\Controllers\FieldFindingController;
+use App\Http\Controllers\FireSuppressionInventoryController;
+use App\Http\Controllers\FireSuppressionReportController;
 use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
 use App\Models\District;
@@ -177,10 +180,30 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'store']);
             Route::put('emergency-equipment-inspections/{inspection}', [EmergencyEquipmentInspectionController::class, 'update']);
 
+            // YSC — Yıllık Periyodik Kontrol (Aylık Kontrol'den bağımsız, section 3/5).
+            Route::get('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'index']);
+            Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'store']);
+            Route::get('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'show']);
+            Route::delete('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'destroy']);
+
             Route::get('location-business-entities/{locationBusinessEntity}/field-findings', [FieldFindingController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/field-findings', [FieldFindingController::class, 'store']);
             Route::put('field-findings/{fieldFinding}', [FieldFindingController::class, 'update']);
             Route::delete('field-findings/{fieldFinding}', [FieldFindingController::class, 'destroy']);
+
+            // Yangın Söndürme Sistemleri — Envanter (fiziksel tesisat kayıtları, YSC'den
+            // ayrı bir domain — bkz. FireSuppressionInventoryItem model docblock'u).
+            Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-inventory', [FireSuppressionInventoryController::class, 'index']);
+            Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-inventory/summary', [FireSuppressionInventoryController::class, 'summary']);
+            Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-inventory', [FireSuppressionInventoryController::class, 'store']);
+            Route::put('fire-suppression-inventory/{fireSuppressionInventoryItem}', [FireSuppressionInventoryController::class, 'update']);
+            Route::delete('fire-suppression-inventory/{fireSuppressionInventoryItem}', [FireSuppressionInventoryController::class, 'destroy']);
+
+            // Yangın Söndürme Sistemleri — Raporlar (section 26/27).
+            Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'index']);
+            Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'store']);
+            Route::get('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'show']);
+            Route::delete('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'destroy']);
 
             Route::get('fire-safety/dashboard', [FireSafetyDashboardController::class, 'show']);
 

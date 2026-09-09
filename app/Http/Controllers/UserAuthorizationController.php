@@ -93,6 +93,10 @@ class UserAuthorizationController extends Controller
 
         $token = $user->createToken('impersonation')->plainTextToken;
 
+        // tenant_id eksikse frontend'de X-Tenant-ID hiç set edilemiyor ve
+        // TenantScope filtresiz kalıp taklit edilen kullanıcıya TÜM
+        // tenant'ların verisi görünüyordu (bkz. /api/user ve AuthController::
+        // login()'daki aynı çözümleme — burada da tutarlı olmalı).
         return response()->json([
             'message' => 'User impersonation started.',
             'token' => $token,
@@ -101,6 +105,8 @@ class UserAuthorizationController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'roles' => $user->getRoleNames(),
+                'contractor_id' => $user->contractor_id,
+                'tenant_id' => $this->scopes->resolveTenantId($user),
             ],
         ]);
     }
