@@ -30,6 +30,25 @@ class LocationEmergencyEquipmentService
             ->get();
     }
 
+    // AI yıllık kontrol rapor analizinin çıkardığı YSC kodlarını mevcut
+    // envanterle eşleştirir (section 9/10: kesin eşleşme, deterministic).
+    public function matchByCodes(LocationBusinessEntity $locationBusinessEntity, array $codes): Collection
+    {
+        $this->assertEntityTenant($locationBusinessEntity);
+
+        $codes = array_values(array_filter(array_unique($codes)));
+
+        if ($codes === []) {
+            return new Collection();
+        }
+
+        return LocationEmergencyEquipment::query()
+            ->where('location_business_entity_id', $locationBusinessEntity->id)
+            ->whereIn('code', $codes)
+            ->with('equipmentType')
+            ->get();
+    }
+
     public function create(LocationBusinessEntity $locationBusinessEntity, array $data): LocationEmergencyEquipment
     {
         $this->assertEntityTenant($locationBusinessEntity);

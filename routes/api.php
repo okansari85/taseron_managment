@@ -183,6 +183,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // YSC — Yıllık Periyodik Kontrol (Aylık Kontrol'den bağımsız, section 3/5).
             Route::get('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'store']);
+            Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls/analyze', [EmergencyEquipmentAnnualControlController::class, 'analyze']);
             Route::get('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'show']);
             Route::delete('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'destroy']);
 
@@ -202,6 +203,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // Yangın Söndürme Sistemleri — Raporlar (section 26/27).
             Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'store']);
+            Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports/analyze', [FireSuppressionReportController::class, 'analyze']);
             Route::get('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'show']);
             Route::delete('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'destroy']);
 

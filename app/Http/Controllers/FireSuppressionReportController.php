@@ -2,17 +2,78 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\AnalyzeReportFileRequest;
 use App\Http\Requests\StoreFireSuppressionReportRequest;
+use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
+use App\Services\Ai\FireSuppressionReportParser;
+use App\Services\Ai\PdfTextExtractor;
 use App\Services\FireSuppressionReportService;
+use App\Services\Matching\FireSuppressionMatchingProfile;
+use App\Services\Matching\MatchingEngine;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Collection;
 
 class FireSuppressionReportController extends Controller
 {
     public function __construct(
         private FireSuppressionReportService $service
     ) {
+    }
+
+    // AI destekli ön-analiz — hiçbir şey kaydetmez, sadece taslak döner.
+    // Kullanıcı taslağı gözden geçirip düzenledikten sonra store()'a
+    // (değişmemiş) gönderir (section 12: Kullanıcı Onayı).
+    //
+    // Pipeline üç ayrı, birbirinden habersiz katmandan geçer:
+    //   PdfTextExtractor (OCR/metin çıkarma — sağlayıcı değişebilir)
+    //     → FireSuppressionReportParser (bizim kodumuz: normalize + doğrula + işaretle)
+    //       → MatchingEngine + FireSuppressionMatchingProfile (kod → kesin, kategoriye özgü alanlar → aday)
+    public function analyze(
+        AnalyzeReportFileRequest $request,
+        LocationBusinessEntity $locationBusinessEntity,
+        PdfTextExtractor $extractor,
+        FireSuppressionReportParser $parser,
+        MatchingEngine $matchingEngine,
+        FireSuppressionMatchingProfile $matchingProfile
+    ): JsonResponse {
+        try {
+            $rawText = $extractor->extract($request->file('file'));
+            $draft = $parser->parse($rawText);
+        } catch (\Throwable $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        $candidateIds = [];
+
+        $draft['equipment'] = array_map(function (array $item) use ($matchingEngine, $matchingProfile, $locationBusinessEntity, &$candidateIds) {
+            $match = $matchingEngine->match($matchingProfile, $locationBusinessEntity, $item);
+            $candidateIds = [...$candidateIds, ...$match['candidate_ids']];
+            $item['match'] = $match;
+
+            return $item;
+        }, $draft['equipment']);
+
+        $exactIds = collect($draft['equipment'])->pluck('match.matched_id')->filter()->values()->all();
+        $allReferencedIds = array_values(array_unique([...$exactIds, ...$candidateIds]));
+
+        $referencedItems = $allReferencedIds === []
+            ? new Collection()
+            : FireSuppressionInventoryItem::query()->whereIn('id', $allReferencedIds)->get();
+
+        // Geriye dönük uyumluluk: matched_inventory_items/unmatched_codes hâlâ
+        // eskisi gibi dönüyor (sadece KESİN eşleşmeler + hiç adayı olmayanlar),
+        // yeni "equipment[].match" alanı ise aday/belirsiz ayrımını taşıyor.
+        $draft['matched_inventory_items'] = $referencedItems->whereIn('id', $exactIds)->values();
+        $draft['candidate_inventory_items'] = $referencedItems->whereIn('id', $candidateIds)->values();
+        $draft['unmatched_codes'] = collect($draft['equipment'])
+            ->filter(fn (array $item) => $item['match']['status'] === 'new' && $item['code'])
+            ->pluck('code')
+            ->values()
+            ->all();
+
+        return response()->json(['data' => $draft]);
     }
 
     public function index(LocationBusinessEntity $locationBusinessEntity): JsonResponse

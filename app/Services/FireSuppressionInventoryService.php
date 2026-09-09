@@ -29,6 +29,25 @@ class FireSuppressionInventoryService
             ->get();
     }
 
+    // AI rapor analizinin çıkardığı ekipman kodlarını mevcut envanterle
+    // eşleştirir — kesin eşleşme (section 9: "Rapor: YSC-001, Envanter:
+    // YSC-001 → otomatik eşleşir"), deterministic, AI gerektirmez.
+    public function matchByCodes(LocationBusinessEntity $locationBusinessEntity, array $codes): Collection
+    {
+        $this->assertEntityTenant($locationBusinessEntity);
+
+        $codes = array_values(array_filter(array_unique($codes)));
+
+        if ($codes === []) {
+            return new Collection();
+        }
+
+        return FireSuppressionInventoryItem::query()
+            ->where('location_business_entity_id', $locationBusinessEntity->id)
+            ->whereIn('code', $codes)
+            ->get();
+    }
+
     // Envanter ana ekranındaki "Genel Durum" + kategori kartları için — section
     // 8/9. Genel uygunluk kararı burada TEK ve deterministik bir kurala
     // bağlanır: aktif bir kalemin compliance_status'u 'uygun_degil' ise genel
@@ -88,6 +107,9 @@ class FireSuppressionInventoryService
                 'category' => $data['category'],
                 'code' => $data['code'] ?? null,
                 'location_note' => $data['location_note'] ?? null,
+                'brand' => $data['brand'] ?? null,
+                'model' => $data['model'] ?? null,
+                'serial_no' => $data['serial_no'] ?? null,
                 'is_active' => $data['is_active'] ?? true,
                 'last_control_date' => $data['last_control_date'] ?? null,
                 'next_control_date' => $data['next_control_date'] ?? null,
