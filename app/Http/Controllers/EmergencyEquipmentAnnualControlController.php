@@ -38,6 +38,8 @@ class EmergencyEquipmentAnnualControlController extends Controller
             $pages = $extractor->extractPages($request->file('file'));
             $draft = $parser->parse($pages);
         } catch (\Throwable $exception) {
+            report($exception);
+
             return response()->json(['message' => $exception->getMessage()], 422);
         }
 

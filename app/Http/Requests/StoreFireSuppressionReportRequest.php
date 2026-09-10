@@ -16,6 +16,24 @@ class StoreFireSuppressionReportRequest extends FormRequest
         return true;
     }
 
+    // findings/control_items frontend'den TEK bir JSON string alanı olarak
+    // geliyor (bkz. app/api/fire-suppression-report.ts) — çok sayfalı
+    // raporlarda yüzlerce satırı ayrı ayrı form field'ı (`control_items[123][title]`)
+    // yapmak PHP'nin max_input_vars limitini aşıyordu. Validasyondan ÖNCE
+    // bu string'leri gerçek array'e çeviriyoruz, aşağıdaki rules() hiç
+    // değişmeden aynı şekilde çalışmaya devam ediyor.
+    protected function prepareForValidation(): void
+    {
+        foreach (['findings', 'control_items'] as $field) {
+            $value = $this->input($field);
+
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                $this->merge([$field => is_array($decoded) ? $decoded : []]);
+            }
+        }
+    }
+
     public function rules(): array
     {
         return [

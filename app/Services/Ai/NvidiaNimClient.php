@@ -4,6 +4,7 @@ namespace App\Services\Ai;
 
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 // build.nvidia.com (NVIDIA NIM) — ücretsiz katman, OpenAI-uyumlu
@@ -32,6 +33,7 @@ class NvidiaNimClient
         $attempts = 0;
         $maxAttempts = 3;
         $lastException = null;
+        $lastDiagnostic = null;
 
         while ($attempts < $maxAttempts) {
             $attempts++;
@@ -53,11 +55,23 @@ class NvidiaNimClient
 
                 $decoded = $this->decodeContent($response);
 
-                if ($decoded === null) {
-                    throw new RuntimeException('AI çıktısı geçerli bir JSON olarak ayrıştırılamadı.');
+                if ($decoded !== null) {
+                    return $decoded;
                 }
 
-                return $decoded;
+                // HTTP isteği başarılıydı ama içerik geçerli JSON değildi
+                // (muhtemelen max_tokens'ta yarıda kesildi ya da model
+                // bozuk çıktı üretti) — bunu da GEÇİCİ kabul edip tekrar
+                // deniyoruz (önceden ilk denemede direkt vazgeçiyorduk).
+                // Teşhis için ham çıktının kuyruğunu ve finish_reason'ı
+                // logluyoruz — bir sonraki başarısızlıkta neyin kesildiğini
+                // görebilelim diye.
+                $lastDiagnostic = $this->diagnoseFailure($response);
+                Log::warning('NVIDIA NIM: AI çıktısı JSON olarak ayrıştırılamadı (deneme ' . $attempts . '/' . $maxAttempts . ')', $lastDiagnostic);
+
+                if ($attempts < $maxAttempts) {
+                    sleep($attempts * 3);
+                }
             } catch (\Illuminate\Http\Client\ConnectionException $exception) {
                 $lastException = $exception;
                 if ($attempts < $maxAttempts) {
@@ -66,7 +80,31 @@ class NvidiaNimClient
             }
         }
 
+        if ($lastDiagnostic !== null) {
+            throw new RuntimeException(
+                'AI çıktısı geçerli bir JSON olarak ayrıştırılamadı (finish_reason: '
+                . ($lastDiagnostic['finish_reason'] ?? 'bilinmiyor') . ', içerik uzunluğu: '
+                . $lastDiagnostic['content_length'] . ' karakter). Ayrıntılar için laravel.log.'
+            );
+        }
+
         throw new RuntimeException('NVIDIA NIM isteği tekrar denemelere rağmen başarısız oldu: ' . ($lastException?->getMessage() ?? 'bilinmeyen bağlantı hatası'));
+    }
+
+    // finish_reason "length" ise: model max_tokens sınırına çarpıp yarıda
+    // kesildi demektir — çözümü daha büyük max_tokens ya da daha küçük
+    // prompt/sayfa'dır. Başka bir finish_reason'la gelen bozuk JSON ise
+    // modelin kendisinin ürettiği geçersiz bir çıktı demektir.
+    private function diagnoseFailure(Response $response): array
+    {
+        $content = (string) $response->json('choices.0.message.content');
+
+        return [
+            'finish_reason' => $response->json('choices.0.finish_reason'),
+            'content_length' => mb_strlen($content),
+            'content_tail' => mb_substr($content, -800),
+            'json_error' => json_last_error_msg(),
+        ];
     }
 
     // NOT: Http::pool ile sayfaları paralel gönderme denendi (daha hızlı

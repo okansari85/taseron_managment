@@ -28,18 +28,82 @@ class FireSuppressionReportParser
     public function parse(array $pages): array
     {
         $categories = FireSuppressionInventoryItem::CATEGORIES;
-        $prompt = $this->buildPrompt($categories);
+
+        // U/UD/N MATRİS tablolarını (madde x ekipman) AI'a hiç göndermeden,
+        // düz metin üzerinden DETERMİNİSTİK olarak (regex) ayrıştırıyoruz —
+        // bu iş tamamen mekanik bir işaret-eşleştirme, AI'a bırakmak hem
+        // ÇOK YAVAŞ (geniş bir tabloyu 100+ satırlık JSON'a dökmesi
+        // dakikalarca sürüyordu) hem de HATALI (AI sütunları birbirine
+        // karıştırıp aynı maddeyi mükerrer üretebiliyordu). Bir sayfada
+        // matris bulunursa o sayfa için AI'dan control_items İSTENMEZ —
+        // AI sadece marka/kat gibi bağlamsal alanları okumaya devam eder.
+        $matricesByPage = array_map(
+            fn (string $pageText) => $this->parseControlItemMatrices($pageText),
+            $pages
+        );
+
+        // "6. TESPİT VE BULGULAR" bölümündeki "5.47) ..." gibi numaralı
+        // bulgu maddeleri de matris gibi tamamen mekanik bir formattır —
+        // AI'a hiç göndermeden regex ile ayrıştırılır (bkz. parseFindingsLines).
+        $findingLinesByPage = array_map(
+            fn (string $pageText) => $this->parseFindingsLines($pageText),
+            $pages
+        );
 
         // SIRALI — Http::pool ile paralel gönderim denendi ama NVIDIA NIM
         // ücretsiz katmanı eşzamanlı isteklerde bozuk/eksik JSON döndürüyor
         // (concurrency limiti gibi görünüyor); tek tek sıralı çağrı daha
         // yavaş ama güvenilir olan seçenek.
-        $guesses = array_map(
-            fn (string $pageText) => $this->ai->extractStructuredJson($prompt, $pageText),
-            $pages
-        );
+        $guesses = [];
+        foreach ($pages as $index => $pageText) {
+            $skipControlItems = ($matricesByPage[$index] ?? []) !== [];
+            $skipFindings = ($findingLinesByPage[$index] ?? []) !== [];
+
+            // Sayfa TAMAMEN bir U/UD/N matrisiyse (control_items zaten
+            // deterministik bulundu) AI'ı bu sayfa için HİÇ ÇAĞIRMIYORUZ —
+            // asıl kritik veri (ekipman kodu/durum/açıklama) zaten matris +
+            // bulgu lookup'ından geliyor; marka/kat gibi ikincil bağlamsal
+            // alanlar bu sayfalarda boş kalabilir (kabul edilebilir bir
+            // ödün — hız için). Tarih/firma gibi başlık bilgileri raporun
+            // HER sayfasında tekrar ettiği için başka bir sayfadan
+            // (genelde 1.) zaten yakalanır, kaybolmaz.
+            if ($skipControlItems) {
+                $guesses[] = [];
+
+                continue;
+            }
+
+            $prompt = $this->buildPrompt($categories, $skipControlItems, $skipFindings);
+
+            try {
+                $guesses[] = $this->ai->extractStructuredJson($prompt, $pageText);
+            } catch (\Throwable $exception) {
+                // Hangi sayfanın başarısız olduğu bilinmeden teşhis
+                // imkansız — bu bilgi olmadan önceki hata mesajı sadece
+                // "JSON ayrıştırılamadı" diyordu, 5 sayfadan hangisi
+                // belli değildi.
+                throw new \RuntimeException(
+                    'Sayfa ' . ($index + 1) . '/' . count($pages) . ' işlenirken hata: ' . $exception->getMessage(),
+                    previous: $exception
+                );
+            }
+        }
 
         $guess = $this->mergeGuesses($guesses);
+
+        $equipment = $this->normalizeEquipment(is_array($guess['equipment'] ?? null) ? $guess['equipment'] : [], $categories);
+        $equipment = $this->applyDeterministicControlItems($equipment, $matricesByPage);
+
+        // MİMARİ NOKTA: matris zaten equipment × control_item × sonuç
+        // ilişkisini veriyor ("YD2 → 5.47 → uygun_degil"). Bulgu metni
+        // ("5.47) ...") bu ilişkiyi TEKRAR KURMAZ, sadece 5.47'nin NEDEN
+        // uygunsuz olduğunu açıklar — aynı açıklama o maddeyi paylaşan
+        // TÜM ekipmanlar için geçerlidir. Bu yüzden AI'a/metne "bu bulgu
+        // hangi ekipmana ait" diye SORULMUYOR — sadece madde koduyla basit
+        // bir lookup yapılıyor (applyFindingDescriptions).
+        $allFindingLines = array_merge(...$findingLinesByPage);
+        $aiFindings = $this->normalizeFindings(is_array($guess['findings'] ?? null) ? $guess['findings'] : [], $categories);
+        [$equipment, $findings] = $this->applyFindingDescriptions($equipment, $allFindingLines, $aiFindings);
 
         return [
             'control_date' => $this->normalizeDate($guess['control_date'] ?? null),
@@ -47,9 +111,339 @@ class FireSuppressionReportParser
             'overall_result' => $this->normalizeResult($guess['overall_result'] ?? null),
             'company_name' => $this->normalizeString($guess['company_name'] ?? null),
             'covered_categories' => $this->normalizeCategories(is_array($guess['covered_categories'] ?? null) ? $guess['covered_categories'] : [], $categories),
-            'equipment' => $this->normalizeEquipment(is_array($guess['equipment'] ?? null) ? $guess['equipment'] : [], $categories),
-            'findings' => $this->normalizeFindings(is_array($guess['findings'] ?? null) ? $guess['findings'] : [], $categories),
+            'equipment' => $equipment,
+            'findings' => $findings,
         ];
+    }
+
+    // ------------------------------------------------------------------
+    // DETERMİNİSTİK MATRİS AYRIŞTIRMA — AI'ya hiç gitmeden düz metinden.
+    // ------------------------------------------------------------------
+
+    // Bir sayfada "No / Kod  YD1  YD2  ..." başlık satırını ve onu izleyen
+    // "5.47 Hortum tamburu  UD  UD  ..." gibi madde satırlarını bulur, her
+    // ekipman sütunu için code/title/status listesini üretir. Matris
+    // bulunamazsa boş dizi döner (o zaman AI'dan control_items istenir —
+    // güvenli geri dönüş).
+    //
+    // Dönüş: ['YD1' => [['code'=>'5.38','title'=>'...','status'=>'uygun'], ...], 'YD2' => [...], ...]
+    private function parseControlItemMatrices(string $pageText): array
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $pageText) ?: [];
+        $lines = array_values(array_filter(array_map('trim', $lines), fn (string $l) => $l !== ''));
+
+        $result = [];
+        $codes = [];
+
+        foreach ($lines as $line) {
+            // Başlık satırı: "No / Kod YD1 YD2 YD3 ..." — yeni bir matris
+            // başladığında sütun kodları güncellenir (bir sayfada birden
+            // fazla matris olabilir, örn. YD1-10 ve YD11-20 ayrı tablo).
+            if (preg_match('/No\s*\/?\s*Kod\b\s*(.+)$/iu', $line, $m)) {
+                $tokens = $this->splitWhitespace($m[1]);
+
+                if (count($tokens) >= 2) {
+                    $codes = $tokens;
+
+                    foreach ($codes as $code) {
+                        $result[$code] ??= [];
+                    }
+                }
+
+                continue;
+            }
+
+            if ($codes === []) {
+                continue;
+            }
+
+            // Madde satırı: "5.47 Hortum tamburu UD UD UD UD ..."
+            if (! preg_match('/^(\d+\.\d+)\s+(.+)$/u', $line, $m)) {
+                continue;
+            }
+
+            $itemCode = $m[1];
+            $tokens = $this->splitWhitespace($m[2]);
+            $columnCount = count($codes);
+
+            if (count($tokens) < $columnCount) {
+                continue;
+            }
+
+            $statuses = array_slice($tokens, -$columnCount);
+
+            if (! $this->looksLikeStatusRow($statuses)) {
+                continue;
+            }
+
+            $title = trim(implode(' ', array_slice($tokens, 0, count($tokens) - $columnCount)));
+
+            if ($title === '') {
+                continue;
+            }
+
+            foreach ($codes as $columnIndex => $eqCode) {
+                $status = $this->normalizeControlItemStatus($statuses[$columnIndex] ?? null);
+
+                if ($status === null) {
+                    // "N" (uygulanamaz/değerlendirme dışı) veya tanınmayan
+                    // bir işaret — bu maddeyi bu ekipman için hiç ekleme.
+                    continue;
+                }
+
+                $result[$eqCode][] = ['code' => $itemCode, 'title' => $title, 'status' => $status, 'description' => null];
+            }
+        }
+
+        return array_filter($result, fn (array $items) => $items !== []);
+    }
+
+    // "6. TESPİT VE BULGULAR" bölümündeki "5.47) ..." gibi numaralı bulgu
+    // maddelerini AI'a hiç göndermeden, düz metinden REGEX ile ayrıştırır
+    // — bu format da (tıpkı U/UD/N matrisi gibi) tamamen mekanik: her
+    // madde "N.NN)" ile başlar, sonraki numarasız satırlar (satır
+    // sarması) önceki maddenin devamı sayılır. Böyle bir madde
+    // bulunamazsa boş dizi döner (o zaman AI'dan findings istenir —
+    // güvenli geri dönüş, örn. farklı bir rapor şablonu için).
+    //
+    // Dönüş: [['control_item' => '5.47', 'description' => '...'], ...]
+    private function parseFindingsLines(string $pageText): array
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $pageText) ?: [];
+        $findings = [];
+        $current = null;
+
+        foreach ($lines as $rawLine) {
+            $line = trim($rawLine);
+
+            if ($line === '') {
+                continue;
+            }
+
+            if (preg_match('/^(\d+\.\d+(?:\s*-\s*\d+\.\d+)?)\)\s*(.+)$/u', $line, $m)) {
+                if ($current !== null) {
+                    $findings[] = $current;
+                }
+
+                $current = ['control_item' => $m[1], 'description' => trim($m[2])];
+
+                continue;
+            }
+
+            // Bulgu bloğu başladıktan (en az 1 madde bulunduktan) SONRA
+            // gelen "N. BAŞLIK" şeklinde bir üst-bölüm satırı ("7. NOTLAR"
+            // gibi) bulgu bölümünün bittiğini gösterir. Bölümün KENDİ
+            // başlığı ("6. TESPİT VE BULGULAR") henüz hiç madde
+            // bulunmadan geldiği için yanlışlıkla "bitiş" sayılmaz.
+            if (($findings !== [] || $current !== null) && preg_match('/^\d+\.\s+[A-ZÇĞİÖŞÜ]/u', $line)) {
+                break;
+            }
+
+            if ($current !== null) {
+                $current['description'] .= ' ' . $line;
+            }
+        }
+
+        if ($current !== null) {
+            $findings[] = $current;
+        }
+
+        return $findings;
+    }
+
+    // Bir bulgunun hangi ekipmana ait olduğunu AI'a ya da metne SORMUYORUZ
+    // — madde kodu (örn. "5.47") zaten matriste hangi ekipmanların bunu
+    // "uygun_degil" taşıdığını söylüyor, o yüzden burada sadece basit bir
+    // kod → açıklama lookup'ı yapılıyor: her equipment.control_items[]
+    // kaydının "description"ı, aynı koda sahip bulgunun metniyle
+    // dolduruluyor (birden fazla ekipman aynı maddeyi paylaşıyorsa hepsi
+    // AYNI açıklamayı alır — bu doğrudur, çünkü bulgu zaten o maddeyi
+    // genel olarak açıklıyor, ekipmana özel değil).
+    //
+    // Matriste karşılığı olmayan bulgular (örn. "5.1-5.39" aralığı, pompa
+    // checklist'i gibi matrissiz maddeler) equipment'e bağlanamaz — genel
+    // bulgu listesi olarak (ikinci dönüş değeri) korunur.
+    private function applyFindingDescriptions(array $equipment, array $findingLines, array $aiFindings): array
+    {
+        $matrixHasCode = [];
+        foreach ($equipment as $eq) {
+            foreach ($eq['control_items'] ?? [] as $ci) {
+                if ($ci['code'] !== null) {
+                    $matrixHasCode[$this->normalizeCodeKey($ci['code'])] = true;
+                }
+            }
+        }
+
+        $descriptionByCode = [];
+        $generalFindings = [];
+
+        $addLine = function (?string $rawCode, string $description) use (&$descriptionByCode, &$generalFindings, $matrixHasCode): void {
+            $itemCode = $this->extractMaddeCode($rawCode);
+            $key = $itemCode !== null ? $this->normalizeCodeKey($itemCode) : null;
+
+            if ($key !== null && isset($matrixHasCode[$key])) {
+                $descriptionByCode[$key] = isset($descriptionByCode[$key])
+                    ? $descriptionByCode[$key] . ' ' . $description
+                    : $description;
+
+                return;
+            }
+
+            $generalFindings[] = [
+                'category' => null,
+                'control_item' => $rawCode,
+                'description' => $description,
+                'scope' => 'unknown',
+                'area_note' => null,
+                'is_uncertain' => false,
+            ];
+        };
+
+        foreach ($findingLines as $line) {
+            $addLine($line['control_item'], $line['description']);
+        }
+
+        foreach ($aiFindings as $finding) {
+            $addLine($finding['control_item'], $finding['description']);
+        }
+
+        foreach ($equipment as $i => $eq) {
+            $udDescriptions = [];
+
+            foreach ($eq['control_items'] ?? [] as $j => $ci) {
+                if ($ci['code'] === null) {
+                    continue;
+                }
+
+                $key = $this->normalizeCodeKey($ci['code']);
+
+                if (! isset($descriptionByCode[$key])) {
+                    continue;
+                }
+
+                $equipment[$i]['control_items'][$j]['description'] = $descriptionByCode[$key];
+
+                if ($ci['status'] === 'uygun_degil') {
+                    $udDescriptions[] = $descriptionByCode[$key];
+                }
+            }
+
+            if ($udDescriptions !== []) {
+                // Bulgudan gelen GERÇEK açıklama, madde başlıklarından
+                // daha bilgilendiricidir — equipment.note'u bununla
+                // değiştiriyoruz.
+                $equipment[$i]['note'] = implode(' ', array_values(array_unique($udDescriptions)));
+            }
+        }
+
+        return [$equipment, $generalFindings];
+    }
+
+    private function splitWhitespace(string $value): array
+    {
+        return array_values(array_filter(preg_split('/\s+/u', trim($value)) ?: [], fn (string $t) => $t !== ''));
+    }
+
+    private function looksLikeStatusRow(array $tokens): bool
+    {
+        foreach ($tokens as $token) {
+            if (! preg_match('/^(U|UD|N|-)$/iu', $token)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Deterministik olarak bulunan matris sonuçlarını normalizeEquipment()
+    // çıktısına koda göre işler — kod zaten AI'ın equipment listesinde
+    // varsa üzerine yazar (matris = tek doğruluk kaynağı), yoksa (AI o
+    // sütunu hiç bulamadıysa) en azından kod + maddeleriyle yeni bir kayıt
+    // ekler. Sonrasında result/note bu GERÇEK verilerden yeniden hesaplanır.
+    private function applyDeterministicControlItems(array $equipment, array $matricesByPage): array
+    {
+        $mergedItems = [];
+        $displayCode = [];
+
+        foreach ($matricesByPage as $pageMatrix) {
+            foreach ($pageMatrix as $code => $items) {
+                $key = $this->normalizeCodeKey($code);
+                $mergedItems[$key] = $this->mergeControlItemLists($mergedItems[$key] ?? [], $items);
+                $displayCode[$key] ??= $code;
+            }
+        }
+
+        if ($mergedItems === []) {
+            return $equipment;
+        }
+
+        $indexByKey = [];
+        foreach ($equipment as $i => $item) {
+            if ($item['code'] !== null) {
+                $indexByKey[$this->normalizeCodeKey($item['code'])] = $i;
+            }
+        }
+
+        foreach ($mergedItems as $key => $items) {
+            if (isset($indexByKey[$key])) {
+                $equipment[$indexByKey[$key]]['control_items'] = $items;
+
+                continue;
+            }
+
+            // AI bu ekipmanı hiç bulamadı ama matriste kodu var — en
+            // azından kod + maddeleriyle bir kayıt oluştur, kaybolmasın.
+            $equipment[] = [
+                'code' => $displayCode[$key],
+                'category' => null,
+                'location_note' => null,
+                'brand' => null,
+                'model' => null,
+                'serial_no' => null,
+                'result' => null,
+                'note' => null,
+                'control_items' => $items,
+                'is_uncertain' => false,
+            ];
+        }
+
+        foreach ($equipment as $i => $item) {
+            if (empty($item['control_items'])) {
+                continue;
+            }
+
+            $hasNonconformity = false;
+            foreach ($item['control_items'] as $ci) {
+                if ($ci['status'] === 'uygun_degil') {
+                    $hasNonconformity = true;
+
+                    break;
+                }
+            }
+
+            $equipment[$i]['result'] = $hasNonconformity ? 'uygun_degil' : 'uygun';
+
+            if (empty($equipment[$i]['note']) && $hasNonconformity) {
+                $udTitles = array_values(array_filter(array_map(
+                    fn (array $ci) => $ci['status'] === 'uygun_degil' ? $ci['title'] : null,
+                    $item['control_items']
+                )));
+
+                if ($udTitles !== []) {
+                    $equipment[$i]['note'] = implode('; ', $udTitles);
+                }
+            }
+        }
+
+        return array_values($equipment);
+    }
+
+    // Ekipman kodlarını (AI'dan gelen ile matristen gelen) karşılaştırırken
+    // hem harf büyüklüğü hem aradaki olası boşluk farklarını yok sayar
+    // (örn. "YD1" ile "yd 1" aynı kabul edilsin).
+    private function normalizeCodeKey(string $code): string
+    {
+        return $this->toLowerTr(preg_replace('/\s+/u', '', trim($code)) ?? '');
     }
 
     // Her sayfanın ham AI tahminini tek bir ham tahmine birleştirir —
@@ -122,6 +516,10 @@ class FireSuppressionReportParser
                     // yetmez — aynı ekipman kodu farklı sayfalarda farklı
                     // maddelerle geçebilir (örn. matris birden fazla sayfaya
                     // bölünmüşse), bu yüzden madde koduna göre birleştirilir.
+                    // NOT: matris bulunan sayfalarda AI'dan zaten
+                    // control_items istenmiyor, bu dal artık sadece AI'ın
+                    // (matris bulunamayan sayfalarda) ürettiği düzyazı
+                    // madde-sonuç listeleri için çalışıyor.
                     if ($key === 'control_items') {
                         $equipmentByCode[$code]['control_items'] = $this->mergeControlItemLists(
                             is_array($equipmentByCode[$code]['control_items'] ?? null) ? $equipmentByCode[$code]['control_items'] : [],
@@ -143,10 +541,10 @@ class FireSuppressionReportParser
         return $merged;
     }
 
-    // Aynı ekipmanın control_items'ini iki sayfadan birleştirirken madde
-    // kodu (yoksa başlığı) anahtar olarak kullanılır — sonraki sayfadan
-    // gelen aynı maddeli kayıt, öncekinin üzerine yazar (daha tam/güncel
-    // kabul edilir), yeni maddeler diziye eklenir.
+    // Aynı ekipmanın control_items'ini birleştirirken madde kodu (yoksa
+    // başlığı) anahtar olarak kullanılır — böylece aynı madde iki kez
+    // eklenemez (mükerrerlik burada YAPISAL olarak engellenir), sonraki
+    // kaynaktan gelen aynı maddeli kayıt öncekinin üzerine yazar.
     private function mergeControlItemLists(array $existing, array $incoming): array
     {
         $byKey = [];
@@ -185,9 +583,44 @@ class FireSuppressionReportParser
         return false;
     }
 
-    private function buildPrompt(array $categories): string
+    // $skipControlItems: bu sayfada matris deterministik olarak zaten
+    // ayrıştırıldıysa true — o zaman AI'dan control_items İSTENMEZ (hem
+    // gereksiz hem YAVAŞ hem HATAYA AÇIK), AI sadece marka/kat gibi
+    // bağlamsal alanları okumaya devam eder.
+    // $skipFindings: bu sayfada "N.NN) ..." formatlı bulgu maddeleri
+    // deterministik olarak zaten ayrıştırıldıysa true — AI'dan "findings"
+    // HİÇ İSTENMEZ (bulgu analizinde artık AI kullanılmıyor, sadece
+    // matris/regex + basit kod-eşleştirmesi).
+    private function buildPrompt(array $categories, bool $skipControlItems = false, bool $skipFindings = false): string
     {
         $categoryList = implode(', ', $categories);
+
+        $controlItemsSchemaField = $skipControlItems
+            ? ''
+            : ', "control_items": [{"code": "madde numarası, örn. 5.47", "title": "madde metni, örn. Hortum tamburu", "status": "uygun"|"uygun_degil"}]';
+
+        $controlItemsSection = $skipControlItems
+            ? "\nBu sayfadaki U/UD/N madde-matrisi (varsa) AYRI, deterministik bir mekanizmayla zaten işlendi — equipment kayıtlarına \"control_items\" alanını EKLEME/DOLDURMA. has_nonconformity alanını yine de matristeki UD işaretlerine bakarak var/yok şeklinde doldurabilirsin (zararı yok, kullanılmayabilir de)."
+            : <<<CI
+
+"equipment[].control_items" — ÇOK ÖNEMLİ, rapordaki GERÇEK kontrol maddelerini (sabit/önceden tanımlı bir liste DEĞİL, o SAYFADA yazan maddeler) ekipman bazında çıkarmak için: kontrol maddeleri genelde numaralı bir MATRİS tablosunda olur — SATIRLAR numaralı kontrol maddeleridir (örn. "5.38 Hortumda TSE standardı varlığı", "5.47 Hortum tamburu"), SÜTUNLAR ekipman kodlarıdır (örn. YD1, YD2, ... YD10), HÜCRELER o ekipmanın o maddedeki sonucudur (U=uygun, UD=uygun değil, N=uygulanamaz/yok). Böyle bir matris gördüğünde HER ekipman sütunu için HER satırı (N olanlar HARİÇ) o ekipmanın "control_items" dizisine bir obje olarak ekle: code=satır no, title=satır başlığı (aynen metindeki gibi), status="uygun" (hücre U ise) veya "uygun_degil" (hücre UD ise). Hücre "N" ise o maddeyi HİÇ EKLEME. AYNI MADDEYİ AYNI EKİPMAN İÇİN ASLA İKİ KEZ EKLEME. Örnek:
+  Girdi (matris, kısmi):
+    No/Kod                                      YD1  YD2
+    5.38 Hortumda TSE standardı varlığı           U    U
+    5.39 Projede gösterilen yerde ve özellikte olması  UD   UD
+    5.47 Hortum tamburu                            UD   U
+    5.52 Hortum Kılavuzu                            N    N
+  Çıktı — YD1 kaydının control_items dizisi: [{"code":"5.38","title":"Hortumda TSE standardı varlığı","status":"uygun"},{"code":"5.39","title":"Projede gösterilen yerde ve özellikte olması","status":"uygun_degil"},{"code":"5.47","title":"Hortum tamburu","status":"uygun_degil"}] (5.52 satırı "N" olduğu için YOK). YD2 kaydının control_items dizisinde ise 5.47 "status":"uygun" olur (o hücre U). Matris değil de tek bir ekipman için düzyazı/liste halinde madde-sonuç eşleşmesi varsa (matris olmadan), yine aynı şekilde her maddeyi code/title/status ile control_items dizisine ekle. Bu sayfada hiçbir kontrol maddesi/matris YOKSA control_items dizisini boş [] bırak — UYDURMA, önceden tanımlı bir liste kullanma, SADECE bu sayfada gerçekten yazan maddeleri çıkar.
+CI;
+
+        $findingsSchemaField = $skipFindings
+            ? ''
+            : ',
+  "findings": [{"category": "kategori_kodu", "control_item": "madde numarası varsa, örn. \'5.47\'", "description": "string", "scope": "specific"|"area"|"unknown", "area_note": "string"}]';
+
+        $findingsSection = $skipFindings
+            ? "\nBu sayfadaki \"N.NN) ...\" formatlı numaralı bulgu maddeleri (varsa) AYRI, deterministik bir mekanizmayla zaten işlendi — \"findings\" alanını HİÇ ÜRETME/DOLDURMA."
+            : "\n\"findings\" dizisi SADECE düzyazı (cümle) halinde yazılmış tespit/bulgu/öneri maddeleridir (genellikle \"TESPİT VE BULGULAR\" başlıklı bir bölümde bulunur). Bu sayfada böyle bir bölüm/cümle YOKSA findings dizisini BOŞ [] bırak. Bir ekipman tablosundaki U/UD/N işaretlerini veya sayısal ölçüm değerlerini ASLA finding description'ı olarak yazma — bunlar finding değildir.\n\"findings[].description\": Cümleyi AYNEN metindeki gibi kopyala (içinde geçen ekipman kodları dahil, kısaltma/özetleme yapma) — bu cümledeki ekipman kodlarını hangi ekipmana bağlayacağımızı AYRI, deterministik bir adımda BİZ metinden çıkaracağız, sen bunun için ayrı bir liste üretme.";
 
         return <<<PROMPT
 Sen bir yangın söndürme sistemleri periyodik kontrol raporundan HAM veri çıkaran bir asistansın.
@@ -199,8 +632,7 @@ Aşağıdaki metinden şu JSON şemasına göre veri çıkar, SADECE JSON dönd�
   "overall_result": "raporun EN SONUNDAKİ 'SONUÇ VE KANAAT' (veya benzeri başlıklı) bölümünde yazan nihai ifade, aynen metindeki gibi",
   "company_name": "kontrolü/muayeneyi yapan akredite/yetkili firmanın unvanı (rapor başlığı/logosu, alt bilgi veya 'muayene kuruluşu' alanında geçer) — kontrol edilen TESİSİN/MÜŞTERİNİN unvanı DEĞİL",
   "covered_categories": ["kategori_kodu", ...],
-  "equipment": [{"code": "string", "category": "kategori_kodu", "location_note": "string", "brand": "marka", "model": "model", "serial_no": "seri no", "has_nonconformity": true|false, "note": "bu ekipmana özel tespit/bulgu açıklaması (varsa)", "control_items": [{"code": "madde numarası, örn. 5.47", "title": "madde metni, örn. Hortum tamburu", "status": "uygun"|"uygun_degil"}]}],
-  "findings": [{"category": "kategori_kodu", "control_item": "string", "description": "string", "scope": "specific"|"area"|"unknown", "area_note": "string", "equipment_codes": ["string", ...]}]
+  "equipment": [{"code": "string", "category": "kategori_kodu", "location_note": "string", "brand": "marka", "model": "model", "serial_no": "seri no", "has_nonconformity": true|false, "note": "bu ekipmana özel tespit/bulgu açıklaması (varsa)"{$controlItemsSchemaField}}]{$findingsSchemaField}
 }
 
 ÖNEMLİ — Ekipmanlar tablo halinde, SÜTUN olarak listelenmiş olabilir (örn. "YD1 YD2 YD3 ... YD20" başlıkları bir satırda, altında marka/uzunluk/kontrol maddesi sonuçları (U/UD/N) her sütun için ayrı ayrı verilir). Bu durumda TABLODAKİ HER SÜTUNU (her ekipman kodunu) AYRI bir "equipment" kaydı olarak çıkar — 5, 10, 20, hatta daha fazla ekipman olabilir, HİÇBİRİNİ ATLAMA.
@@ -211,22 +643,12 @@ AYNI KURAL POMPALAR İÇİN DE GEÇERLİ — "Pompa No 1 2 3 Jokey" gibi bir ba�
     Seri No        A1205075 A1205075 -    -
   Çıktı equipment kayıtları: {"code":"Pompa 1","category":"yangin_pompasi","brand":"MAS","serial_no":"A1205075",...} ve {"code":"Pompa 2","category":"yangin_pompasi","brand":"MAS","serial_no":"A1205075",...} — "3" ve "Jokey" sütunları ATLANIR çünkü o sütundaki TÜM satırlar (Marka, Seri No, Yakıt, Güç, Debi, Basınç) "-" değerinde; bu, o cihazın kurulu OLMADIĞI anlamına gelir, "değerlendirme dışı jokey pompa" gibi bir yorum UYDURMA. KURAL: bir sütunda Marka/Seri No dahil TÜM satır değerleri "-" veya boşsa, o sütun için HİÇ equipment kaydı oluşturma.
 "equipment[].has_nonconformity": SAYIM YAPMA, SADECE VAR/YOK kontrolü yap — o ekipmanın sütunundaki kontrol maddesi satırlarını (U/UD/N) tek tek tara, İÇLERİNDE EN AZ BİR TANE "UD" (Uygun Değil) işareti VARSA true yaz; hiç "UD" yoksa (hepsi "U" veya "N" ise) false yaz. Kaç tane UD olduğunu SAYMANA gerek yok, sadece "en az bir tane var mı" sorusuna cevap ver — bu çok daha kolay ve hataya kapalıdır.
-"equipment[].note": Raporun "TESPİT VE BULGULAR"/"6. TESPİT VE BULGULAR" gibi bir bölümünde bu ekipmanın kodu açıkça geçiyorsa (örn. "YD14 ve YD15 nolu yangın dolaplarında hasar var düzeltilmelidir"), o cümleyi/açıklamayı bu ekipmanın "note" alanına yaz.
-"equipment[].control_items" — ÇOK ÖNEMLİ, rapordaki GERÇEK kontrol maddelerini (sabit/önceden tanımlı bir liste DEĞİL, o SAYFADA yazan maddeler) ekipman bazında çıkarmak için: kontrol maddeleri genelde numaralı bir MATRİS tablosunda olur — SATIRLAR numaralı kontrol maddeleridir (örn. "5.38 Hortumda TSE standardı varlığı", "5.47 Hortum tamburu"), SÜTUNLAR ekipman kodlarıdır (örn. YD1, YD2, ... YD10), HÜCRELER o ekipmanın o maddedeki sonucudur (U=uygun, UD=uygun değil, N=uygulanamaz/yok). Böyle bir matris gördüğünde HER ekipman sütunu için HER satırı (N olanlar HARİÇ) o ekipmanın "control_items" dizisine bir obje olarak ekle: code=satır no, title=satır başlığı (aynen metindeki gibi), status="uygun" (hücre U ise) veya "uygun_degil" (hücre UD ise). Hücre "N" ise o maddeyi HİÇ EKLEME. Örnek:
-  Girdi (matris, kısmi):
-    No/Kod                                      YD1  YD2
-    5.38 Hortumda TSE standardı varlığı           U    U
-    5.39 Projede gösterilen yerde ve özellikte olması  UD   UD
-    5.47 Hortum tamburu                            UD   U
-    5.52 Hortum Kılavuzu                            N    N
-  Çıktı — YD1 kaydının control_items dizisi: [{"code":"5.38","title":"Hortumda TSE standardı varlığı","status":"uygun"},{"code":"5.39","title":"Projede gösterilen yerde ve özellikte olması","status":"uygun_degil"},{"code":"5.47","title":"Hortum tamburu","status":"uygun_degil"}] (5.52 satırı "N" olduğu için YOK). YD2 kaydının control_items dizisinde ise 5.47 "status":"uygun" olur (o hücre U). Matris değil de tek bir ekipman için düzyazı/liste halinde madde-sonuç eşleşmesi varsa (matris olmadan), yine aynı şekilde her maddeyi code/title/status ile control_items dizisine ekle. Bu sayfada hiçbir kontrol maddesi/matris YOKSA control_items dizisini boş [] bırak — UYDURMA, önceden tanımlı bir liste kullanma, SADECE bu sayfada gerçekten yazan maddeleri çıkar.
-"findings[].equipment_codes": TESPİT VE BULGULAR bölümündeki her madde için, o maddede adı geçen TÜM ekipman kodlarını listele — bazen tek tek ("YD19"), bazen virgülle ayrılmış uzun bir liste halinde geçebilir ("YD1, YD2, YD3, YD4, YD14, ..."), hiçbirini atlama. Madde birden fazla ekipmandan bahsediyorsa hepsini equipment_codes dizisine ekle. Bu dizide SADECE equipment listesindeki gerçek "code" değerleri olur — asla kategori adı ("yangin_pompasi" gibi) yazma; ilgili ekipmanın kodu belli değilse equipment_codes'u boş bırak.
+"equipment[].note": Raporun "TESPİT VE BULGULAR"/"6. TESPİT VE BULGULAR" gibi bir bölümünde bu ekipmanın kodu açıkça geçiyorsa (örn. "YD14 ve YD15 nolu yangın dolaplarında hasar var düzeltilmelidir"), o cümleyi/açıklamayı bu ekipmanın "note" alanına yaz.{$controlItemsSection}{$findingsSection}
 overall_result için: satır içindeki "U"/"UD" kısaltmalarıyla KARIŞTIRMA — sadece raporun nihai SONUÇ/KANAAT cümlesini kullan.
 Tarihi veya sonuç ifadelerini normalize etmeye ÇALIŞMA — metinde ne yazıyorsa onu aynen döndür, bu işi başka bir katman yapacak.
 
 ÖNEMLİ — Sana verilen metin BÜYÜK bir raporun SADECE BİR SAYFASI olabilir (rapor sayfa sayfa işleniyor). Bu sayfada bir bilgi (örn. control_date, company_name, overall_result) YOKSA bu NORMALDİR — o alanı null bırak. ASLA "metinde bulunamadı", "belirtilmemiş" gibi bir AÇIKLAMA CÜMLESİ yazma — sadece JSON null kullan, string değer olarak "yok"/"bulunamadı" gibi bir metin ASLA yazma.
-"findings" dizisi SADECE düzyazı (cümle) halinde yazılmış tespit/bulgu/öneri maddeleridir (genellikle "TESPİT VE BULGULAR" başlıklı bir bölümde bulunur). Bu sayfada böyle bir bölüm/cümle YOKSA findings dizisini BOŞ [] bırak. Bir ekipman tablosundaki U/UD/N işaretlerini veya sayısal ölçüm değerlerini ASLA finding description'ı olarak yazma — bunlar finding değildir.
-"equipment" kaydı SADECE gerçek bir ekipman tablosundan (kod/marka/seri no vb. sütunları olan bir tablo) türetilir. Bir "TESPİT VE BULGULAR" cümlesinde geçen bir ekipmandan (örn. "Dizel pompa çalışmıyor") bahsediliyor diye o cümleden YENİ bir equipment kaydı UYDURMA — sadece mevcut equipment kodlarına (bu sayfada tablo varsa) veya findings[].equipment_codes'a referans ver; bu sayfada o ekipmanın tablosu yoksa hiçbir equipment kaydı oluşturma, sadece bir finding olarak yaz.
+"equipment" kaydı SADECE gerçek bir ekipman tablosundan (kod/marka/seri no vb. sütunları olan bir tablo) türetilir. Bir "TESPİT VE BULGULAR" cümlesinde geçen bir ekipmandan (örn. "Dizel pompa çalışmıyor") bahsediliyor diye o cümleden YENİ bir equipment kaydı UYDURMA — bu sayfada o ekipmanın tablosu yoksa hiçbir equipment kaydı oluşturma, sadece bir finding olarak yaz.
 Metinde açıkça olmayan bilgiyi ASLA uydurma, null bırak. "scope" alanını sadece metinde kapsam açıkça belirtilmişse "specific"/"area" yap, aksi halde "unknown" kullan — asla otomatik olarak "all" üretme.
 PROMPT;
     }
@@ -399,13 +821,17 @@ PROMPT;
         return null;
     }
 
+    // Aynı madde koduyla birden fazla obje gelirse (AI'ın ender de olsa
+    // aynı maddeyi tekrar yazması ihtimaline karşı) mergeControlItemLists
+    // ile aynı dedup mantığı burada da uygulanır — SON kez tekrar etmiş
+    // olsa bile sonuçta her kod en fazla BİR KEZ yer alır.
     private function normalizeControlItems(mixed $raw): array
     {
         if (! is_array($raw)) {
             return [];
         }
 
-        return array_values(array_filter(array_map(function ($ci) {
+        $items = array_values(array_filter(array_map(function ($ci) {
             $ci = is_array($ci) ? $ci : [];
             $title = $this->normalizeString($ci['title'] ?? null);
             $status = $this->normalizeControlItemStatus($ci['status'] ?? null);
@@ -418,10 +844,21 @@ PROMPT;
                 'code' => $this->normalizeString($ci['code'] ?? null),
                 'title' => $title,
                 'status' => $status,
+                // Bulgu metninden (applyFindingDescriptions) sonradan
+                // doldurulur — burada henüz bilinmiyor.
+                'description' => null,
             ];
         }, $raw)));
+
+        return $this->mergeControlItemLists([], $items);
     }
 
+    // AI'dan artık sadece matriste karşılığı OLMAYAN (aralık/pompa vb.)
+    // sayfalarda, bulgu regex'i hiçbir şey bulamadığında fallback olarak
+    // istenir — bkz. parse()'daki $skipFindings. equipment_codes YOK
+    // artık: bir bulgunun hangi ekipmana ait olduğu AI'a/metne değil,
+    // sadece control_item koduyla matrise bakılarak (applyFindingDescriptions)
+    // belirlenir.
     private function normalizeFindings(array $rawFindings, array $categories): array
     {
         $scopes = FireSuppressionReportFinding::SCOPES;
@@ -438,12 +875,19 @@ PROMPT;
                 'description' => $description,
                 'scope' => $scope,
                 'area_note' => $this->normalizeString($item['area_note'] ?? null),
-                'equipment_codes' => array_values(array_filter(array_map(
-                    fn ($c) => $this->normalizeString(is_string($c) ? $c : null),
-                    is_array($item['equipment_codes'] ?? null) ? $item['equipment_codes'] : []
-                ))),
                 'is_uncertain' => $description === '',
             ];
         }, $rawFindings));
+    }
+
+    // "5.47", "5.47)", "Madde 5.47" gibi varyasyonlardan sadece "5.47"
+    // kısmını çıkarır.
+    private function extractMaddeCode(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return preg_match('/\d+\.\d+/', $value, $m) === 1 ? $m[0] : null;
     }
 }
