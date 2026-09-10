@@ -51,6 +51,20 @@ class FireSuppressionOptimizedReportParser
             if ($type === PdfPageClassifier::EQUIPMENT_LIST) {
                 $records = $this->equipmentListParser->parse($text);
 
+                // GEÇİCİ TEŞHİS LOGU — dolap/hidrant sayısının gerçek
+                // rapordan mı az geldiğini yoksa parser'ın bir kısmı
+                // mükerrer/erken kesiyor mu diye görmek için (kaldırılacak).
+                if ($records !== []) {
+                    $codes = array_map(fn (array $r) => (int) preg_replace('/\D/', '', (string) $r['code']), $records);
+                    Log::info('FireSuppressionOptimizedReportParser: ekipman bölümü ayrıştırıldı', [
+                        'topic' => $section['topic'],
+                        'raw_record_count' => count($records),
+                        'unique_codes' => count(array_unique(array_column($records, 'code'))),
+                        'min_code' => $codes === [] ? null : min($codes),
+                        'max_code' => $codes === [] ? null : max($codes),
+                    ]);
+                }
+
                 // Only skip AI when the deterministic parser actually found
                 // complete equipment records. Otherwise the old parser gets
                 // the section as a safe fallback.
@@ -180,14 +194,14 @@ class FireSuppressionOptimizedReportParser
         $indexByCode = [];
 
         foreach ($primary as $index => $item) {
-            $code = $this->normalizeCode($item['code'] ?? null);
+            $code = $this->equipmentMergeKey($item);
             if ($code !== null) {
                 $indexByCode[$code] = $index;
             }
         }
 
         foreach ($secondary as $item) {
-            $code = $this->normalizeCode($item['code'] ?? null);
+            $code = $this->equipmentMergeKey($item);
 
             if ($code !== null && isset($indexByCode[$code])) {
                 $index = $indexByCode[$code];
@@ -278,6 +292,27 @@ class FireSuppressionOptimizedReportParser
         }
 
         return $draft;
+    }
+
+    // Ekipman kodları KATEGORİ İÇİNDE benzersizdir, TÜM rapor genelinde
+    // değil — dolap listesi "1,2,3..." ile başlar, hidrant listesi de AYNI
+    // "1,2,3..." ile başlar (bkz. gerçek rapor: A Dolap No 1 2 3 4 5 / A
+    // Hidrant No 1 2 3 4 5). Eşleştirmeyi SADECE koda göre yapmak (kategori
+    // yoksayılarak) hidrant kaydı "1"i dolap kaydı "1"in ÜZERİNE düşürüyordu
+    // — 37 hidrant kaydının TAMAMI bu yüzden sessizce kayboluyordu (gerçek
+    // testte kategori dağılımında "hidrant" hiç görünmedi). Anahtara
+    // kategoriyi de katmak bu çakışmayı ortadan kaldırır.
+    private function equipmentMergeKey(array $item): ?string
+    {
+        $code = $this->normalizeCode($item['code'] ?? null);
+
+        if ($code === null) {
+            return null;
+        }
+
+        $category = trim((string) ($item['category'] ?? ''));
+
+        return ($category !== '' ? mb_strtolower($category, 'UTF-8') : '') . '|' . $code;
     }
 
     private function normalizeCode(mixed $value): ?string
