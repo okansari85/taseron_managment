@@ -3,16 +3,12 @@
 namespace App\Services\Ai;
 
 /**
- * Extracts the simple repeating equipment tables found in fire suppression
- * inspection reports. It is intentionally conservative and returns only
- * records with a clear equipment number and location/measurement context.
+ * Conservative parser for repeating equipment-list tables.
  *
- * Supported first-pass shapes:
- * - Yangın Dolabı Listesi / Dolap No + Bulunduğu Yer
- * - Hidrant Listesi / Hidrant No + Bulunduğu Yer
- * - Sprinkler Listesi
- *
- * This parser does not decide database identity or perform matching.
+ * It emits records only when an equipment number and its corresponding
+ * location can be aligned without guessing. If the PDF text extractor loses
+ * column boundaries, it returns an empty result and the existing AI parser
+ * remains the fallback.
  */
 class FireSuppressionEquipmentListParser
 {
@@ -26,54 +22,45 @@ class FireSuppressionEquipmentListParser
             return [];
         }
 
+        $numbers = [];
+        $locations = [];
+        $pressures = [];
+        $measurements = [];
         $records = [];
-        $currentNumbers = [];
-        $currentLocations = [];
-        $currentPressures = [];
-        $currentMeasurements = [];
 
         foreach ($lines as $line) {
             if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Dolap|Hidrant)\s+No\s+(.+)$/iu', $line, $m)) {
-                $currentNumbers = $this->splitValues($m[1]);
-                $currentLocations = [];
-                $currentPressures = [];
-                $currentMeasurements = [];
+                $numbers = $this->splitEquipmentNumbers($m[1]);
                 continue;
             }
 
-            if (preg_match('/^Soru\s*\/\s*Kriter\s+/iu', $line)) {
+            if (preg_match('/^(?:[A-Z]{1,3}\s+)?Bulunduğu\s+Yer\s+(.+)$/iu', $line, $m)) {
+                $locations = $this->splitColumns($m[1]);
                 continue;
             }
 
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Bulunduğu\s+Yer)\s+(.+)$/iu', $line, $m)) {
-                $currentLocations = $this->splitValues($m[1]);
-                continue;
-            }
-
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Ölçülen\s+Basınç)\s+(.+)$/iu', $line, $m)) {
-                $currentPressures = $this->splitValues($m[1]);
+            if (preg_match('/^(?:[A-Z]{1,3}\s+)?Ölçülen\s+Basınç\s+(.+)$/iu', $line, $m)) {
+                $pressures = $this->splitColumns($m[1]);
                 continue;
             }
 
             if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Hortum\s+Uzunluğu|Korunan\s+Alandan\s+Uzaklığı|Hidrantlar\s+Arası\s+Max\.\s+Mesafe)\s+(.+)$/iu', $line, $m)) {
-                $currentMeasurements[] = $this->splitValues($m[1]);
+                $measurements[] = $this->splitColumns($m[1]);
             }
 
-            if ($currentNumbers !== [] && $currentLocations !== []) {
+            if ($numbers !== [] && $locations !== []) {
                 $records = array_merge(
                     $records,
-                    $this->buildRecords($equipmentType, $currentNumbers, $currentLocations, $currentPressures, $currentMeasurements)
+                    $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
                 );
-                $currentNumbers = [];
-                $currentLocations = [];
-                $currentPressures = [];
-                $currentMeasurements = [];
+
+                $numbers = [];
+                $locations = [];
+                $pressures = [];
+                $measurements = [];
             }
         }
 
-        // Some PDF text extractors place the label/value on adjacent lines.
-        // The first-pass parser above intentionally avoids guessing across
-        // arbitrary lines; only complete number+location groups are emitted.
         return $this->deduplicate($records);
     }
 
@@ -96,35 +83,63 @@ class FireSuppressionEquipmentListParser
         return null;
     }
 
-    private function splitValues(string $value): array
+    private function splitEquipmentNumbers(string $value): array
     {
-        $value = trim(preg_replace('/\s+/u', ' ', $value) ?? '');
+        $value = trim($value);
         if ($value === '') {
             return [];
         }
 
-        // Keep compound equipment numbers (e.g. 48-49-50) intact for the
-        // caller; splitting those into identities requires a separate rule.
-        return preg_split('/\s{2,}|\s+(?=\d+(?:-\d+)+$)/u', $value) ?: [$value];
+        // Equipment identifiers are short and do not contain spaces.
+        $tokens = preg_split('/\s+/u', $value) ?: [];
+
+        return array_values(array_filter($tokens, function (string $token): bool {
+            return (bool) preg_match('/^(?:[A-ZÇĞİÖŞÜ]{0,3}\s*)?\d+(?:[-\/]\d+)*$/iu', $token);
+        }));
+    }
+
+    private function splitColumns(string $value): array
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return [];
+        }
+
+        // Two or more spaces / tabs are the only safe column boundary for
+        // free-text locations. A single-space fallback would split a place
+        // name such as "Zemin Kat Koridor" incorrectly, so we deliberately
+        // refuse to guess when the extractor flattened the columns.
+        $columns = preg_split('/(?:\t+|\s{2,})/u', $value) ?: [];
+        $columns = array_values(array_filter(array_map('trim', $columns), fn (string $item) => $item !== ''));
+
+        return count($columns) >= 1 ? $columns : [];
     }
 
     private function buildRecords(string $type, array $numbers, array $locations, array $pressures, array $measurements): array
     {
+        if (count($numbers) !== count($locations)) {
+            return [];
+        }
+
         $records = [];
-        $count = min(count($numbers), count($locations));
 
-        for ($i = 0; $i < $count; $i++) {
-            $number = trim((string) $numbers[$i]);
-            $location = trim((string) $locations[$i]);
-
+        foreach ($numbers as $i => $number) {
+            $location = trim((string) ($locations[$i] ?? ''));
             if ($number === '' || $location === '') {
                 continue;
             }
 
             $record = [
+                'code' => trim($number),
                 'category' => $type,
-                'source_code' => $number,
                 'location_note' => $location,
+                'brand' => null,
+                'model' => null,
+                'serial_no' => null,
+                'result' => null,
+                'note' => null,
+                'control_items' => [],
+                'is_uncertain' => false,
             ];
 
             if (isset($pressures[$i])) {
@@ -149,7 +164,7 @@ class FireSuppressionEquipmentListParser
         $result = [];
 
         foreach ($records as $record) {
-            $key = ($record['category'] ?? '') . '|' . ($record['source_code'] ?? '') . '|' . ($record['location_note'] ?? '');
+            $key = ($record['category'] ?? '') . '|' . ($record['code'] ?? '') . '|' . ($record['location_note'] ?? '');
             if (isset($seen[$key])) {
                 continue;
             }
