@@ -8,83 +8,132 @@ use Illuminate\Support\Facades\Log;
  * Thin orchestration layer around the existing report parser.
  *
  * It does not replace FireSuppressionReportParser. It only decides which
- * pages need AI and lets the existing parser continue to own normalization.
+ * BÖLÜMLER (sections, not raw pages — bkz. ReportSectionSplitter) AI'a
+ * gitmeli ve mevcut parser'ın normalizasyonu sahiplenmesine izin verir.
  */
 class FireSuppressionOptimizedReportParser
 {
     public function __construct(
         private FireSuppressionReportParser $baseParser,
-        private PdfPageClassifier $classifier,
+        private ReportSectionSplitter $splitter,
         private FireSuppressionEquipmentListParser $equipmentListParser,
     ) {
     }
 
     public function parse(array $pages): array
     {
-        $aiPages = [];
-        $deterministicPages = [];
-        $equipmentListPages = [];
+        $sections = $this->splitter->split($pages);
+
+        $aiTexts = [];
+        $deterministicTexts = [];
+        $equipmentListRecords = [];
+        $controlCriteriaSkipped = 0;
         $telemetry = [];
 
-        foreach (array_values($pages) as $index => $pageText) {
-            $classification = $this->classifier->classify($pageText);
-            $type = $classification['type'] ?? PdfPageClassifier::UNKNOWN;
+        foreach ($sections as $section) {
+            $type = $section['type'];
+            $text = $section['text'];
 
             $telemetry[] = [
-                'page' => $index + 1,
+                'topic' => $section['topic'],
                 'type' => $type,
-                'confidence' => $classification['confidence'] ?? 0.0,
+                'pages' => $section['pages'],
+                'length' => mb_strlen($text),
             ];
 
+            // Başlık hiç bulunamadan önceki kısa öneki (rapor şablonunun
+            // sayfa üstü birim listesi gibi kalıntı metinler) AI'a göndermeye
+            // değmez — gerçek içerik değil, ayrıştırma artığı.
+            if ($type === PdfPageClassifier::UNKNOWN && mb_strlen($text) < 300) {
+                continue;
+            }
+
             if ($type === PdfPageClassifier::EQUIPMENT_LIST) {
-                $records = $this->equipmentListParser->parse($pageText);
+                $records = $this->equipmentListParser->parse($text);
 
                 // Only skip AI when the deterministic parser actually found
                 // complete equipment records. Otherwise the old parser gets
-                // the page as a safe fallback.
+                // the section as a safe fallback.
                 if ($records !== []) {
-                    $equipmentListPages = [...$equipmentListPages, ...$records];
+                    $equipmentListRecords = [...$equipmentListRecords, ...$records];
+                    continue;
+                }
+
+                $aiTexts[] = $text;
+                continue;
+            }
+
+            if ($type === PdfPageClassifier::FINDINGS) {
+                $deterministicTexts[] = $text;
+                continue;
+            }
+
+            if ($type === PdfPageClassifier::CONTROL_CRITERIA) {
+                // Bu bölüm ekipman-sütunlu bir U/UD/N matrisi (bkz.
+                // FireSuppressionReportParser::parseControlItemMatrices —
+                // "No/Kod" satırı) İÇERMİYORSA, bu raporun kontrol
+                // kriterleri bölümü gibi TEK bir genel/bina seviyesi
+                // checklist'tir (her madde belirli bir ekipmana değil,
+                // tesisin kendisine bağlıdır). Mevcut taslak şeması
+                // (equipment/findings/control_date/company_name/
+                // overall_result) bu veriden HİÇBİR ALANI doldurmuyor — AI'a
+                // gönderilse de boş bir tahmin üretir, o yüzden hiç
+                // gönderilmez. Matrisli bir rapor şablonunda ("No/Kod" varsa)
+                // eski davranış (AI/baseParser'a gönder, o kendi matris
+                // regex'iyle zaten AI'ı atlar) korunur.
+                if (! $this->looksLikeEquipmentColumnMatrix($text)) {
+                    $controlCriteriaSkipped++;
                     continue;
                 }
             }
 
-            // Findings are already deterministic in the existing parser.
-            // Keep control-criteria pages on the old path unless its own
-            // matrix detector proves they are deterministic; this prevents
-            // the new classifier from accidentally suppressing AI on an
-            // unfamiliar checklist layout.
-            if ($type === PdfPageClassifier::FINDINGS) {
-                $deterministicPages[] = $pageText;
-                continue;
-            }
-
-            $aiPages[] = $pageText;
+            $aiTexts[] = $text;
         }
 
-        $aiDraft = $aiPages === []
+        $aiDraft = $aiTexts === []
             ? $this->emptyDraft()
-            : $this->baseParser->parse($aiPages);
+            : $this->baseParser->parse($aiTexts);
 
         // Let the existing parser own deterministic finding parsing. The
-        // finding page is never sent to NIM by the base parser, so this call
-        // adds no AI request while keeping its established normalization.
-        $deterministicDraft = $deterministicPages === []
+        // finding section is never sent to NIM by the base parser, so this
+        // call adds no AI request while keeping its established
+        // normalization.
+        $deterministicDraft = $deterministicTexts === []
             ? $this->emptyDraft()
-            : $this->baseParser->parse($deterministicPages);
+            : $this->baseParser->parse($deterministicTexts);
 
         $draft = $this->mergeDrafts($aiDraft, $deterministicDraft);
-        $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentListPages);
+        $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentListRecords);
         $draft = $this->attachFindingDescriptions($draft);
 
-        Log::info('FireSuppressionOptimizedReportParser: sayfa yönlendirme', [
+        Log::info('FireSuppressionOptimizedReportParser: bölüm yönlendirme', [
             'total_pages' => count($pages),
-            'ai_pages' => count($aiPages),
-            'deterministic_pages' => count($deterministicPages),
-            'equipment_list_records' => count($equipmentListPages),
-            'classification' => $telemetry,
+            'total_sections' => count($sections),
+            'ai_sections' => count($aiTexts),
+            'deterministic_finding_sections' => count($deterministicTexts),
+            'control_criteria_skipped' => $controlCriteriaSkipped,
+            'equipment_list_records' => count($equipmentListRecords),
+            'sections' => $telemetry,
         ]);
 
         return $draft;
+    }
+
+    // FireSuppressionReportParser::parseControlItemMatrices()'in aradığı AYNI
+    // işaret ("No/Kod" başlık satırı, ekipman-sütunlu matrisin imzası) —
+    // burada sadece bir bölümü AI'a göndermeye değip değmeyeceğine karar
+    // vermek için kullanılıyor, matrisin kendisi hâlâ baseParser içinde
+    // ayrıştırılıyor.
+    private function looksLikeEquipmentColumnMatrix(string $text): bool
+    {
+        return (bool) preg_match('/no\s*\/?\s*kod\b/u', $this->lowerTr($text));
+    }
+
+    private function lowerTr(string $value): string
+    {
+        $value = str_replace(['İ', 'I'], ['i', 'ı'], $value);
+
+        return mb_strtolower($value, 'UTF-8');
     }
 
     private function emptyDraft(): array

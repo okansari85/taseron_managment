@@ -23,7 +23,8 @@ class FireSuppressionEquipmentListParser
         }
 
         $numbers = [];
-        $locations = [];
+        $locationLines = [];
+        $collectingLocation = false;
         $pressures = [];
         $measurements = [];
         $records = [];
@@ -33,14 +34,12 @@ class FireSuppressionEquipmentListParser
 
             if (($value = $this->valueAfterKeyword($line, $lowerLine, ['dolap no', 'hidrant no'])) !== null) {
                 // Yeni bir "No" satırı, ÖNCEKİ bloğun bittiğini gösterir
-                // (bir sayfada birden fazla tablo olabilir) — henüz
-                // kaydedilmediyse önce onu işleyip sıfırlıyoruz, SONRA yeni
-                // bloğa başlıyoruz. NOT: eski kod her eşleşmeden sonra
-                // "continue" ile bu kontrolü sadece "eşleşmeyen" satırlara
-                // bırakıyordu — tablo sayfanın SON içeriğiyse hiç
-                // çalışmıyor, kayıtlar sessizce kayboluyordu (aşağıdaki
-                // döngü-sonu kontrolü bunu kapatıyor).
-                if ($numbers !== [] && $locations !== []) {
+                // (bir sayfada aynı liste birkaç 5'li sütun grubuna
+                // bölünmüş halde tekrar tekrar "Soru / Kriter" başlığıyla
+                // devam ediyor — bunların HEPSİ aynı listenin parçası,
+                // her "No" satırında önceki blok kapatılıp kaydediliyor).
+                if ($numbers !== []) {
+                    $locations = $this->splitLocations(implode(' ', $locationLines), count($numbers));
                     $records = array_merge(
                         $records,
                         $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
@@ -48,30 +47,55 @@ class FireSuppressionEquipmentListParser
                 }
 
                 $numbers = $this->splitEquipmentNumbers($value);
-                $locations = [];
+                $locationLines = [];
+                $collectingLocation = false;
                 $pressures = [];
                 $measurements = [];
                 continue;
             }
 
             if (($value = $this->valueAfterKeyword($line, $lowerLine, ['bulunduğu yer'])) !== null) {
-                $locations = $this->splitColumns($value);
+                // "Bulunduğu Yer" değeri gerçek raporlarda TEK satıra sığmıyor:
+                // bazen etiketin hemen yanında (aynı satırda), bazen etiketten
+                // SONRAKİ satırlarda serbest metin olarak sarmalanmış halde
+                // geliyor (satır sonu, sütun sınırı değil). Bu yüzden burada
+                // sadece bu satırdaki değeri almakla kalmıyoruz — bir sonraki
+                // bilinen anahtar kelimeye kadar gelen TÜM satırları
+                // toplayıp (aşağıdaki $collectingLocation bloğu) sona kadar
+                // biriktiriyoruz; asıl ayrıştırma splitLocations()'da olur.
+                $locationLines = $value !== '' ? [$value] : [];
+                $collectingLocation = true;
                 continue;
             }
 
             if (($value = $this->valueAfterKeyword($line, $lowerLine, ['ölçülen basınç'])) !== null) {
+                $collectingLocation = false;
                 $pressures = $this->splitColumns($value);
                 continue;
             }
 
-            if (($value = $this->valueAfterKeyword($line, $lowerLine, ['hortum uzunluğu', 'korunan alandan uzaklığı', 'hidrantlar arası max. mesafe', 'hidrantlar arası max mesafe'])) !== null) {
+            if (($value = $this->valueAfterKeyword($line, $lowerLine, [
+                'hortum uzunluğu',
+                'korunan alandan uzaklığı',
+                'hidrantlar arası max. mesafe',
+                'hidrantlar arası max mesafe',
+                'dolaplar arası mesafe',
+                'hidrantlar arası mesafe',
+            ])) !== null) {
+                $collectingLocation = false;
                 $measurements[] = $this->splitColumns($value);
+                continue;
+            }
+
+            if ($collectingLocation) {
+                $locationLines[] = $line;
             }
         }
 
         // Tablo sayfanın SON içeriğiyse döngü bir sonraki "No" satırına hiç
         // ulaşmadan biter — döngü sonunda kalan bir blok varsa burada işlenir.
-        if ($numbers !== [] && $locations !== []) {
+        if ($numbers !== []) {
+            $locations = $this->splitLocations(implode(' ', $locationLines), count($numbers));
             $records = array_merge(
                 $records,
                 $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
@@ -166,22 +190,74 @@ class FireSuppressionEquipmentListParser
         return count($columns) >= 1 ? $columns : [];
     }
 
-    private function buildRecords(string $type, array $numbers, array $locations, array $pressures, array $measurements): array
+    // Gerçek raporlarda "Bulunduğu Yer" hücresi tek satıra sığmıyor — etiket
+    // bazen kendi satırında yalnız duruyor, değer sonraki serbest metin
+    // satırlarına SARIYOR (bazen tire ile bölünmüş), ve komşu iki hücre
+    // ARADA HİÇ BOŞLUK OLMADAN birbirine yapışabiliyor (örn.
+    // "...A-20İDARİ BİNA BÜRO ÜST A-18"). splitColumns() (tek satır, tab/çift
+    // boşluk sınırlı) bu durumların HİÇBİRİNİ çözemez. Burada önce onu
+    // deniyoruz (aynı satırdaysa yeterli), olmazsa raporun KENDİ tekrar eden
+    // yapısından yararlanıyoruz: her konum değeri aynı bina/tesis adıyla
+    // başlıyor (örn. "İDARİ BİNA", "SOLAR BİNA") — metnin ilk iki kelimesini
+    // bu tekrar eden önek olarak alıp, önek NEREDE geçerse (boşluk olsun
+    // olmasın) yeni bir değerin başladığını kabul ediyoruz. Bu, extractor'ın
+    // kaybettiği sütun sınırını verinin kendi tekrarından geri kazanıyor ve
+    // boşluksuz yapışma durumunu da otomatik çözüyor (lookahead split boşluğa
+    // bakmaz). Hiçbiri $expectedCount'a denk gelmezse konum null bırakılır —
+    // kod/basınç/ölçüm verisi yine de KAYBOLMAZ (bkz. buildRecords).
+    private function splitLocations(string $text, int $expectedCount): array
     {
-        if (count($numbers) !== count($locations)) {
+        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? '');
+
+        if ($expectedCount <= 0) {
             return [];
         }
 
+        if ($text === '') {
+            return array_fill(0, $expectedCount, null);
+        }
+
+        if ($expectedCount === 1) {
+            return [$text];
+        }
+
+        $columns = $this->splitColumns($text);
+        if (count($columns) === $expectedCount) {
+            return $columns;
+        }
+
+        $words = preg_split('/\s+/u', $text) ?: [];
+        if (count($words) >= 2) {
+            $prefix = $words[0] . ' ' . $words[1];
+            $parts = preg_split('/(?=' . preg_quote($prefix, '/') . ')/u', $text) ?: [];
+            $parts = array_values(array_filter(array_map('trim', $parts), fn (string $p) => $p !== ''));
+
+            if (count($parts) === $expectedCount) {
+                return $parts;
+            }
+        }
+
+        return array_fill(0, $expectedCount, null);
+    }
+
+    private function buildRecords(string $type, array $numbers, array $locations, array $pressures, array $measurements): array
+    {
         $records = [];
 
         foreach ($numbers as $i => $number) {
-            $location = trim((string) ($locations[$i] ?? ''));
-            if ($number === '' || $location === '') {
+            $number = trim($number);
+            if ($number === '') {
                 continue;
             }
 
+            $location = $locations[$i] ?? null;
+            $location = $location !== null ? trim((string) $location) : null;
+            if ($location === '') {
+                $location = null;
+            }
+
             $record = [
-                'code' => trim($number),
+                'code' => $number,
                 'category' => $type,
                 'location_note' => $location,
                 'brand' => null,
@@ -190,7 +266,7 @@ class FireSuppressionEquipmentListParser
                 'result' => null,
                 'note' => null,
                 'control_items' => [],
-                'is_uncertain' => false,
+                'is_uncertain' => $location === null,
             ];
 
             if (isset($pressures[$i])) {
