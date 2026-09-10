@@ -2,20 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Domain\Tenancy\TenantContext;
 use App\Http\Requests\AnalyzeReportFileRequest;
 use App\Http\Requests\StoreFireSuppressionReportRequest;
-use App\Models\FireSuppressionInventoryItem;
+use App\Jobs\AnalyzeFireSuppressionReportJob;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
-use App\Services\Ai\FireSuppressionOptimizedReportParser;
-use App\Services\Ai\PdfTextExtractor;
 use App\Services\FireSuppressionReportService;
-use App\Services\Matching\FireSuppressionMatchingProfile;
-use App\Services\Matching\MatchingEngine;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class FireSuppressionReportController extends Controller
@@ -29,72 +25,41 @@ class FireSuppressionReportController extends Controller
     // Kullanıcı taslağı gözden geçirip düzenledikten sonra store()'a
     // (değişmemiş) gönderir (section 12: Kullanıcı Onayı).
     //
-    // Pipeline üç ayrı, birbirinden habersiz katmandan geçer:
-    //   PdfTextExtractor (OCR/metin çıkarma — sağlayıcı değişebilir)
-    //     → FireSuppressionOptimizedReportParser (sayfa yönlendirme + mevcut parser)
-    //       → MatchingEngine + FireSuppressionMatchingProfile (kod → kesin, kategoriye özgü alanlar → aday)
+    // ÖNEMLİ MİMARİ NOKTA: bu iş artık İSTEK İÇİNDE ÇALIŞMIYOR — dosyayı
+    // saklayıp AnalyzeFireSuppressionReportJob'ı KUYRUĞA atıp HEMEN
+    // dönüyor. Sebep: NVIDIA NIM çağrıları birkaç dakika sürebiliyor; bu
+    // süre boyunca senkron çalışsaydı, yerel tek iş parçacıklı dev
+    // sunucusu (php -S) o TEK isteğe kilitlenip DİĞER HER İSTEĞİ (login
+    // dahil) bloklardı — gerçekten yaşanan bir sorundu. Ayrıca progress
+    // polling'in de bir anlamı kalmazdı (sunucu zaten aynı isteğe
+    // kilitliyken ilerleme sorgusu cevap bulamıyordu). Gerçek iş artık
+    // ayrı bir worker sürecinde (php artisan queue:work) yürütülüyor.
+    //
+    // Pipeline: PdfTextExtractor → FireSuppressionOptimizedReportParser
+    // (sayfa yönlendirme + mevcut parser) → MatchingEngine +
+    // FireSuppressionMatchingProfile — hepsi artık Job::handle() içinde.
     public function analyze(
         AnalyzeReportFileRequest $request,
         LocationBusinessEntity $locationBusinessEntity,
-        PdfTextExtractor $extractor,
-        FireSuppressionOptimizedReportParser $parser,
-        MatchingEngine $matchingEngine,
-        FireSuppressionMatchingProfile $matchingProfile,
+        TenantContext $tenantContext,
         FireSuppressionAnalysisProgress $progress
     ): JsonResponse {
         $analysisId = (string) ($request->header('X-Analysis-Id') ?: Str::uuid());
+        $file = $request->file('file');
 
-        try {
-            $progress->stage($analysisId, 'extracting', 'PDF metni çıkarılıyor');
-            $pages = $extractor->extractPages($request->file('file'));
-            $progress->stage($analysisId, 'classifying', 'Sayfalar sınıflandırılıyor', null, [
-                'total_pages' => count($pages),
-            ]);
+        $storedPath = $file->store('fire-suppression-analysis-tmp', 'local');
 
-            $progress->stage($analysisId, 'ai', 'Rapor sayfaları analiz ediliyor');
-            $draft = $parser->parse($pages);
-            $progress->stage($analysisId, 'matching', 'Envanter ile eşleştiriliyor');
-        } catch (\Throwable $exception) {
-            report($exception);
-            $progress->fail($analysisId, $exception->getMessage());
+        $progress->start($analysisId, 0);
 
-            return response()->json(['message' => $exception->getMessage(), 'analysis_id' => $analysisId], 422);
-        }
+        AnalyzeFireSuppressionReportJob::dispatch(
+            $analysisId,
+            $storedPath,
+            $file->getClientOriginalName(),
+            $locationBusinessEntity->id,
+            $tenantContext->id(),
+        );
 
-        $candidateIds = [];
-
-        $draft['equipment'] = array_map(function (array $item) use ($matchingEngine, $matchingProfile, $locationBusinessEntity, &$candidateIds) {
-            $match = $matchingEngine->match($matchingProfile, $locationBusinessEntity, $item);
-            $candidateIds = [...$candidateIds, ...$match['candidate_ids']];
-            $item['match'] = $match;
-
-            return $item;
-        }, $draft['equipment']);
-
-        $exactIds = collect($draft['equipment'])->pluck('match.matched_id')->filter()->values()->all();
-        $allReferencedIds = array_values(array_unique([...$exactIds, ...$candidateIds]));
-
-        $referencedItems = $allReferencedIds === []
-            ? new Collection()
-            : FireSuppressionInventoryItem::query()->whereIn('id', $allReferencedIds)->get();
-
-        // Geriye dönük uyumluluk: matched_inventory_items/unmatched_codes hâlâ
-        // eskisi gibi dönüyor (sadece KESİN eşleşmeler + hiç adayı olmayanlar),
-        // yeni "equipment[].match" alanı ise aday/belirsiz ayrımını taşıyor.
-        $draft['matched_inventory_items'] = $referencedItems->whereIn('id', $exactIds)->values();
-        $draft['candidate_inventory_items'] = $referencedItems->whereIn('id', $candidateIds)->values();
-        $draft['unmatched_codes'] = collect($draft['equipment'])
-            ->filter(fn (array $item) => $item['match']['status'] === 'new' && $item['code'])
-            ->pluck('code')
-            ->values()
-            ->all();
-
-        $progress->complete($analysisId, [
-            'equipment_count' => count($draft['equipment']),
-            'finding_count' => count($draft['findings'] ?? []),
-        ]);
-
-        return response()->json(['data' => $draft, 'analysis_id' => $analysisId]);
+        return response()->json(['analysis_id' => $analysisId], 202);
     }
 
     public function analysisProgress(string $analysisId, FireSuppressionAnalysisProgress $progress): JsonResponse

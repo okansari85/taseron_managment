@@ -29,36 +29,53 @@ class FireSuppressionEquipmentListParser
         $records = [];
 
         foreach ($lines as $line) {
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Dolap|Hidrant)\s+No\s+(.+)$/iu', $line, $m)) {
-                $numbers = $this->splitEquipmentNumbers($m[1]);
-                continue;
-            }
+            $lowerLine = $this->lowerTr($line);
 
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?Bulunduğu\s+Yer\s+(.+)$/iu', $line, $m)) {
-                $locations = $this->splitColumns($m[1]);
-                continue;
-            }
+            if (($value = $this->valueAfterKeyword($line, $lowerLine, ['dolap no', 'hidrant no'])) !== null) {
+                // Yeni bir "No" satırı, ÖNCEKİ bloğun bittiğini gösterir
+                // (bir sayfada birden fazla tablo olabilir) — henüz
+                // kaydedilmediyse önce onu işleyip sıfırlıyoruz, SONRA yeni
+                // bloğa başlıyoruz. NOT: eski kod her eşleşmeden sonra
+                // "continue" ile bu kontrolü sadece "eşleşmeyen" satırlara
+                // bırakıyordu — tablo sayfanın SON içeriğiyse hiç
+                // çalışmıyor, kayıtlar sessizce kayboluyordu (aşağıdaki
+                // döngü-sonu kontrolü bunu kapatıyor).
+                if ($numbers !== [] && $locations !== []) {
+                    $records = array_merge(
+                        $records,
+                        $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
+                    );
+                }
 
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?Ölçülen\s+Basınç\s+(.+)$/iu', $line, $m)) {
-                $pressures = $this->splitColumns($m[1]);
-                continue;
-            }
-
-            if (preg_match('/^(?:[A-Z]{1,3}\s+)?(?:Hortum\s+Uzunluğu|Korunan\s+Alandan\s+Uzaklığı|Hidrantlar\s+Arası\s+Max\.\s+Mesafe)\s+(.+)$/iu', $line, $m)) {
-                $measurements[] = $this->splitColumns($m[1]);
-            }
-
-            if ($numbers !== [] && $locations !== []) {
-                $records = array_merge(
-                    $records,
-                    $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
-                );
-
-                $numbers = [];
+                $numbers = $this->splitEquipmentNumbers($value);
                 $locations = [];
                 $pressures = [];
                 $measurements = [];
+                continue;
             }
+
+            if (($value = $this->valueAfterKeyword($line, $lowerLine, ['bulunduğu yer'])) !== null) {
+                $locations = $this->splitColumns($value);
+                continue;
+            }
+
+            if (($value = $this->valueAfterKeyword($line, $lowerLine, ['ölçülen basınç'])) !== null) {
+                $pressures = $this->splitColumns($value);
+                continue;
+            }
+
+            if (($value = $this->valueAfterKeyword($line, $lowerLine, ['hortum uzunluğu', 'korunan alandan uzaklığı', 'hidrantlar arası max. mesafe', 'hidrantlar arası max mesafe'])) !== null) {
+                $measurements[] = $this->splitColumns($value);
+            }
+        }
+
+        // Tablo sayfanın SON içeriğiyse döngü bir sonraki "No" satırına hiç
+        // ulaşmadan biter — döngü sonunda kalan bir blok varsa burada işlenir.
+        if ($numbers !== [] && $locations !== []) {
+            $records = array_merge(
+                $records,
+                $this->buildRecords($equipmentType, $numbers, $locations, $pressures, $measurements)
+            );
         }
 
         return $this->deduplicate($records);
@@ -66,7 +83,7 @@ class FireSuppressionEquipmentListParser
 
     private function detectType(string $text): ?string
     {
-        $lower = mb_strtolower($text, 'UTF-8');
+        $lower = $this->lowerTr($text);
 
         if (str_contains($lower, 'yangın dolabı listesi') || str_contains($lower, 'dolap no')) {
             return 'yangin_dolabi';
@@ -78,6 +95,40 @@ class FireSuppressionEquipmentListParser
 
         if (str_contains($lower, 'sprinkler listesi')) {
             return 'sprinkler';
+        }
+
+        return null;
+    }
+
+    // bkz. PdfPageClassifier::lowerTr() — aynı Türkçe İ/I küçültme hatası
+    // burada da vardı: "HİDRANT NO", "YANGIN DOLABI LİSTESİ" gibi büyük
+    // harfli başlıklar düz mb_strtolower ile anahtar kelimeyle eşleşmiyor,
+    // detectType() null dönüyor, tüm liste gereksiz yere AI'a düşüyordu.
+    private function lowerTr(string $value): string
+    {
+        $value = str_replace(['İ', 'I'], ['i', 'ı'], $value);
+
+        return mb_strtolower($value, 'UTF-8');
+    }
+
+    // Eski kod PCRE'nin /i bayrağına güvenerek orijinal (küçültülmemiş)
+    // satırda "Dolap|Hidrant\s+No" gibi karışık büyük/küçük harfli bir
+    // desen arıyordu — ama PCRE'nin case-insensitive eşleştirmesi de
+    // Türkçe İ/I için güvenilir değil (yukarıdaki lowerTr() ile aynı
+    // sınıf hata, sadece regex seviyesinde). Bunun yerine: anahtar kelime
+    // ÖNCE küçültülmüş satırda (satır başına yakın, en fazla 5 karakter
+    // içeride — "E " gibi kısa bir sütun önekine izin vermek için) aranır,
+    // bulunursa DEĞER orijinal (büyük/küçük harfi korunmuş) satırdan aynı
+    // karakter ofsetinden itibaren alınır (lowerTr karakter sayısını
+    // değiştirmez, sadece değerleri).
+    private function valueAfterKeyword(string $originalLine, string $lowerLine, array $keywords): ?string
+    {
+        foreach ($keywords as $keyword) {
+            $pos = mb_strpos($lowerLine, $keyword);
+
+            if ($pos !== false && $pos <= 5) {
+                return trim(mb_substr($originalLine, $pos + mb_strlen($keyword)));
+            }
         }
 
         return null;

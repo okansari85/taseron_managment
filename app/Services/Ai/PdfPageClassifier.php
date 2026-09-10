@@ -2,6 +2,8 @@
 
 namespace App\Services\Ai;
 
+use Illuminate\Support\Facades\Log;
+
 /**
  * Classifies extracted PDF pages using deterministic signals only.
  *
@@ -37,12 +39,13 @@ class PdfPageClassifier
 
         if ($this->containsAny($lower, [
             'sonuç ve kanaat',
-            'sonuç ve kanaat',
             'onay',
         ]) && $this->containsAny($lower, [
             'periyodik kontrol tarihi',
             'kullanımı uygun değildir',
             'kullanımı uygundur',
+            'kullanılması uygun değildir',
+            'kullanılması uygundur',
         ])) {
             return $this->result(self::RESULT, 0.98, ['result_heading']);
         }
@@ -77,7 +80,7 @@ class PdfPageClassifier
             }
         }
 
-        if ($equipmentSignals >= 3 && $this->hasRepeatingListShape($text)) {
+        if ($equipmentSignals >= 3 && $this->hasRepeatingListShape($lower)) {
             $confidence = $equipmentSignals >= 5 ? 0.98 : 0.94;
             return $this->result(self::EQUIPMENT_LIST, $confidence, array_values(array_unique($signals)));
         }
@@ -103,15 +106,28 @@ class PdfPageClassifier
             return $this->result(self::GENERAL_INFO, 0.93, $general);
         }
 
+        // GEÇİCİ TEŞHİS LOGU — mantığı değiştirmiyor, sadece bu raporun
+        // gerçek kelime kalıplarının neden hiçbir anahtar kelimeyle
+        // eşleşmediğini görmek için. Sonuç netleşince kaldırılacak.
+        Log::info('PdfPageClassifier: UNKNOWN sayfa', [
+            'text_length' => mb_strlen($lower),
+            'text_preview' => mb_substr($lower, 0, 400),
+        ]);
+
         return $this->result(self::UNKNOWN, 0.0, []);
     }
 
+    // $text: ÖNCEDEN lowerTr() ile küçültülmüş olmalı — PCRE'nin /i bayrağı
+    // Türkçe noktalı "İ"yi "i" ile güvenilir bir şekilde eşleştirmiyor
+    // (motor/Unicode tablo sürümüne göre değişebiliyor), bu yüzden burada
+    // /i'ye güvenmek yerine zaten küçültülmüş metin + küçük harfli desenler
+    // kullanılıyor.
     private function hasRepeatingListShape(string $text): bool
     {
         $patterns = [
-            '/(?:soru\s*\/\s*kriter)\s+\d+(?:\s+\d+){1,}/iu',
-            '/(?:dolap|hidrant)\s+no\b/iu',
-            '/(?:ölçülen\s+basınç|bulunduğu\s+yer).*(?:\d|[A-ZÇĞİÖŞÜ])/iu',
+            '/(?:soru\s*\/\s*kriter)\s+\d+(?:\s+\d+){1,}/u',
+            '/(?:dolap|hidrant)\s+no\b/u',
+            '/(?:ölçülen\s+basınç|bulunduğu\s+yer).*(?:\d|[a-zçğıöşü])/u',
         ];
 
         $matches = 0;
@@ -135,8 +151,18 @@ class PdfPageClassifier
         return false;
     }
 
+    // mb_strtolower('UTF-8') Türkçe İ/I'yı doğru küçültmez: "İ" → "i" +
+    // birleşen nokta işareti (2 kod noktası, düz "i" DEĞİL), "I" (noktasız
+    // büyük) → "i" (olması gereken "ı" değil). Gerçek raporların büyük
+    // harfli başlıkları ("TESPİT VE BULGULAR", "HİDRANT NO", "BASINÇ")
+    // bu yüzden düz mb_strtolower ile anahtar kelimelerle EŞLEŞMİYORDU —
+    // sınıflandırma sessizce UNKNOWN'a düşüp sayfayı gereksiz yere AI'a
+    // gönderiyordu. Önce elle İ/I değiştirilip sonra küçültülüyor (bkz.
+    // FireSuppressionReportParser::toLowerTr() — aynı hata orada bulunmuştu).
     private function lowerTr(string $value): string
     {
+        $value = str_replace(['İ', 'I'], ['i', 'ı'], $value);
+
         return mb_strtolower($value, 'UTF-8');
     }
 
