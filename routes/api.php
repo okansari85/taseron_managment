@@ -41,9 +41,7 @@ use App\Models\District;
 Route::get('/user', function (Request $request, \App\Services\UserScopeService $userScopeService) {
     $user = $request->user();
     $user->loadMissing('contractor.businessEntity');
-
     $scopeTenantId = $userScopeService->resolveTenantId($user);
-
     return response()->json([
         'id' => $user->id,
         'name' => $user->name,
@@ -63,13 +61,11 @@ Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
-
     Route::middleware('web-role:super-admin')->group(function () {
         Route::post('users/{user}/impersonate', [UserAuthorizationController::class, 'impersonate']);
         Route::apiResource('tenants', TenantController::class);
         Route::post('tenant-onboarding', [TenantOnboardingController::class, 'store']);
     });
-
     Route::middleware(['tenant', 'workspace-context'])->group(function () {
         Route::middleware('web-role:super-admin')->group(function () {
             Route::apiResource('companies', CompanyController::class);
@@ -139,8 +135,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('emergency-equipment-types/{emergencyEquipmentType}/tip-options/{tipOption}', [EmergencyEquipmentTypeTipOptionController::class, 'destroy']);
             Route::get('location-business-entities/{locationBusinessEntity}/emergency-equipment', [LocationEmergencyEquipmentController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment', [LocationEmergencyEquipmentController::class, 'store']);
-            Route::put('emergency-equipment/{locationEmergencyEquipment}', [EmergencyEquipmentInspectionController::class, 'update']);
-            Route::delete('emergency-equipment/{locationEmergencyEquipment}', [EmergencyEquipmentInspectionController::class, 'update']);
+            Route::put('emergency-equipment/{locationEmergencyEquipment}', [LocationEmergencyEquipmentController::class, 'update']);
+            Route::delete('emergency-equipment/{locationEmergencyEquipment}', [LocationEmergencyEquipmentController::class, 'destroy']);
             Route::get('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'index']);
             Route::post('emergency-equipment/{locationEmergencyEquipment}/inspections', [EmergencyEquipmentInspectionController::class, 'store']);
             Route::put('emergency-equipment-inspections/{inspection}', [EmergencyEquipmentInspectionController::class, 'update']);
@@ -170,6 +166,32 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('contractors', ContractorController::class);
             Route::get('contractors/{contractor}/locations', [ContractorController::class, 'locations']);
             Route::get('work-requests', [WorkRequestController::class, 'index']);
+            Route::post('work-requests', [WorkRequestController::class, 'store']);
+            Route::patch('work-requests/{workRequest}/status', [WorkRequestController::class, 'updateStatus']);
+            Route::patch('work-requests/{workRequest}/accept-proposed-date', [WorkRequestController::class, 'acceptProposedDate']);
+            Route::delete('work-requests/{workRequest}', [WorkRequestController::class, 'destroy']);
+            Route::get('organization-contractors', [OrganizationContractorController::class, 'contractorsForTenant']);
+            Route::post('organization-contractors/bulk', [OrganizationContractorController::class, 'bulkAttach']);
+            Route::get('organizations/{organization}/contractors', [OrganizationContractorController::class, 'index']);
+            Route::post('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'attach']);
+            Route::delete('organizations/{organization}/contractors/{contractor}', [OrganizationContractorController::class, 'detach']);
         });
+
+        Route::middleware('web-role:contractor')->group(function () {
+            Route::get('my/work-requests', [WorkRequestController::class, 'myRequests']);
+            Route::patch('my/work-requests/{workRequest}/propose-date', [WorkRequestController::class, 'proposeDate']);
+        });
+
+        Route::middleware('web-role:operation')->group(function () {
+            Route::get('operation/work-requests', [WorkRequestController::class, 'index']);
+            Route::patch('operation/work-requests/{workRequest}/status', [WorkRequestController::class, 'updateStatus']);
+        });
+
+        Route::get('tenant-branding', [TenantBrandingController::class, 'show']);
+        Route::get('workspace-theme', [WorkspaceThemeController::class, 'show']);
+        Route::get('workspace-context', [WorkspaceContextController::class, 'bootstrap']);
+        Route::get('workspace-context/organizations', [WorkspaceContextController::class, 'organizations']);
+        Route::get('workspace-context/locations', [WorkspaceContextController::class, 'locations']);
+        Route::get('workspace-context/operational-areas', [WorkspaceContextController::class, 'operationalAreas']);
     });
 });
