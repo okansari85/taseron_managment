@@ -29,14 +29,21 @@ class ReportSectionSplitter
         // Pompa bölümleri raporlar arasında farklı şekillerde başlıklandırılıyor
         // ("2.1. YANGIN POMPALARI TESPİT VE DEĞERLENDİRMELER", "5. POMPA GRUBU
         // ETİKET BİLGİLERİ / TESPİT EDİLEN BİLGİLER", "5.1. 1 NUMARALI POMPA").
-        // Bilinçli olarak CONTROL_CRITERIA'ya DEĞİL GENERAL_INFO'ya bağlanıyor:
-        // pompa sayısı azdır (birkaç adet), AI zaten mevcut promptla doğru
-        // ayrıştırıyor (bkz. gerçek test), ve CONTROL_CRITERIA'daki "matris
-        // yoksa AI'a hiç gönderme" kısayolu, eğer bu bölüm gerçekte bir pompa
-        // tablosu içeriyorsa veriyi SESSİZCE kaybederdi — o riski almıyoruz.
-        'pompaları tespit ve değerlendirmeler' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
-        'pompa grubu etiket bilgileri' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
-        'numaralı pompa' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
+        // type=EQUIPMENT_LIST (GENERAL_INFO DEĞİL — gerçek veriyle görüldü ki
+        // "1. GENEL BİLGİLER" bölümünde HİÇ ekipman olmuyor, sadece rapor
+        // meta verisi var; pompa GERÇEK bir ekipman tablosu, kendi ayrı
+        // bölümü olmalı). Bunun İKİ faydası var: (1) orkestratör artık
+        // GENERAL_INFO/RESULT'tan gelen AI çıktısının equipment alanını hiç
+        // güvenmiyor (bkz. parse() — "1. GENEL BİLGİLER"deki "Ekipman Seri
+        // No" gibi tek bir meta alanı AI'ın sahte bir ekipman kaydına
+        // çevirmesi, gerçek testte "YT-01" kodlu hayalet bir dolap kaydı
+        // olarak ortaya çıktı), pompa artık bu güvensiz gruba KARIŞMIYOR;
+        // (2) pompa metni artık genel bilgiler+sonuç ile TEK bir AI
+        // çağrısında birleştirilmiyor, kendi başına gidiyor — modelin
+        // dikkatini bölmeden daha güvenilir çıkarım yapması beklenir.
+        'pompaları tespit ve değerlendirmeler' => ['topic' => 'equipment_list:pompa', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
+        'pompa grubu etiket bilgileri' => ['topic' => 'equipment_list:pompa', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
+        'numaralı pompa' => ['topic' => 'equipment_list:pompa', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
         'muayene kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'kontrol kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'yangın dolabı listesi' => ['topic' => 'equipment_list:yangin_dolabi', 'type' => PdfPageClassifier::EQUIPMENT_LIST],

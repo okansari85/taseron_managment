@@ -24,7 +24,19 @@ class FireSuppressionOptimizedReportParser
     {
         $sections = $this->splitter->split($pages);
 
-        $aiTexts = [];
+        // AI'a giden metin İKİ ayrı gruba bölünür — "equipment" alanına
+        // GÜVENİLEN grup (gerçekten bir ekipman tablosu olduğu bilinen
+        // bölümler: deterministik ayrıştırması başarısız olan equipment_list
+        // bölümleri — pompa/sprinkler gibi — ve matrisli control_criteria)
+        // ile GÜVENİLMEYEN grup (genel bilgiler, sonuç, tanınmayan artık —
+        // buralarda GERÇEK bir ekipman tablosu YOKTUR). Bunları AYNI çağrıda
+        // birleştirip AI'ın "equipment" çıktısına toptan güvenmek gerçek
+        // veride bir hataya yol açtı: "1. GENEL BİLGİLER" bölümündeki
+        // "Ekipman Seri No / Kod: YT-01" tek bir meta alanını AI hayali bir
+        // dolap kaydına çevirdi. Artık meta grubun AI çıktısındaki equipment
+        // alanı TAMAMEN YOK SAYILIYOR (bkz. aşağıda emptyDraft ile sıfırlama).
+        $aiEquipmentTexts = [];
+        $aiMetaTexts = [];
         $deterministicTexts = [];
         $equipmentListRecords = [];
         $controlCriteriaSkipped = 0;
@@ -73,7 +85,7 @@ class FireSuppressionOptimizedReportParser
                     continue;
                 }
 
-                $aiTexts[] = $text;
+                $aiEquipmentTexts[] = $text;
                 continue;
             }
 
@@ -99,31 +111,52 @@ class FireSuppressionOptimizedReportParser
                     $controlCriteriaSkipped++;
                     continue;
                 }
+
+                // Matrisli bir control_criteria bölümü GERÇEKTEN ekipman
+                // sütunları taşıyor (bkz. looksLikeEquipmentColumnMatrix) —
+                // bu yüzden equipment-güvenilen gruba gider, meta gruba değil.
+                $aiEquipmentTexts[] = $text;
+                continue;
             }
 
-            $aiTexts[] = $text;
+            $aiMetaTexts[] = $text;
         }
 
-        $aiDraft = $aiTexts === []
+        $equipmentAiDraft = $aiEquipmentTexts === []
             ? $this->emptyDraft()
-            : $this->baseParser->parse($aiTexts);
+            : $this->baseParser->parse($aiEquipmentTexts);
+
+        $metaAiDraft = $aiMetaTexts === []
+            ? $this->emptyDraft()
+            : $this->baseParser->parse($aiMetaTexts);
+        // Genel bilgiler/sonuç/tanınmayan bölümlerde GERÇEK bir ekipman
+        // tablosu yoktur — buradan gelen equipment'e HİÇ güvenilmez (yukarıda
+        // açıklanan YT-01 hatası). control_date/company_name/overall_result
+        // gibi diğer alanlar normal şekilde kullanılmaya devam eder.
+        $metaAiDraft['equipment'] = [];
 
         // Let the existing parser own deterministic finding parsing. The
         // finding section is never sent to NIM by the base parser, so this
         // call adds no AI request while keeping its established
-        // normalization.
+        // normalization. Bulgu metninden AI'a düşülürse bile equipment
+        // GÜVENİLMEZ — "Finding → Equipment matching" mimari kuralı henüz
+        // geçerli (bkz. proje notları), bir bulgu cümlesinden yeni bir
+        // ekipman kaydı asla türetilmemeli.
         $deterministicDraft = $deterministicTexts === []
             ? $this->emptyDraft()
             : $this->baseParser->parse($deterministicTexts);
+        $deterministicDraft['equipment'] = [];
 
-        $draft = $this->mergeDrafts($aiDraft, $deterministicDraft);
+        $draft = $this->mergeDrafts($metaAiDraft, $deterministicDraft);
+        $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentAiDraft['equipment']);
         $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentListRecords);
         $draft = $this->attachFindingDescriptions($draft);
 
         Log::info('FireSuppressionOptimizedReportParser: bölüm yönlendirme', [
             'total_pages' => count($pages),
             'total_sections' => count($sections),
-            'ai_sections' => count($aiTexts),
+            'ai_equipment_sections' => count($aiEquipmentTexts),
+            'ai_meta_sections' => count($aiMetaTexts),
             'deterministic_finding_sections' => count($deterministicTexts),
             'control_criteria_skipped' => $controlCriteriaSkipped,
             'equipment_list_records' => count($equipmentListRecords),
