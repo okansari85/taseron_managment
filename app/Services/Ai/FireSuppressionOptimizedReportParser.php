@@ -48,7 +48,12 @@ class FireSuppressionOptimizedReportParser
                 }
             }
 
-            if ($type === PdfPageClassifier::FINDINGS || $type === PdfPageClassifier::CONTROL_CRITERIA) {
+            // Findings are already deterministic in the existing parser.
+            // Keep control-criteria pages on the old path unless its own
+            // matrix detector proves they are deterministic; this prevents
+            // the new classifier from accidentally suppressing AI on an
+            // unfamiliar checklist layout.
+            if ($type === PdfPageClassifier::FINDINGS) {
                 $deterministicPages[] = $pageText;
                 continue;
             }
@@ -60,8 +65,8 @@ class FireSuppressionOptimizedReportParser
             ? $this->emptyDraft()
             : $this->baseParser->parse($aiPages);
 
-        // Let the existing parser own deterministic matrix/finding parsing.
-        // These pages are never sent to NIM by the base parser, so this call
+        // Let the existing parser own deterministic finding parsing. The
+        // finding page is never sent to NIM by the base parser, so this call
         // adds no AI request while keeping its established normalization.
         $deterministicDraft = $deterministicPages === []
             ? $this->emptyDraft()
