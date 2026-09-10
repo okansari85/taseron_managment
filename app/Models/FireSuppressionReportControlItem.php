@@ -17,6 +17,8 @@ class FireSuppressionReportControlItem extends Model
         'tenant_id',
         'report_id',
         'template_id',
+        'equipment_code',
+        'inventory_item_id',
         'category',
         'code',
         'section',
@@ -46,5 +48,10 @@ class FireSuppressionReportControlItem extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(FireSuppressionControlItemTemplate::class, 'template_id');
+    }
+
+    public function inventoryItem(): BelongsTo
+    {
+        return $this->belongsTo(FireSuppressionInventoryItem::class, 'inventory_item_id');
     }
 }

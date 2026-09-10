@@ -43,6 +43,8 @@ class StoreFireSuppressionReportRequest extends FormRequest
 
             'control_items' => ['nullable', 'array'],
             'control_items.*.template_id' => ['nullable', 'integer', 'exists:fire_suppression_control_item_templates,id'],
+            'control_items.*.equipment_code' => ['nullable', 'string', 'max:100'],
+            'control_items.*.inventory_item_id' => ['nullable', 'integer', 'exists:fire_suppression_inventory_items,id'],
             'control_items.*.category' => ['nullable', 'string', Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
             'control_items.*.code' => ['nullable', 'string', 'max:20'],
             'control_items.*.section' => ['nullable', 'string', 'max:150'],

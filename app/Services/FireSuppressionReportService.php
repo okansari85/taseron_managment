@@ -77,6 +77,13 @@ class FireSuppressionReportService
     }
 
     // $additionalFiles: [['file' => UploadedFile, 'type' => 'fotograf'|'ek_belge'|'diger', 'description' => ?string], ...]
+    //
+    // Aynı şubede AYNI rapor numarasıyla tekrar yükleme — yıllık zorunlu
+    // kontrolde her yıl FARKLI bir rapor no gelir (o zaman yeni bir arşiv
+    // kaydıdır), ama AYNI rapor no tekrar geldiyse bu yasal olarak AYNI
+    // rapordur (yeniden yükleme/düzeltme) — yeni bir arşiv satırı değil,
+    // mevcut raporun GÜNCELLENMESİDİR: eski bulgu/madde/ek dosya/dosya
+    // tamamen yeni yüklenenle değiştirilir.
     public function create(LocationBusinessEntity $locationBusinessEntity, array $data, UploadedFile $file, ?User $actingUser, array $additionalFiles = []): FireSuppressionReport
     {
         $this->assertEntityTenant($locationBusinessEntity);
@@ -95,14 +102,23 @@ class FireSuppressionReportService
             collect($findingsInput)->flatMap(fn (array $f) => $f['affected_item_ids'] ?? [])->map(fn ($id) => (int) $id)->all()
         )));
 
+        $existingReportId = ! empty($data['report_no'])
+            ? FireSuppressionReport::query()
+                ->where('location_business_entity_id', $locationBusinessEntity->id)
+                ->where('report_no', $data['report_no'])
+                ->value('id')
+            : null;
+
         $filePath = null;
         $storedAdditionalPaths = [];
+        $staleFilePath = null;
+        $staleAdditionalPaths = [];
 
         try {
-            return DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $tenantId, $file, $additionalFiles, &$filePath, &$storedAdditionalPaths) {
+            $report = DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $tenantId, $file, $additionalFiles, $existingReportId, &$filePath, &$storedAdditionalPaths, &$staleFilePath, &$staleAdditionalPaths) {
                 $filePath = $file->store(self::FILE_DIRECTORY, 'public');
 
-                $report = FireSuppressionReport::query()->create([
+                $attributes = [
                     'tenant_id' => $tenantId,
                     'location_business_entity_id' => $locationBusinessEntity->id,
                     'report_date' => $data['report_date'],
@@ -115,7 +131,40 @@ class FireSuppressionReportService
                     'file_name' => $file->getClientOriginalName(),
                     'uploaded_by_user_id' => $actingUser?->id,
                     'notes' => $data['notes'] ?? null,
-                ]);
+                ];
+
+                if ($existingReportId) {
+                    $report = FireSuppressionReport::query()->findOrFail($existingReportId);
+                    $staleFilePath = $report->file_path;
+                    $staleAdditionalPaths = $report->files()->pluck('file_path')->all();
+
+                    // Bu raporun eski bulgularının etkilediği envanter
+                    // kalemlerinin uygunsuzluk durumu, alttaki kayıtlar
+                    // silinip yeniden kurulduktan sonra yeniden hesaplanmalı.
+                    $affectedByOldFindings = $report->findings()
+                        ->with('affectedItems:id')
+                        ->get()
+                        ->flatMap(fn ($finding) => $finding->affectedItems->pluck('id'))
+                        ->unique();
+
+                    // Rapor "düzeltilmiş/yeniden yüklenmiş" kabul edilir —
+                    // eski çocuk kayıtlar kısmi birleştirme yapılmadan
+                    // tamamen silinip aşağıda yeni veriyle sıfırdan kurulur.
+                    $report->findings()->delete();
+                    $report->controlItems()->delete();
+                    $report->files()->delete();
+                    $report->inventoryItems()->detach();
+                    $report->update($attributes);
+
+                    foreach ($affectedByOldFindings as $itemId) {
+                        $item = FireSuppressionInventoryItem::query()->find($itemId);
+                        if ($item) {
+                            $this->inventoryService->recomputeNonconformityStatus($item);
+                        }
+                    }
+                } else {
+                    $report = FireSuppressionReport::query()->create($attributes);
+                }
 
                 foreach ($additionalFiles as $index => $additional) {
                     $storedPath = $additional['file']->store(self::ADDITIONAL_FILE_DIRECTORY, 'public');
@@ -138,6 +187,8 @@ class FireSuppressionReportService
                         'tenant_id' => $tenantId,
                         'report_id' => $report->id,
                         'template_id' => $controlItem['template_id'] ?? null,
+                        'equipment_code' => $controlItem['equipment_code'] ?? null,
+                        'inventory_item_id' => $controlItem['inventory_item_id'] ?? null,
                         'category' => $controlItem['category'] ?? null,
                         'code' => $controlItem['code'] ?? null,
                         'section' => $controlItem['section'] ?? null,
@@ -187,6 +238,19 @@ class FireSuppressionReportService
 
                 return $this->find($report);
             });
+
+            // Eski dosyalar transaction BAŞARIYLA bittikten sonra silinir —
+            // transaction içinde silinirse ve sonradan rollback olursa geri
+            // getirilemez.
+            if ($staleFilePath) {
+                Storage::disk('public')->delete($staleFilePath);
+            }
+
+            if ($staleAdditionalPaths !== []) {
+                Storage::disk('public')->delete($staleAdditionalPaths);
+            }
+
+            return $report;
         } catch (Throwable $exception) {
             if ($filePath) {
                 Storage::disk('public')->delete($filePath);

@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -38,22 +39,7 @@ class NvidiaNimClient
             try {
                 $response = Http::withToken(config('services.nvidia_nim.api_key'))
                     ->timeout(0)
-                    ->post(rtrim((string) config('services.nvidia_nim.base_url'), '/') . '/chat/completions', [
-                        'model' => config('services.nvidia_nim.text_model'),
-                        'messages' => [
-                            ['role' => 'system', 'content' => $systemPrompt],
-                            ['role' => 'user', 'content' => $userContent],
-                        ],
-                        'temperature' => 0.1,
-                        // max_tokens verilmezse büyük ekipman listeli
-                        // raporlarda JSON yarıda kesilip parse edilemez.
-                        'max_tokens' => $maxTokens,
-                        'response_format' => ['type' => 'json_object'],
-                        // Nemotron 3.5 Lightning gibi "reasoning" modelleri
-                        // thinking kapatılmazsa JSON'dan önce chain-of-thought
-                        // metni ekliyor — desteklemeyen modeller yok sayar.
-                        'chat_template_kwargs' => ['thinking' => false],
-                    ]);
+                    ->post($this->endpoint(), $this->payload($systemPrompt, $userContent, $maxTokens));
 
                 if ($response->serverError() && $attempts < $maxAttempts) {
                     sleep($attempts * 3);
@@ -65,10 +51,9 @@ class NvidiaNimClient
                     throw new RuntimeException('NVIDIA NIM isteği başarısız oldu (HTTP ' . $response->status() . '): ' . $response->body());
                 }
 
-                $content = $response->json('choices.0.message.content');
-                $decoded = json_decode((string) $content, true);
+                $decoded = $this->decodeContent($response);
 
-                if (! is_array($decoded)) {
+                if ($decoded === null) {
                     throw new RuntimeException('AI çıktısı geçerli bir JSON olarak ayrıştırılamadı.');
                 }
 
@@ -82,5 +67,44 @@ class NvidiaNimClient
         }
 
         throw new RuntimeException('NVIDIA NIM isteği tekrar denemelere rağmen başarısız oldu: ' . ($lastException?->getMessage() ?? 'bilinmeyen bağlantı hatası'));
+    }
+
+    // NOT: Http::pool ile sayfaları paralel gönderme denendi (daha hızlı
+    // olması için) ama NVIDIA NIM ücretsiz katmanı eşzamanlı isteklerde
+    // bozuk/eksik JSON döndürdü (muhtemelen concurrency limiti) — gerçek
+    // testte 7 dakika bekleyip "geçerli JSON değil" hatası verdi. Bu yüzden
+    // kasıtlı olarak SIRALI (extractStructuredJson, tek tek) kullanılıyor;
+    // paralel varyant kaldırıldı.
+    private function endpoint(): string
+    {
+        return rtrim((string) config('services.nvidia_nim.base_url'), '/') . '/chat/completions';
+    }
+
+    private function payload(string $systemPrompt, string $userContent, int $maxTokens): array
+    {
+        return [
+            'model' => config('services.nvidia_nim.text_model'),
+            'messages' => [
+                ['role' => 'system', 'content' => $systemPrompt],
+                ['role' => 'user', 'content' => $userContent],
+            ],
+            'temperature' => 0.1,
+            // max_tokens verilmezse büyük ekipman listeli raporlarda JSON
+            // yarıda kesilip parse edilemez.
+            'max_tokens' => $maxTokens,
+            'response_format' => ['type' => 'json_object'],
+            // Nemotron 3.5 Lightning gibi "reasoning" modelleri thinking
+            // kapatılmazsa JSON'dan önce chain-of-thought metni ekliyor —
+            // desteklemeyen modeller bu alanı yok sayar.
+            'chat_template_kwargs' => ['thinking' => false],
+        ];
+    }
+
+    private function decodeContent(Response $response): ?array
+    {
+        $content = $response->json('choices.0.message.content');
+        $decoded = json_decode((string) $content, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 }

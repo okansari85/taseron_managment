@@ -37,6 +37,8 @@ class YscReportParser
     public function parse(array $pages): array
     {
         $prompt = $this->buildPrompt();
+        // SIRALI — bkz. FireSuppressionReportParser::parse() aynı gerekçe
+        // (NVIDIA NIM ücretsiz katmanı paralel istekte güvenilir değil).
         $guesses = array_map(
             fn (string $pageText) => $this->ai->extractStructuredJson($prompt, $pageText),
             $pages
@@ -52,6 +54,23 @@ class YscReportParser
         ];
     }
 
+    // Bkz. FireSuppressionReportParser::looksLikeMissingValue() — aynı
+    // savunma katmanı: model "bulunamadı" gibi bir açıklama cümlesi
+    // döndürürse bunu gerçek veri sanıp başka bir sayfadaki doğru değerin
+    // üzerine yazmasın diye.
+    private function looksLikeMissingValue(string $value): bool
+    {
+        $lower = $this->toLowerTr(trim($value));
+
+        foreach (['bulunamadı', 'bulunmamaktadır', 'bulunmuyor', 'belirtilmemiş', 'belirtilmiyor', 'mevcut değil', 'yer almamaktadır', 'geçmemektedir', 'metinde yok', 'metinde geçmiyor'] as $needle) {
+            if (str_contains($lower, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function mergeGuesses(array $guesses): array
     {
         $merged = ['control_date' => null, 'next_control_date' => null, 'result' => null, 'company_name' => null, 'equipment' => []];
@@ -63,10 +82,17 @@ class YscReportParser
                 continue;
             }
 
-            foreach (['control_date', 'next_control_date', 'result', 'company_name'] as $field) {
-                if (! empty($guess[$field])) {
+            // control_date/next_control_date/company_name genelde ilk
+            // sayfadaki başlık bilgisidir — İLK bulunan değer korunur.
+            foreach (['control_date', 'next_control_date', 'company_name'] as $field) {
+                if (empty($merged[$field]) && ! empty($guess[$field]) && is_string($guess[$field]) && ! $this->looksLikeMissingValue($guess[$field])) {
                     $merged[$field] = $guess[$field];
                 }
+            }
+
+            // result genelde raporun sonundadır — SON bulunan değer kazanır.
+            if (! empty($guess['result']) && is_string($guess['result']) && ! $this->looksLikeMissingValue($guess['result'])) {
+                $merged['result'] = $guess['result'];
             }
 
             foreach (is_array($guess['equipment'] ?? null) ? $guess['equipment'] : [] as $item) {
@@ -119,6 +145,7 @@ Aşağıdaki metinden şu JSON şemasına göre veri çıkar, SADECE JSON dönd�
 }
 Tarihi veya sonuç ifadesini normalize etmeye ÇALIŞMA — metinde ne yazıyorsa onu aynen döndür, bu işi başka bir katman yapacak.
 Metinde açıkça olmayan bilgiyi ASLA uydurma, null bırak.
+ÖNEMLİ — Sana verilen metin BÜYÜK bir raporun SADECE BİR SAYFASI olabilir (rapor sayfa sayfa işleniyor). Bu sayfada bir bilgi YOKSA bu NORMALDİR — o alanı null bırak. ASLA "metinde bulunamadı", "belirtilmemiş" gibi bir AÇIKLAMA CÜMLESİ yazma — sadece JSON null kullan.
 PROMPT;
     }
 
