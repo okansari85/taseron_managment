@@ -33,6 +33,10 @@ class NvidiaNimClient
                 ],
                 'temperature' => 0.1,
                 'response_format' => ['type' => 'json_object'],
+                // Nemotron 3.5 Lightning gibi "reasoning" modelleri thinking
+                // kapatılmazsa JSON'dan önce chain-of-thought metni ekliyor —
+                // bu parametreyi desteklemeyen modeller sessizce yok sayar.
+                'chat_template_kwargs' => ['thinking' => false],
             ]);
 
         if ($response->failed()) {
