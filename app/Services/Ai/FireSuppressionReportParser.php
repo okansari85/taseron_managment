@@ -304,7 +304,12 @@ class FireSuppressionReportParser
                 continue;
             }
 
-            if (preg_match('/^(\d+\.\d+(?:\s*-\s*\d+\.\d+)?)\)\s*(.+)$/u', $line, $m)) {
+            // İki farklı gerçek rapor formatı: "5.47) metin" (eski, madde
+            // kodu SADECE rakam.rakam) VE "6.D.9. metin." (gerçek NETA
+            // raporu, madde kodu rakam.HARF.rakam — bölüm+alt madde+sıra —
+            // ve kapanış işareti ")" değil "." ). İkisi de aynı yerde kabul
+            // edilir; hangisi eşleşirse o kullanılır.
+            if (preg_match('/^(\d+\.\d+(?:\s*-\s*\d+\.\d+)?|\d+\.[A-ZÇĞİÖŞÜ]\.\d+)[.)]\s*(.+)$/u', $line, $m)) {
                 if ($current !== null) {
                     $findings[] = $current;
                 }
@@ -324,7 +329,25 @@ class FireSuppressionReportParser
             }
 
             if ($current !== null) {
-                $current['description'] .= ' ' . $line;
+                // Kod'suz bir satır İKİ farklı şey olabilir: (a) eski
+                // formatta satır sarması — önceki madde cümlesi HENÜZ
+                // bitmemiş, bu satır onun devamı; (b) gerçek NETA
+                // raporunda, madde koduyla başlamayan ama TAMAMEN BAĞIMSIZ
+                // bir cümle (örn. "6.H.12. ... GÖZLEMLENMİŞTİR." sonrası
+                // "İDARİ BİNA YD-3,YD-4,YD-5 DOLAPLARININ ...
+                // GÖZLEMLENMİŞTİR." — kendi başına tam bir bulgu, öncekiyle
+                // İLGİSİZ). Ayrım noktası: önceki maddenin açıklaması ZATEN
+                // bir cümle sonu noktalaması (.!?) ile bitmişse, bu satır
+                // devamı DEĞİL, bağımsız yeni bir bulgudur (control_item
+                // yok — sadece cümlenin kendisi description olur).
+                $previousEndsSentence = (bool) preg_match('/[.!?]\s*$/u', $current['description']);
+
+                if ($previousEndsSentence) {
+                    $findings[] = $current;
+                    $current = ['control_item' => null, 'description' => $line];
+                } else {
+                    $current['description'] .= ' ' . $line;
+                }
             }
         }
 
