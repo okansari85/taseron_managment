@@ -7,7 +7,7 @@ use App\Http\Requests\StoreFireSuppressionReportRequest;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
-use App\Services\Ai\FireSuppressionReportParser;
+use App\Services\Ai\FireSuppressionOptimizedReportParser;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\FireSuppressionReportService;
 use App\Services\Matching\FireSuppressionMatchingProfile;
@@ -29,13 +29,13 @@ class FireSuppressionReportController extends Controller
     //
     // Pipeline üç ayrı, birbirinden habersiz katmandan geçer:
     //   PdfTextExtractor (OCR/metin çıkarma — sağlayıcı değişebilir)
-    //     → FireSuppressionReportParser (bizim kodumuz: normalize + doğrula + işaretle)
+    //     → FireSuppressionOptimizedReportParser (sayfa yönlendirme + mevcut parser)
     //       → MatchingEngine + FireSuppressionMatchingProfile (kod → kesin, kategoriye özgü alanlar → aday)
     public function analyze(
         AnalyzeReportFileRequest $request,
         LocationBusinessEntity $locationBusinessEntity,
         PdfTextExtractor $extractor,
-        FireSuppressionReportParser $parser,
+        FireSuppressionOptimizedReportParser $parser,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile
     ): JsonResponse {
