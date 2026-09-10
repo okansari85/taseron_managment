@@ -7,6 +7,7 @@ use App\Http\Requests\StoreFireSuppressionReportRequest;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
+use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\FireSuppressionOptimizedReportParser;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\FireSuppressionReportService;
@@ -15,6 +16,7 @@ use App\Services\Matching\MatchingEngine;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 class FireSuppressionReportController extends Controller
 {
@@ -37,15 +39,26 @@ class FireSuppressionReportController extends Controller
         PdfTextExtractor $extractor,
         FireSuppressionOptimizedReportParser $parser,
         MatchingEngine $matchingEngine,
-        FireSuppressionMatchingProfile $matchingProfile
+        FireSuppressionMatchingProfile $matchingProfile,
+        FireSuppressionAnalysisProgress $progress
     ): JsonResponse {
+        $analysisId = (string) ($request->header('X-Analysis-Id') ?: Str::uuid());
+
         try {
+            $progress->stage($analysisId, 'extracting', 'PDF metni çıkarılıyor');
             $pages = $extractor->extractPages($request->file('file'));
+            $progress->stage($analysisId, 'classifying', 'Sayfalar sınıflandırılıyor', null, [
+                'total_pages' => count($pages),
+            ]);
+
+            $progress->stage($analysisId, 'ai', 'Rapor sayfaları analiz ediliyor');
             $draft = $parser->parse($pages);
+            $progress->stage($analysisId, 'matching', 'Envanter ile eşleştiriliyor');
         } catch (\Throwable $exception) {
             report($exception);
+            $progress->fail($analysisId, $exception->getMessage());
 
-            return response()->json(['message' => $exception->getMessage()], 422);
+            return response()->json(['message' => $exception->getMessage(), 'analysis_id' => $analysisId], 422);
         }
 
         $candidateIds = [];
@@ -76,7 +89,23 @@ class FireSuppressionReportController extends Controller
             ->values()
             ->all();
 
-        return response()->json(['data' => $draft]);
+        $progress->complete($analysisId, [
+            'equipment_count' => count($draft['equipment']),
+            'finding_count' => count($draft['findings'] ?? []),
+        ]);
+
+        return response()->json(['data' => $draft, 'analysis_id' => $analysisId]);
+    }
+
+    public function analysisProgress(string $analysisId, FireSuppressionAnalysisProgress $progress): JsonResponse
+    {
+        $state = $progress->get($analysisId);
+
+        if ($state === null) {
+            return response()->json(['message' => 'Analiz ilerleme kaydı bulunamadı.'], 404);
+        }
+
+        return response()->json(['data' => $state]);
     }
 
     public function index(LocationBusinessEntity $locationBusinessEntity): JsonResponse
