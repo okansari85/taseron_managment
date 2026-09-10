@@ -305,11 +305,21 @@ class FireSuppressionReportParser
             }
 
             // İki farklı gerçek rapor formatı: "5.47) metin" (eski, madde
-            // kodu SADECE rakam.rakam) VE "6.D.9. metin." (gerçek NETA
-            // raporu, madde kodu rakam.HARF.rakam — bölüm+alt madde+sıra —
-            // ve kapanış işareti ")" değil "." ). İkisi de aynı yerde kabul
-            // edilir; hangisi eşleşirse o kullanılır.
-            if (preg_match('/^(\d+\.\d+(?:\s*-\s*\d+\.\d+)?|\d+\.[A-ZÇĞİÖŞÜ]\.\d+)[.)]\s*(.+)$/u', $line, $m)) {
+            // kodu SADECE rakam.rakam, kapanış ")") VE "6.D.9. metin."
+            // (gerçek NETA raporu, madde kodu rakam.HARF.rakam — bölüm+alt
+            // madde+sıra —, kapanış "."). Bu ikisi AYNI terminatörle
+            // BİRLEŞTİRİLEMEZ: "5.5. DİZEL POMPALARA..." gibi bir BÖLÜM
+            // ALT BAŞLIĞI da "rakam.rakam" + "." şeklindedir — eğer salt
+            // sayısal kodlara da "." kapanışına izin verirsek, böyle bir
+            // başlık satırı yanlışlıkla bulgu satırı sayılır (ki bu
+            // ReportSectionSplitter'ın genel bilgiler bölümünü AI'a hiç
+            // göndermeden yanlışlıkla "bulgu bulundu" sanıp atlamasına,
+            // control_date'in kaybolmasına yol açtı — gerçek veriyle
+            // yakalanan bir regresyon). Harf içeren kod şekli ("6.D.9")
+            // hiçbir bölüm başlığında geçmez (başlıklar sadece rakam.rakam),
+            // o yüzden SADECE o şekle "." kapanışı güvenle tanınabilir.
+            if (preg_match('/^(\d+\.\d+(?:\s*-\s*\d+\.\d+)?)\)\s*(.+)$/u', $line, $m)
+                || preg_match('/^(\d+\.[A-ZÇĞİÖŞÜ]\.\d+)\.\s*(.+)$/u', $line, $m)) {
                 if ($current !== null) {
                     $findings[] = $current;
                 }

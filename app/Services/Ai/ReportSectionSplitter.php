@@ -26,6 +26,17 @@ class ReportSectionSplitter
     // ilk bulduğu türe (yangin_dolabi) hepsini yanlışlıkla bağlardı.
     private const HEADINGS = [
         'genel bilgiler' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
+        // Pompa bölümleri raporlar arasında farklı şekillerde başlıklandırılıyor
+        // ("2.1. YANGIN POMPALARI TESPİT VE DEĞERLENDİRMELER", "5. POMPA GRUBU
+        // ETİKET BİLGİLERİ / TESPİT EDİLEN BİLGİLER", "5.1. 1 NUMARALI POMPA").
+        // Bilinçli olarak CONTROL_CRITERIA'ya DEĞİL GENERAL_INFO'ya bağlanıyor:
+        // pompa sayısı azdır (birkaç adet), AI zaten mevcut promptla doğru
+        // ayrıştırıyor (bkz. gerçek test), ve CONTROL_CRITERIA'daki "matris
+        // yoksa AI'a hiç gönderme" kısayolu, eğer bu bölüm gerçekte bir pompa
+        // tablosu içeriyorsa veriyi SESSİZCE kaybederdi — o riski almıyoruz.
+        'pompaları tespit ve değerlendirmeler' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
+        'pompa grubu etiket bilgileri' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
+        'numaralı pompa' => ['topic' => 'general_info', 'type' => PdfPageClassifier::GENERAL_INFO],
         'muayene kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'kontrol kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'yangın dolabı listesi' => ['topic' => 'equipment_list:yangin_dolabi', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
