@@ -35,8 +35,8 @@ class EmergencyEquipmentAnnualControlController extends Controller
         YscMatchingProfile $matchingProfile
     ): JsonResponse {
         try {
-            $rawText = $extractor->extract($request->file('file'));
-            $draft = $parser->parse($rawText);
+            $pages = $extractor->extractPages($request->file('file'));
+            $draft = $parser->parse($pages);
         } catch (\Throwable $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }

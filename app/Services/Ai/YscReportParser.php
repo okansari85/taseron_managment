@@ -31,9 +31,17 @@ class YscReportParser
     ) {
     }
 
-    public function parse(string $rawText): array
+    // $pages: PdfTextExtractor::extractPages() çıktısı — FireSuppressionReportParser
+    // ile aynı sebeple (NVIDIA NIM ücretsiz katmanında büyük tek seferlik
+    // çağrılar 502/503/504 ile kesilebiliyor) sayfa sayfa işlenip birleştirilir.
+    public function parse(array $pages): array
     {
-        $guess = $this->ai->extractStructuredJson($this->buildPrompt(), $rawText);
+        $prompt = $this->buildPrompt();
+        $guesses = array_map(
+            fn (string $pageText) => $this->ai->extractStructuredJson($prompt, $pageText),
+            $pages
+        );
+        $guess = $this->mergeGuesses($guesses);
 
         return [
             'control_date' => $this->normalizeDate($guess['control_date'] ?? null),
@@ -42,6 +50,55 @@ class YscReportParser
             'company_name' => $this->normalizeString($guess['company_name'] ?? null),
             'equipment' => $this->normalizeEquipment(is_array($guess['equipment'] ?? null) ? $guess['equipment'] : []),
         ];
+    }
+
+    private function mergeGuesses(array $guesses): array
+    {
+        $merged = ['control_date' => null, 'next_control_date' => null, 'result' => null, 'company_name' => null, 'equipment' => []];
+        $equipmentByCode = [];
+        $equipmentWithoutCode = [];
+
+        foreach ($guesses as $guess) {
+            if (! is_array($guess)) {
+                continue;
+            }
+
+            foreach (['control_date', 'next_control_date', 'result', 'company_name'] as $field) {
+                if (! empty($guess[$field])) {
+                    $merged[$field] = $guess[$field];
+                }
+            }
+
+            foreach (is_array($guess['equipment'] ?? null) ? $guess['equipment'] : [] as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                $code = is_string($item['code'] ?? null) ? mb_strtolower(trim($item['code']), 'UTF-8') : '';
+
+                if ($code === '') {
+                    $equipmentWithoutCode[] = $item;
+
+                    continue;
+                }
+
+                if (! isset($equipmentByCode[$code])) {
+                    $equipmentByCode[$code] = $item;
+
+                    continue;
+                }
+
+                foreach ($item as $key => $value) {
+                    if (empty($equipmentByCode[$code][$key]) && ! empty($value)) {
+                        $equipmentByCode[$code][$key] = $value;
+                    }
+                }
+            }
+        }
+
+        $merged['equipment'] = [...array_values($equipmentByCode), ...$equipmentWithoutCode];
+
+        return $merged;
     }
 
     // AI'dan sadece HAM veri istiyoruz — normalizasyon kuralları (tarih
@@ -85,13 +142,26 @@ PROMPT;
         return $timestamp !== false ? date('Y-m-d', $timestamp) : null;
     }
 
+    // mb_strtolower('UTF-8') Türkçe büyük "İ"yi Unicode kurallarına göre
+    // "i" + birleşen nokta işaretine çevirir (iki kod noktası), düz "i" değil
+    // — bu yüzden "DEĞİLDİR" gibi kelimeler mb_strtolower sonrası ASCII "i"
+    // içeren aranan alt dizeyle (örn. "değil") EŞLEŞMEZ. Türkçe büyük
+    // İ/I harflerini küçültmeden önce elle normalize ediyoruz (bkz.
+    // FireSuppressionReportParser::toLowerTr() — aynı hata orada bulundu).
+    private function toLowerTr(string $value): string
+    {
+        $value = str_replace(['İ', 'I'], ['i', 'ı'], $value);
+
+        return mb_strtolower($value, 'UTF-8');
+    }
+
     private function normalizeResult(?string $value): ?string
     {
         if (! $value) {
             return null;
         }
 
-        $value = mb_strtolower(trim($value), 'UTF-8');
+        $value = $this->toLowerTr(trim($value));
 
         if (str_contains($value, 'uygun değil') || str_contains($value, 'uygunsuz') || str_contains($value, 'ret')) {
             return 'uygun_degil';
