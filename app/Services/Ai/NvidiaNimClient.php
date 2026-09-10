@@ -34,6 +34,10 @@ class NvidiaNimClient
         $maxAttempts = 3;
         $lastException = null;
         $lastDiagnostic = null;
+        // Prod telemetri: her çağrının gerçek NIM gecikmesini ve retry
+        // sayısını görebilmek için (senkron Tinker testleri yerine gerçek
+        // kullanım verisi) — bkz. laravel.log "NVIDIA NIM: çağrı bitti".
+        $callStart = microtime(true);
 
         while ($attempts < $maxAttempts) {
             $attempts++;
@@ -56,6 +60,14 @@ class NvidiaNimClient
                 $decoded = $this->decodeContent($response);
 
                 if ($decoded !== null) {
+                    Log::info('NVIDIA NIM: çağrı bitti', [
+                        'duration_s' => round(microtime(true) - $callStart, 1),
+                        'attempts' => $attempts,
+                        'prompt_length' => mb_strlen($systemPrompt),
+                        'input_length' => mb_strlen($userContent),
+                        'max_tokens' => $maxTokens,
+                    ]);
+
                     return $decoded;
                 }
 
@@ -66,7 +78,7 @@ class NvidiaNimClient
                 // Teşhis için ham çıktının kuyruğunu ve finish_reason'ı
                 // logluyoruz — bir sonraki başarısızlıkta neyin kesildiğini
                 // görebilelim diye.
-                $lastDiagnostic = $this->diagnoseFailure($response);
+                $lastDiagnostic = $this->diagnoseFailure($response) + ['duration_s_so_far' => round(microtime(true) - $callStart, 1)];
                 Log::warning('NVIDIA NIM: AI çıktısı JSON olarak ayrıştırılamadı (deneme ' . $attempts . '/' . $maxAttempts . ')', $lastDiagnostic);
 
                 if ($attempts < $maxAttempts) {

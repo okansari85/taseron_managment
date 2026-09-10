@@ -5,6 +5,7 @@ namespace App\Services\Ai;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReportFinding;
 use DateTime;
+use Illuminate\Support\Facades\Log;
 
 // Yangın Söndürme Sistemleri Raporu için DOCUMENT PARSER — YscReportParser
 // ile aynı ayrım prensibi: AI (NvidiaNimClient) sadece ham bir tahmin
@@ -27,6 +28,7 @@ class FireSuppressionReportParser
     // döner hem de rapor uzunluğundan bağımsız ölçeklenir.
     public function parse(array $pages): array
     {
+        $parseStart = microtime(true);
         $categories = FireSuppressionInventoryItem::CATEGORIES;
 
         // U/UD/N MATRİS tablolarını (madde x ekipman) AI'a hiç göndermeden,
@@ -50,49 +52,86 @@ class FireSuppressionReportParser
             $pages
         );
 
-        // SIRALI — Http::pool ile paralel gönderim denendi ama NVIDIA NIM
-        // ücretsiz katmanı eşzamanlı isteklerde bozuk/eksik JSON döndürüyor
-        // (concurrency limiti gibi görünüyor); tek tek sıralı çağrı daha
-        // yavaş ama güvenilir olan seçenek.
+        // AI artık matris sayfalarına hiç gitmediği için equipment[].category
+        // burada, sayfanın kendi metninden tahmin edilir (bkz. yukarıdaki not).
+        $categoryByPage = array_map(
+            fn (string $pageText) => $this->inferCategoryFromMatrixPage($pageText),
+            $pages
+        );
+
+        // Sayfa TAMAMEN bir U/UD/N matrisiyse YA DA tamamen "N.NN) ..."
+        // formatlı bulgu maddelerinden oluşuyorsa (control_items / findings
+        // zaten deterministik bulundu) AI'ı bu sayfa için HİÇ ÇAĞIRMIYORUZ.
+        // Önceki halde SADECE matris sayfaları tam atlanıyordu; bulgu
+        // sayfası (örn. 35 maddelik "6. TESPİT VE BULGULAR") combined
+        // metne dahil edilmeye devam ediyordu ve combined çağrı skipFindings
+        // hesabı TÜM sayfaların deterministik bulgu bulmuş olmasını şart
+        // koştuğu için (sayfa 1/5'te hiç "N.NN)" yok), findings şeması
+        // gereksiz yere hâlâ isteniyordu — tam bu regex'in engellemeye
+        // çalıştığı pahalı işi geri açıyordu. Artık madde/bulgu formatı
+        // bulunan HER sayfa tam olarak AI dışı bırakılıyor.
+        $aiPageIndices = array_values(array_filter(
+            array_keys($pages),
+            fn (int $i) => ($matricesByPage[$i] ?? []) === [] && ($findingLinesByPage[$i] ?? []) === []
+        ));
+
+        // ÖLÇÜLMÜŞ GERÇEK: NVIDIA NIM'in ücretsiz katmanında her çağrının
+        // kendi SABİT bir gecikmesi var — 420 karakterlik minik bir sayfa
+        // bile ~20 saniye sürdü. Yani darboğaz içerik boyutu değil, ÇAĞRI
+        // SAYISI. Bu yüzden geri kalan (matrissiz) sayfalar, güvenli bir
+        // boyut sınırının altındaysa TEK bir çağrıda birleştirilir —
+        // sayfa sonu işaretiyle ayrılır, AI hâlâ hangi bilginin hangi
+        // sayfadan geldiğini ayırt edebilir. Sınırın üstündeyse (nadir,
+        // çok sayfalı/yoğun düzyazı raporlar) eski güvenli sıralı yönteme
+        // (502/503/504 riskini azaltan) geri dönülür.
+        $combinedLength = array_sum(array_map(fn (int $i) => mb_strlen($pages[$i]), $aiPageIndices));
+        $maxCombinedChars = 6000;
+
         $guesses = [];
-        foreach ($pages as $index => $pageText) {
-            $skipControlItems = ($matricesByPage[$index] ?? []) !== [];
-            $skipFindings = ($findingLinesByPage[$index] ?? []) !== [];
+        $aiStrategy = 'none';
 
-            // Sayfa TAMAMEN bir U/UD/N matrisiyse (control_items zaten
-            // deterministik bulundu) AI'ı bu sayfa için HİÇ ÇAĞIRMIYORUZ —
-            // asıl kritik veri (ekipman kodu/durum/açıklama) zaten matris +
-            // bulgu lookup'ından geliyor; marka/kat gibi ikincil bağlamsal
-            // alanlar bu sayfalarda boş kalabilir (kabul edilebilir bir
-            // ödün — hız için). Tarih/firma gibi başlık bilgileri raporun
-            // HER sayfasında tekrar ettiği için başka bir sayfadan
-            // (genelde 1.) zaten yakalanır, kaybolmaz.
-            if ($skipControlItems) {
-                $guesses[] = [];
-
-                continue;
-            }
-
-            $prompt = $this->buildPrompt($categories, $skipControlItems, $skipFindings);
+        if ($aiPageIndices === []) {
+            // Rapor tamamen matris/bulgu sayfalarından ibaret — AI'a hiç gidilmez.
+        } elseif ($combinedLength <= $maxCombinedChars) {
+            $aiStrategy = 'combined';
+            $combinedText = implode("\n\n--- SAYFA SONU ---\n\n", array_map(fn (int $i) => $pages[$i], $aiPageIndices));
+            $skipFindings = array_reduce(
+                $aiPageIndices,
+                fn (bool $carry, int $i) => $carry && (($findingLinesByPage[$i] ?? []) !== []),
+                true
+            );
+            $prompt = $this->buildPrompt($categories, false, $skipFindings, count($aiPageIndices) > 1);
 
             try {
-                $guesses[] = $this->ai->extractStructuredJson($prompt, $pageText);
+                $guesses[] = $this->ai->extractStructuredJson($prompt, $combinedText);
             } catch (\Throwable $exception) {
-                // Hangi sayfanın başarısız olduğu bilinmeden teşhis
-                // imkansız — bu bilgi olmadan önceki hata mesajı sadece
-                // "JSON ayrıştırılamadı" diyordu, 5 sayfadan hangisi
-                // belli değildi.
-                throw new \RuntimeException(
-                    'Sayfa ' . ($index + 1) . '/' . count($pages) . ' işlenirken hata: ' . $exception->getMessage(),
-                    previous: $exception
-                );
+                throw new \RuntimeException('Rapor işlenirken hata: ' . $exception->getMessage(), previous: $exception);
+            }
+        } else {
+            $aiStrategy = 'per_page';
+
+            foreach ($aiPageIndices as $index) {
+                $skipFindings = ($findingLinesByPage[$index] ?? []) !== [];
+                $prompt = $this->buildPrompt($categories, false, $skipFindings);
+
+                try {
+                    $guesses[] = $this->ai->extractStructuredJson($prompt, $pages[$index]);
+                } catch (\Throwable $exception) {
+                    // Hangi sayfanın başarısız olduğu bilinmeden teşhis
+                    // imkansız — bu bilgi olmadan önceki hata mesajı sadece
+                    // "JSON ayrıştırılamadı" diyordu, hangi sayfa belli değildi.
+                    throw new \RuntimeException(
+                        'Sayfa ' . ($index + 1) . '/' . count($pages) . ' işlenirken hata: ' . $exception->getMessage(),
+                        previous: $exception
+                    );
+                }
             }
         }
 
         $guess = $this->mergeGuesses($guesses);
 
         $equipment = $this->normalizeEquipment(is_array($guess['equipment'] ?? null) ? $guess['equipment'] : [], $categories);
-        $equipment = $this->applyDeterministicControlItems($equipment, $matricesByPage);
+        $equipment = $this->applyDeterministicControlItems($equipment, $matricesByPage, $categoryByPage);
 
         // MİMARİ NOKTA: matris zaten equipment × control_item × sonuç
         // ilişkisini veriyor ("YD2 → 5.47 → uygun_degil"). Bulgu metni
@@ -104,6 +143,20 @@ class FireSuppressionReportParser
         $allFindingLines = array_merge(...$findingLinesByPage);
         $aiFindings = $this->normalizeFindings(is_array($guess['findings'] ?? null) ? $guess['findings'] : [], $categories);
         [$equipment, $findings] = $this->applyFindingDescriptions($equipment, $allFindingLines, $aiFindings);
+
+        // Prod telemetri: bu logdan gerçek bir yüklemede kaç sayfanın
+        // matris/bulgu regex'iyle tamamen AI dışı bırakıldığını, kaç
+        // sayfanın AI'a gittiğini (tek birleşik çağrı mı yoksa sayfa sayfa
+        // mı) ve toplam parse() süresini görürüz — sonraki optimizasyon
+        // kararları tahminle değil bu veriyle verilir.
+        Log::info('FireSuppressionReportParser: analiz bitti', [
+            'total_pages' => count($pages),
+            'matrix_pages_skipped' => count(array_filter($matricesByPage, fn (array $m) => $m !== [])),
+            'findings_pages_skipped' => count(array_filter($findingLinesByPage, fn (array $f) => $f !== [])),
+            'ai_pages_count' => count($aiPageIndices),
+            'ai_strategy' => $aiStrategy,
+            'total_duration_s' => round(microtime(true) - $parseStart, 1),
+        ]);
 
         return [
             'control_date' => $this->normalizeDate($guess['control_date'] ?? null),
@@ -196,6 +249,37 @@ class FireSuppressionReportParser
         }
 
         return array_filter($result, fn (array $items) => $items !== []);
+    }
+
+    // Matris sayfasında AI'a hiç gidilmediği için equipment[].category'yi
+    // başka hiçbir yer doldurmuyor — bu yüzden sayfanın kendi metninden
+    // (matris genelde bir bölüm başlığının hemen altında gelir, örn. "E.
+    // Yangın Dolapları ve Hortum Sistemlerinin Kontrolü") basit anahtar
+    // kelime taramasıyla kategori tahmin edilir. Bulunamazsa null döner —
+    // çağıran taraf (applyDeterministicControlItems) o zaman "diger"e düşer,
+    // ASLA null bırakmaz (DB kolonu NOT NULL).
+    private function inferCategoryFromMatrixPage(string $pageText): ?string
+    {
+        $lower = $this->toLowerTr($pageText);
+
+        $keywordsByCategory = [
+            'yangin_dolabi' => ['dolab', 'dolap'],
+            'hidrant' => ['hidrant'],
+            'sprinkler' => ['sprink'],
+            'yangin_pompasi' => ['pompa'],
+            'su_deposu' => ['su deposu', 'depo hacmi'],
+            'gazli_sondurme' => ['gazlı söndürme', 'gazli sondurme'],
+        ];
+
+        foreach ($keywordsByCategory as $category => $keywords) {
+            foreach ($keywords as $keyword) {
+                if (str_contains($lower, $keyword)) {
+                    return $category;
+                }
+            }
+        }
+
+        return null;
     }
 
     // "6. TESPİT VE BULGULAR" bölümündeki "5.47) ..." gibi numaralı bulgu
@@ -358,18 +442,28 @@ class FireSuppressionReportParser
     // Deterministik olarak bulunan matris sonuçlarını normalizeEquipment()
     // çıktısına koda göre işler — kod zaten AI'ın equipment listesinde
     // varsa üzerine yazar (matris = tek doğruluk kaynağı), yoksa (AI o
-    // sütunu hiç bulamadıysa) en azından kod + maddeleriyle yeni bir kayıt
-    // ekler. Sonrasında result/note bu GERÇEK verilerden yeniden hesaplanır.
-    private function applyDeterministicControlItems(array $equipment, array $matricesByPage): array
+    // sütunu hiç bulamadıysa — artık matris sayfalarında AI'a hiç
+    // gidilmediği için bu HER ZAMAN gerçekleşir) en azından kod +
+    // maddeleriyle yeni bir kayıt ekler. Sonrasında result/note bu GERÇEK
+    // verilerden yeniden hesaplanır.
+    //
+    // $categoryByPage: her sayfa için inferCategoryFromMatrixPage() ile
+    // çıkarılan kategori — AI artık bu sayfalara hiç gitmediği için
+    // equipment[].category'yi BAŞKA HİÇBİR KAYNAK doldurmuyor; bu olmadan
+    // "category" NULL kalır ve DB'deki NOT NULL kısıtı INSERT'i patlatır
+    // (gerçek prod hatası buydu).
+    private function applyDeterministicControlItems(array $equipment, array $matricesByPage, array $categoryByPage): array
     {
         $mergedItems = [];
         $displayCode = [];
+        $categoryByKey = [];
 
-        foreach ($matricesByPage as $pageMatrix) {
+        foreach ($matricesByPage as $pageIndex => $pageMatrix) {
             foreach ($pageMatrix as $code => $items) {
                 $key = $this->normalizeCodeKey($code);
                 $mergedItems[$key] = $this->mergeControlItemLists($mergedItems[$key] ?? [], $items);
                 $displayCode[$key] ??= $code;
+                $categoryByKey[$key] ??= $categoryByPage[$pageIndex] ?? null;
             }
         }
 
@@ -388,14 +482,20 @@ class FireSuppressionReportParser
             if (isset($indexByKey[$key])) {
                 $equipment[$indexByKey[$key]]['control_items'] = $items;
 
+                if (empty($equipment[$indexByKey[$key]]['category']) && ($categoryByKey[$key] ?? null) !== null) {
+                    $equipment[$indexByKey[$key]]['category'] = $categoryByKey[$key];
+                }
+
                 continue;
             }
 
             // AI bu ekipmanı hiç bulamadı ama matriste kodu var — en
             // azından kod + maddeleriyle bir kayıt oluştur, kaybolmasın.
+            // "category" ASLA null bırakılmaz (DB NOT NULL) — sayfa
+            // başlığından çıkarılamadıysa "diger"e düşülür.
             $equipment[] = [
                 'code' => $displayCode[$key],
-                'category' => null,
+                'category' => $categoryByKey[$key] ?? 'diger',
                 'location_note' => null,
                 'brand' => null,
                 'model' => null,
@@ -591,7 +691,10 @@ class FireSuppressionReportParser
     // deterministik olarak zaten ayrıştırıldıysa true — AI'dan "findings"
     // HİÇ İSTENMEZ (bulgu analizinde artık AI kullanılmıyor, sadece
     // matris/regex + basit kod-eşleştirmesi).
-    private function buildPrompt(array $categories, bool $skipControlItems = false, bool $skipFindings = false): string
+    // $multiPage: matrissiz birkaç sayfa TEK çağrıda birleştirildiyse true
+    // (çağrı sayısını azaltmak için, bkz. parse()) — AI'a metnin "--- SAYFA
+    // SONU ---" işaretiyle ayrılmış BİRDEN FAZLA sayfa olabileceği söylenir.
+    private function buildPrompt(array $categories, bool $skipControlItems = false, bool $skipFindings = false, bool $multiPage = false): string
     {
         $categoryList = implode(', ', $categories);
 
@@ -622,6 +725,10 @@ CI;
             ? "\nBu sayfadaki \"N.NN) ...\" formatlı numaralı bulgu maddeleri (varsa) AYRI, deterministik bir mekanizmayla zaten işlendi — \"findings\" alanını HİÇ ÜRETME/DOLDURMA."
             : "\n\"findings\" dizisi SADECE düzyazı (cümle) halinde yazılmış tespit/bulgu/öneri maddeleridir (genellikle \"TESPİT VE BULGULAR\" başlıklı bir bölümde bulunur). Bu sayfada böyle bir bölüm/cümle YOKSA findings dizisini BOŞ [] bırak. Bir ekipman tablosundaki U/UD/N işaretlerini veya sayısal ölçüm değerlerini ASLA finding description'ı olarak yazma — bunlar finding değildir.\n\"findings[].description\": Cümleyi AYNEN metindeki gibi kopyala (içinde geçen ekipman kodları dahil, kısaltma/özetleme yapma) — bu cümledeki ekipman kodlarını hangi ekipmana bağlayacağımızı AYRI, deterministik bir adımda BİZ metinden çıkaracağız, sen bunun için ayrı bir liste üretme.";
 
+        $pageContextNote = $multiPage
+            ? "ÖNEMLİ — Sana verilen metin, aynı raporun BİRDEN FAZLA sayfası \"--- SAYFA SONU ---\" işaretiyle ard arda eklenerek oluşturuldu (sayfa sayısı azaltmak için birleştirildi). Bilgileri (tarih, firma, ekipman, sonuç) hangi \"sayfada\" geçtiğine bakmadan, tüm birleşik metinden çıkar. Bir bilgi hiçbirinde YOKSA null bırak."
+            : 'ÖNEMLİ — Sana verilen metin BÜYÜK bir raporun SADECE BİR SAYFASI olabilir (rapor sayfa sayfa işleniyor).';
+
         return <<<PROMPT
 Sen bir yangın söndürme sistemleri periyodik kontrol raporundan HAM veri çıkaran bir asistansın.
 Sistemler/ekipmanlar için SADECE şu kategori kodlarını kullan: {$categoryList}.
@@ -647,7 +754,7 @@ AYNI KURAL POMPALAR İÇİN DE GEÇERLİ — "Pompa No 1 2 3 Jokey" gibi bir ba�
 overall_result için: satır içindeki "U"/"UD" kısaltmalarıyla KARIŞTIRMA — sadece raporun nihai SONUÇ/KANAAT cümlesini kullan.
 Tarihi veya sonuç ifadelerini normalize etmeye ÇALIŞMA — metinde ne yazıyorsa onu aynen döndür, bu işi başka bir katman yapacak.
 
-ÖNEMLİ — Sana verilen metin BÜYÜK bir raporun SADECE BİR SAYFASI olabilir (rapor sayfa sayfa işleniyor). Bu sayfada bir bilgi (örn. control_date, company_name, overall_result) YOKSA bu NORMALDİR — o alanı null bırak. ASLA "metinde bulunamadı", "belirtilmemiş" gibi bir AÇIKLAMA CÜMLESİ yazma — sadece JSON null kullan, string değer olarak "yok"/"bulunamadı" gibi bir metin ASLA yazma.
+{$pageContextNote} Bu metinde bir bilgi (örn. control_date, company_name, overall_result) YOKSA bu NORMALDİR — o alanı null bırak. ASLA "metinde bulunamadı", "belirtilmemiş" gibi bir AÇIKLAMA CÜMLESİ yazma — sadece JSON null kullan, string değer olarak "yok"/"bulunamadı" gibi bir metin ASLA yazma.
 "equipment" kaydı SADECE gerçek bir ekipman tablosundan (kod/marka/seri no vb. sütunları olan bir tablo) türetilir. Bir "TESPİT VE BULGULAR" cümlesinde geçen bir ekipmandan (örn. "Dizel pompa çalışmıyor") bahsediliyor diye o cümleden YENİ bir equipment kaydı UYDURMA — bu sayfada o ekipmanın tablosu yoksa hiçbir equipment kaydı oluşturma, sadece bir finding olarak yaz.
 Metinde açıkça olmayan bilgiyi ASLA uydurma, null bırak. "scope" alanını sadece metinde kapsam açıkça belirtilmişse "specific"/"area" yap, aksi halde "unknown" kullan — asla otomatik olarak "all" üretme.
 PROMPT;
