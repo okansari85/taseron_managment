@@ -42,6 +42,13 @@ class NvidiaNimClient
         while ($attempts < $maxAttempts) {
             $attempts++;
 
+            Log::info('NVIDIA NIM: çağrı başladı', [
+                'attempt' => $attempts,
+                'prompt_length' => mb_strlen($systemPrompt),
+                'input_length' => mb_strlen($userContent),
+                'max_tokens' => $maxTokens,
+            ]);
+
             try {
                 $response = Http::withToken(config('services.nvidia_nim.api_key'))
                     ->timeout(0)
