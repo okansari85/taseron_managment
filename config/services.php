@@ -50,10 +50,12 @@ return [
         'text_model' => env('NVIDIA_NIM_TEXT_MODEL', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
     ],
 
+    // Google Gemini Interactions API — yangın tesisatı rapor analizinde
+    // alternatif AI sağlayıcısı.
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
         'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
-        'text_model' => env('GEMINI_TEXT_MODEL', 'gemini-2.5-flash'),
+        'text_model' => env('GEMINI_TEXT_MODEL', 'gemini-3.6-flash'),
     ],
 
 ];
