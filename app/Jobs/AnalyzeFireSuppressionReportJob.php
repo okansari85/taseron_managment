@@ -6,8 +6,8 @@ use App\Domain\Tenancy\TenantContext;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
+use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
-use App\Services\Ai\FireSuppressionSingleRequestReportParser;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
@@ -20,8 +20,8 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-// Rapor analizi (PDF çıkarma + NVIDIA NIM + eşleştirme) artık İSTEK İÇİNDE
-// SENKRON çalışmıyor. Controller Job'ı kuyruğa atıp HEMEN döner.
+// Rapor analizi (PDF çıkarma + TEK NVIDIA NIM isteği + eşleştirme) artık
+// İSTEK İÇİNDE SENKRON çalışmıyor. Controller Job'ı kuyruğa atıp HEMEN döner.
 class AnalyzeFireSuppressionReportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -41,7 +41,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
     public function handle(
         PdfTextExtractor $extractor,
-        FireSuppressionSingleRequestReportParser $parser,
+        FireSuppressionAiReportAnalyzer $analyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -58,12 +58,8 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
             $progress->stage($this->analysisId, 'extracting', 'PDF metni çıkarılıyor');
             $pages = $extractor->extractPages($file);
-            $progress->stage($this->analysisId, 'classifying', 'Sayfalar sınıflandırılıyor', null, [
-                'total_pages' => count($pages),
-            ]);
-
             $progress->stage($this->analysisId, 'ai', 'Rapor tek AI isteğiyle analiz ediliyor');
-            $draft = $parser->parse($pages);
+            $draft = $analyzer->analyze($pages);
             $progress->stage($this->analysisId, 'matching', 'Envanter ile eşleştiriliyor');
         } catch (Throwable $exception) {
             report($exception);
@@ -119,10 +115,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $draft['equipment']
         )));
 
-        // Frontend'in beklediği FireSuppressionReportAnalysisDraft şekli
-        // korunuyor. Eşleşme verileri ayrı bir "draft" zarfına konmak yerine
-        // draft ile aynı seviyede tutuluyor; böylece progress.result doğrudan
-        // mevcut upload.vue akışına verilebilir.
+        // Frontend'in beklediği düz sonuç şekli korunuyor.
         $result = $draft;
         $result['matched_inventory_items'] = $matchedInventoryItems;
         $result['candidate_inventory_items'] = $candidateInventoryItems;
