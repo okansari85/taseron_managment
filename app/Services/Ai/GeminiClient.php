@@ -126,8 +126,8 @@ class GeminiClient
                         'properties' => [
                             'name' => ['type' => 'string'],
                             'category' => ['type' => 'string'],
-                            'control_count' => ['type' => 'integer'],
-                            'nonconforming_count' => ['type' => 'integer'],
+                            'control_count' => ['type' => ['integer', 'null']],
+                            'nonconforming_count' => ['type' => ['integer', 'null']],
                             'components' => [
                                 'type' => 'array',
                                 'items' => [
@@ -139,8 +139,9 @@ class GeminiClient
                                         'brand' => ['type' => ['string', 'null']],
                                         'model' => ['type' => ['string', 'null']],
                                         'serial_no' => ['type' => ['string', 'null']],
+                                        'result' => ['type' => ['string', 'null']],
                                     ],
-                                    'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no'],
+                                    'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no', 'result'],
                                 ],
                             ],
                         ],
@@ -153,9 +154,13 @@ class GeminiClient
                         'type' => 'object',
                         'properties' => [
                             'system_name' => ['type' => ['string', 'null']],
+                            'component_codes' => [
+                                'type' => 'array',
+                                'items' => ['type' => 'string'],
+                            ],
                             'description' => ['type' => 'string'],
                         ],
-                        'required' => ['system_name', 'description'],
+                        'required' => ['system_name', 'component_codes', 'description'],
                     ],
                 ],
             ],
