@@ -9,8 +9,7 @@ return [
     |
     | This file is for storing the credentials for third party services such
     | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
+    | location for this type of service credentials.
     |
     */
 
@@ -49,6 +48,12 @@ return [
         // doğrulandı (bkz. NvidiaNimClient — "thinking" kapatılıyor, aksi
         // halde reasoning model chain-of-thought metniyle JSON'ı kirletiyor).
         'text_model' => env('NVIDIA_NIM_TEXT_MODEL', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
+    ],
+
+    'gemini' => [
+        'api_key' => env('GEMINI_API_KEY'),
+        'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+        'text_model' => env('GEMINI_TEXT_MODEL', 'gemini-2.5-flash'),
     ],
 
 ];
