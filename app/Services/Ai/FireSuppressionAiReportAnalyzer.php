@@ -26,8 +26,13 @@ class FireSuppressionAiReportAnalyzer
         }
 
         $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 24000);
+        $normalized = $this->normalize($result);
 
-        return $this->normalize($result);
+        // Geçici debug alanı: mevcut normalize edilmiş sözleşmeyi bozmadan
+        // NVIDIA NIM'in ham JSON çıktısını frontend'e ulaştırır.
+        $normalized['ai_raw_result'] = $result;
+
+        return $normalized;
     }
 
     private function buildDocumentText(array $pages): string
