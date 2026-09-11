@@ -17,6 +17,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
@@ -115,10 +116,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $draft['equipment']
         )));
 
-        // Frontend'in beklediği düz sonuç şekli korunuyor.
         $result = $draft;
-        // GEÇİCİ DEBUG: normalize edilmemiş Gemini çıktısını ayrıca result içine koy.
-        $result['ai_raw_result'] = $draft;
         $result['matched_inventory_items'] = $matchedInventoryItems;
         $result['candidate_inventory_items'] = $candidateInventoryItems;
         $result['unmatched_codes'] = $unmatchedCodes;
