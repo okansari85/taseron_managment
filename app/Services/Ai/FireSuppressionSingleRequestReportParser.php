@@ -4,8 +4,9 @@ namespace App\Services\Ai;
 
 /**
  * Single-request orchestration for fire-suppression reports.
- * Existing deterministic parsers remain authoritative; NVIDIA NIM is called
- * at most once for the remaining report sections.
+ * Existing deterministic parsers remain authoritative. NVIDIA NIM is used
+ * only as a fallback when deterministic extraction cannot produce a useful
+ * report draft.
  */
 class FireSuppressionSingleRequestReportParser
 {
@@ -24,6 +25,7 @@ class FireSuppressionSingleRequestReportParser
         $aiTexts = [];
         $equipmentRecords = [];
         $meta = $this->emptyDraft();
+        $deterministicFindingCount = 0;
 
         foreach ($sections as $section) {
             $type = $section['type'];
@@ -57,8 +59,6 @@ class FireSuppressionSingleRequestReportParser
                 $resolved = $this->generalInfoParser->parseGeneralInfo($text);
                 $meta = $this->fillMissingMeta($meta, $resolved);
 
-                // General information is deterministic where possible. If it
-                // is incomplete, retain it as context for the single request.
                 if (! $this->generalInfoParser->isGeneralInfoComplete($resolved)) {
                     $aiTexts[] = $text;
                 }
@@ -78,19 +78,28 @@ class FireSuppressionSingleRequestReportParser
             $aiTexts[] = $text;
         }
 
-        // IMPORTANT: FireSuppressionReportParser has a safe per-page fallback
-        // for large inputs. Passing the remaining material as ONE logical page
-        // guarantees exactly one NIM request while keeping its existing
-        // deterministic matrix/finding parsing and normalization intact.
-        $aiDraft = $aiTexts === []
-            ? $this->emptyDraft()
-            : $this->baseParser->parse([
+        // Findings and control matrices are deterministic in the base parser.
+        // Count them here so a report whose useful data is already extracted
+        // does not pay the ~20s+ NIM request cost at all.
+        foreach ($pages as $page) {
+            $deterministicFindingCount += count($this->parseFindingLines($page));
+        }
+
+        $hasDeterministicReportData = $equipmentRecords !== [] || $deterministicFindingCount > 0;
+
+        // IMPORTANT: Most fire-suppression reports are structured documents.
+        // If equipment/pump tables and/or numbered findings were parsed
+        // deterministically, the report is already usable. Do not invoke AI
+        // merely because there are other prose sections left over.
+        $aiDraft = $this->emptyDraft();
+        if (! $hasDeterministicReportData && $aiTexts !== []) {
+            // Keep the remaining material as ONE logical request. This is a
+            // fallback only; normal structured reports should take zero AI.
+            $aiDraft = $this->baseParser->parse([
                 implode("\n\n--- RAPOR BÖLÜMÜ ---\n\n", $aiTexts),
             ]);
+        }
 
-        // Metadata such as "Ekipman Seri No / Kod: YT-01" must not create a
-        // fabricated equipment record. Deterministic equipment-list records
-        // are authoritative; obvious metadata-only YT codes are discarded.
         $aiDraft['equipment'] = $this->filterMetadataEquipment(
             is_array($aiDraft['equipment'] ?? null) ? $aiDraft['equipment'] : [],
             $equipmentRecords
@@ -217,5 +226,22 @@ class FireSuppressionSingleRequestReportParser
         if ($value === null) return null;
         $value = mb_strtolower(trim((string) $value), 'UTF-8');
         return $value === '' ? null : preg_replace('/\s+/', '', $value);
+    }
+
+    private function parseFindingLines(string $pageText): array
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $pageText) ?: [];
+        $result = [];
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') continue;
+
+            if (preg_match('/^(\d+\.\d+)\s+(.+)$/u', $line, $m)) {
+                $result[] = ['code' => $m[1], 'description' => trim($m[2])];
+            }
+        }
+
+        return $result;
     }
 }
