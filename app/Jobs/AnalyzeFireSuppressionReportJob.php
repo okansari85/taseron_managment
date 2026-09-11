@@ -117,6 +117,8 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
         // Frontend'in beklediği düz sonuç şekli korunuyor.
         $result = $draft;
+        // GEÇİCİ DEBUG: normalize edilmemiş Gemini çıktısını ayrıca result içine koy.
+        $result['ai_raw_result'] = $draft;
         $result['matched_inventory_items'] = $matchedInventoryItems;
         $result['candidate_inventory_items'] = $candidateInventoryItems;
         $result['unmatched_codes'] = $unmatchedCodes;
