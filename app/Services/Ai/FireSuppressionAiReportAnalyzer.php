@@ -7,13 +7,13 @@ use RuntimeException;
 /**
  * Format-independent fire-suppression report analysis.
  *
- * The PDF text is sent to NVIDIA NIM in ONE request. The model is responsible
+ * The PDF text is sent to Gemini in ONE request. The model is responsible
  * for understanding the report's own headings/table layout; backend matching
  * remains deterministic and is performed after this service returns.
  */
 class FireSuppressionAiReportAnalyzer
 {
-    public function __construct(private NvidiaNimClient $ai)
+    public function __construct(private GeminiClient $ai)
     {
     }
 
@@ -29,7 +29,7 @@ class FireSuppressionAiReportAnalyzer
         $normalized = $this->normalize($result);
 
         // Geçici debug alanı: mevcut normalize edilmiş sözleşmeyi bozmadan
-        // NVIDIA NIM'in ham JSON çıktısını frontend'e ulaştırır.
+        // AI sağlayıcısının ham JSON çıktısını frontend'e ulaştırır.
         $normalized['ai_raw_result'] = $result;
 
         return $normalized;
@@ -45,7 +45,7 @@ class FireSuppressionAiReportAnalyzer
                 continue;
             }
 
-            $parts[] = '--- SAYFA ' . ($index + 1) . ' ---\n' . $page;
+            $parts[] = '--- SAYFA ' . ($index + 1) . " ---\n" . $page;
         }
 
         return implode("\n\n", $parts);
@@ -205,8 +205,6 @@ PROMPT;
                     ];
                 }
 
-                // Components are intentionally kept only when the AI supplied
-                // a real identifying name/code. Never create phantom rows.
                 if ($code === null && $name === null) {
                     continue;
                 }
@@ -316,23 +314,19 @@ PROMPT;
             str_contains($value, 'depo') => 'su_deposu',
             str_contains($value, 'sabit boru') || str_contains($value, 'kolekt') || str_contains($value, 'vana') => 'sabit_boru_tesisati',
             str_contains($value, 'gaz') => 'gazli_sondurme',
-            in_array($value, ['yangin_dolabi','yangin_pompasi','hidrant','sprinkler','su_alma_verme','su_deposu','sabit_boru_tesisati','gazli_sondurme','diger'], true) => $value,
             default => 'diger',
         };
     }
 
     private function dateOrNull(mixed $value): ?string
     {
-        $value = $this->stringOrNull($value);
-        if ($value === null) {
+        if (!filled($value)) {
             return null;
         }
 
-        foreach (['Y-m-d', 'd.m.Y', 'd/m/Y', 'd-m-Y'] as $format) {
-            $date = \DateTime::createFromFormat($format, $value);
-            if ($date !== false) {
-                return $date->format('Y-m-d');
-            }
+        $value = trim((string) $value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return $value;
         }
 
         return null;
@@ -345,6 +339,6 @@ PROMPT;
         }
 
         $value = trim((string) $value);
-        return $value === '' || strtolower($value) === 'null' ? null : $value;
+        return $value === '' ? null : $value;
     }
 }
