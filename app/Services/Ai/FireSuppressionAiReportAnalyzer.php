@@ -7,9 +7,9 @@ use RuntimeException;
 /**
  * Format-independent fire-suppression report analysis.
  *
- * The PDF text is sent to Gemini in ONE request. The model is responsible
- * for understanding the report's own headings/table layout; backend matching
- * remains deterministic and is performed after this service returns.
+ * The PDF text is sent to Gemini in ONE request. The model understands the
+ * report structure; backend matching remains deterministic and happens after
+ * extraction.
  */
 class FireSuppressionAiReportAnalyzer
 {
@@ -25,11 +25,8 @@ class FireSuppressionAiReportAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için rapor analiz edilemedi.');
         }
 
-        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 24000);
+        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 12000);
         $normalized = $this->normalize($result);
-
-        // Geçici debug alanı: mevcut normalize edilmiş sözleşmeyi bozmadan
-        // AI sağlayıcısının ham JSON çıktısını frontend'e ulaştırır.
         $normalized['ai_raw_result'] = $result;
 
         return $normalized;
@@ -57,42 +54,47 @@ class FireSuppressionAiReportAnalyzer
 Sen yangın tesisatı periyodik kontrol raporlarını anlayan bir veri çıkarma motorusun.
 
 GÖREV:
-Sana, biçimi önceden bilinmeyen bir yangın tesisatı/periyodik kontrol PDF'sinin tamamının metni verilecek. Raporda kullanılan başlıkları, tablo düzenini, numaralandırmayı ve terimleri kendin anlamlandır. Önceden tanımlı bölüm başlıklarına veya belirli bir firma şablonuna güvenme.
+Sana biçimi önceden bilinmeyen bir yangın tesisatı/periyodik kontrol PDF'sinin tamamının metni verilecek. Rapordaki başlıkları, tabloları, numaralandırmayı ve terimleri kendin yorumla. Firma şablonuna veya sabit bölüm sırasına güvenme.
 
 AMAÇ:
-Tek bir JSON üret. JSON daha sonra backend tarafından mevcut tesisat envanteriyle eşleştirilecek ve kullanıcıya onaylatılacak. Sen hiçbir veriyi veritabanına kaydetmiyorsun ve eşleştirme yapmıyorsun.
+Tek ve KOMPAKT bir JSON üret. JSON daha sonra backend tarafından mevcut tesisat envanteriyle eşleştirilecek ve kullanıcıya onaylatılacak. Veritabanına kayıt veya eşleştirme yapma.
 
-ÇIKARILACAK VERİLER:
-1. Rapor üst bilgileri: kontrol tarihi, sonraki kontrol tarihi, rapor numarası mümkünse, kontrolü yapan firma, genel sonuç.
-2. Raporda gerçekten kontrol edilen ana sistemler/kategoriler.
-3. Her sistemin raporda gerçekten listelenen bileşenleri/ekipmanları.
-4. Her bileşen için raporda bulunan kontrol maddeleri ve sonuçları.
-5. Uygunsuzluk/bulgu açıklamaları ve mümkünse ilgili sistem/bileşen/kontrol maddesi.
+ÇIKAR:
+1. Rapor üst bilgileri.
+2. Raporda gerçekten kontrol edilen sistemler/gruplar.
+3. Her sistem altında raporda gerçekten listelenen fiziksel bileşenler.
+4. Her sistem için toplam kontrol sayısı ve uygunsuz kontrol sayısı.
+5. Uygunsuzluk/bulguları sistem bazında, ayrıntılı ve yalnızca bir kez.
+
+KOMPAKTLIK KURALI:
+- Bileşen başına kontrol maddesi ÇIKARMA.
+- Bileşen başına U/OK/UYGUN sonuçlarını ÇIKARMA.
+- Bileşen başına bulgu tekrarlama.
+- Kontrol maddesi başlıklarını, kodlarını veya açıklamalarını component içine yazma.
+- Bir sistemin bulgularını findings altında sistem bazında yaz; aynı bulguyu farklı bileşenlere tekrar etme.
+- findings içinde component_code, control_item, scope veya area_note üretme.
+- Bulguyu raporda nasıl ayrıntılı açıklanmışsa anlamını kaybetmeden tek açıklama olarak aktar.
+- Ama fiziksel bileşen listesinde her gerçek bileşeni koru; eşleştirme için code/name/location/brand/model/serial_no bilgilerini mümkün olduğunca çıkar.
+- Bir bilgi raporda yoksa null kullan. Tahmin etme.
 
 DOMAIN HİYERARŞİSİ:
 - Yangın Tesisatı ana tesisattır.
-- Sistem, tesisatın altındaki gerçek sistem/gruptur (ör. Yangın Dolapları, Yangın Pompa Dairesi, Sprinkler, Hidrant).
-- Bileşen, sistemin fiziksel tekil unsurudur (ör. YD-01, YD-02, Pompa 1, Pompa 2, Jokey Pompa, Hidrant 01).
-- Bir rapor başlığını sistem olarak kabul etmek için rapordaki yapısal bağlamı kullan.
-- Vana, manometre, presostat vb. ifadeleri kendi başına sistem yapma; rapor bunları ayrı bir kontrol grubu olarak tanımlamıyorsa ilgili sistemin kontrol içeriği olarak değerlendir.
-- Sprinkler sistemi gibi bir sistem, raporda tek tek sprinkler başlıkları verilmemişse yapay sprinkler bileşenleri üretme.
-
-ÇOK ÖNEMLİ KURALLAR:
-- Raporda olmayan ekipman/bileşen KESİNLİKLE uydurma.
-- Genel bilgi bölümündeki seri numarası, tesisat numarası veya örnek kodu tek başına ekipman değildir; gerçek ekipman tablosu/listesi bağlamı gerekir.
-- Bulgu metninde adı geçen bir kodu, ekipman tablosunda fiziksel bileşen olarak doğrulamıyorsan equipment listesine ekleme.
+- Sistem, tesisatın altındaki gerçek sistem/gruptur. Örn. Yangın Dolapları, Yangın Pompa Dairesi, Sprinkler, Hidrant.
+- Bileşen, sistemin fiziksel tekil unsurudur. Örn. YD1, YD2, Pompa 1, Pompa 2, Jokey Pompa, Hidrant 01.
+- Rapor başlıklarını yapısal bağlama göre sistem olarak yorumla.
+- Vana, manometre, presostat vb. kendi başına sistem değildir; rapor bunları ayrı bir sistem/kontrol grubu olarak tanımlamıyorsa ilgili sistem içinde değerlendir.
+- Sprinkler sistemi tek tek sprinkler başlıkları vermiyorsa yapay sprinkler bileşenleri üretme.
+- Raporda olmayan fiziksel bileşeni kesinlikle uydurma.
+- Bulgu metninde geçen bir kodu, fiziksel ekipman listesiyle doğrulamıyorsan bileşen listesine ekleme.
 - Aynı bileşeni farklı sayfalarda tekrar gördüğünde tek kayıtta birleştir.
-- Rapordaki kontrol maddelerinin kendi kodlarını ve başlıklarını mümkün olduğunca aynen koru.
-- Uygunluk sonuçlarını yalnızca açıkça raporda verilen sonuca göre çıkar.
-- U/OK/UYGUN gibi olumlu işaretleri "uygun"; UD/UYGUN DEĞİL/uygunsuz gibi açık olumsuz işaretleri "uygun_degil"; N/N/A/uygulanamaz gibi değerlendirme dışı işaretleri "uygulanamiyor" olarak normalize et.
-- Sonuç açık değilse tahmin etme; ilgili alanı null bırak.
-- Bir kontrol maddesi belirli bir bileşene uygulanmadıysa o bileşene ekleme.
-- Bulgu açıklamasını kontrol maddesiyle ilişkilendirebiliyorsan control_item alanını doldur.
-- Bulgunun tüm sisteme/bileşenlere ait olduğu açıkça belirtiliyorsa scope=all; tek bileşen ise specific; yalnızca alan/bölge ise area; emin değilsen unknown.
-- Sayım üretirken yalnızca raporda gerçekten listelenen fiziksel bileşenleri say.
+
+SAYIM:
+- control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
+- nonconforming_count = raporda o sistem için uygunsuz/UD olarak işaretlenen kontrol maddesi sayısı.
+- U sonuçlarını listeleme; yalnızca bu iki sistem toplamını ver.
+- Sayıları rapordaki gerçek kontrol matrisinden/tablosundan çıkar. Emin değilsen 0 yazmak yerine raporun desteklediği sayıyı kullan; desteklenemiyorsa 0 kullan.
 
 KATEGORİLER:
-Kategori alanında mümkün olduğunda şu değerlerden birini kullan:
 - yangin_dolabi
 - yangin_pompasi
 - hidrant
@@ -103,7 +105,26 @@ Kategori alanında mümkün olduğunda şu değerlerden birini kullan:
 - gazli_sondurme
 - diger
 
-Bunlardan hangisinin doğru olduğundan emin değilsen "diger" kullan; ancak rapordaki sistem adını name alanında aynen koru.
+KATEGORİDEN emin değilsen diger kullan; sistem name alanında rapordaki adı koru.
+
+BİLEŞEN KİMLİĞİ:
+Her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
+- code
+- name
+- location
+- brand
+- model
+- serial_no
+
+Örneğin YD19 raporda geçiyorsa YD19'u mutlaka ayrı bileşen olarak çıkar. Konumu, markası, modeli veya seri numarası raporda yoksa null bırak.
+
+BULGULAR:
+findings AYRI bir array olmalıdır. Her kayıt yalnızca:
+- system_name
+- description
+alanlarından oluşur.
+
+Bir sistem için birden fazla farklı bulgu varsa ayrı kayıtlar olabilir. Aynı bulguyu component bazında çoğaltma. Bulgular, sistemin neden uygun olmadığını anlayacak kadar ayrıntılı olmalıdır.
 
 JSON ŞEMASI:
 {
@@ -117,39 +138,25 @@ JSON ŞEMASI:
   "systems": [
     {
       "name": "rapordaki sistem adı",
-      "category": "yukarıdaki kategori veya diger",
-      "description": "sistemin rapordaki kısa tanımı veya null",
+      "category": "kategori",
+      "control_count": 0,
+      "nonconforming_count": 0,
       "components": [
         {
-          "code": "YD-01 gibi rapordaki gerçek kod veya null",
-          "name": "kod yoksa rapordaki bileşen adı veya null",
-          "location_note": "string veya null",
+          "code": "string veya null",
+          "name": "string veya null",
+          "location": "string veya null",
           "brand": "string veya null",
           "model": "string veya null",
-          "serial_no": "string veya null",
-          "result": "uygun | uygun_degil | null",
-          "note": "string veya null",
-          "control_items": [
-            {
-              "code": "5.47 veya rapordaki kod veya null",
-              "title": "kontrol maddesi başlığı",
-              "status": "uygun | uygun_degil | uygulanamiyor",
-              "description": "rapordaki açıklama veya null"
-            }
-          ]
+          "serial_no": "string veya null"
         }
       ]
     }
   ],
   "findings": [
     {
-      "category": "kategori veya null",
-      "system_name": "rapordaki sistem adı veya null",
-      "component_code": "rapordaki bileşen kodu veya null",
-      "control_item": "kontrol maddesi kodu/adı veya null",
-      "description": "bulgu açıklaması",
-      "scope": "all | specific | area | unknown",
-      "area_note": "string veya null"
+      "system_name": "string veya null",
+      "description": "ayrıntılı bulgu"
     }
   ]
 }
@@ -165,6 +172,7 @@ PROMPT;
         $findings = is_array($result['findings'] ?? null) ? $result['findings'] : [];
 
         $equipment = [];
+        $normalizedSystems = [];
 
         foreach ($systems as $system) {
             if (!is_array($system)) {
@@ -172,7 +180,10 @@ PROMPT;
             }
 
             $category = $this->normalizeCategory($system['category'] ?? null);
+            $systemName = $this->stringOrNull($system['name'] ?? null);
             $components = is_array($system['components'] ?? null) ? $system['components'] : [];
+
+            $normalizedComponents = [];
 
             foreach ($components as $component) {
                 if (!is_array($component)) {
@@ -181,46 +192,47 @@ PROMPT;
 
                 $code = $this->stringOrNull($component['code'] ?? null);
                 $name = $this->stringOrNull($component['name'] ?? null);
-                $location = $this->stringOrNull($component['location_note'] ?? null);
+                $location = $this->stringOrNull($component['location'] ?? null);
                 $brand = $this->stringOrNull($component['brand'] ?? null);
                 $model = $this->stringOrNull($component['model'] ?? null);
                 $serial = $this->stringOrNull($component['serial_no'] ?? null);
-                $controlItems = [];
-
-                foreach ((array) ($component['control_items'] ?? []) as $controlItem) {
-                    if (!is_array($controlItem) || !filled($controlItem['title'] ?? null)) {
-                        continue;
-                    }
-
-                    $status = $this->normalizeStatus($controlItem['status'] ?? null);
-                    if ($status === null) {
-                        continue;
-                    }
-
-                    $controlItems[] = [
-                        'code' => $this->stringOrNull($controlItem['code'] ?? null),
-                        'title' => trim((string) $controlItem['title']),
-                        'status' => $status,
-                        'description' => $this->stringOrNull($controlItem['description'] ?? null),
-                    ];
-                }
 
                 if ($code === null && $name === null) {
                     continue;
                 }
 
+                $normalizedComponents[] = [
+                    'code' => $code,
+                    'name' => $name,
+                    'location' => $location,
+                    'brand' => $brand,
+                    'model' => $model,
+                    'serial_no' => $serial,
+                ];
+
+                // Existing frontend/matching contract is preserved.
                 $equipment[] = [
                     'code' => $code ?? $name,
                     'category' => $category,
+                    'system_name' => $systemName,
+                    'system_category' => $category,
                     'location_note' => $location,
                     'brand' => $brand,
                     'model' => $model,
                     'serial_no' => $serial,
-                    'result' => $this->normalizeResult($component['result'] ?? null, $controlItems),
-                    'note' => $this->stringOrNull($component['note'] ?? null),
-                    'control_items' => $controlItems,
+                    'result' => ((int) ($system['nonconforming_count'] ?? 0)) > 0 ? 'uygun_degil' : 'uygun',
+                    'note' => null,
+                    'control_items' => [],
                 ];
             }
+
+            $normalizedSystems[] = [
+                'name' => $systemName,
+                'category' => $category,
+                'control_count' => max(0, (int) ($system['control_count'] ?? 0)),
+                'nonconforming_count' => max(0, (int) ($system['nonconforming_count'] ?? 0)),
+                'components' => $normalizedComponents,
+            ];
         }
 
         return [
@@ -232,6 +244,7 @@ PROMPT;
                 fn ($system) => is_array($system) ? $this->normalizeCategory($system['category'] ?? null) : null,
                 $systems
             )))),
+            'systems' => $normalizedSystems,
             'equipment' => $equipment,
             'findings' => $this->normalizeFindings($findings),
         ];
@@ -246,21 +259,14 @@ PROMPT;
                 continue;
             }
 
-            $scope = strtolower(trim((string) ($finding['scope'] ?? 'unknown')));
-            if (!in_array($scope, ['all', 'specific', 'area', 'unknown'], true)) {
-                $scope = 'unknown';
-            }
-
             $normalized[] = [
-                'category' => $this->normalizeCategory($finding['category'] ?? null),
-                'control_item' => $this->stringOrNull($finding['control_item'] ?? null),
+                'category' => 'diger',
+                'control_item' => null,
                 'description' => trim((string) $finding['description']),
-                'scope' => $scope,
-                'area_note' => $this->stringOrNull($finding['area_note'] ?? null),
-                'equipment_codes' => array_values(array_filter(array_map(
-                    fn ($code) => $this->stringOrNull($code),
-                    [$finding['component_code'] ?? null]
-                ))),
+                'scope' => 'unknown',
+                'area_note' => $this->stringOrNull($finding['system_name'] ?? null),
+                'system_name' => $this->stringOrNull($finding['system_name'] ?? null),
+                'equipment_codes' => [],
             ];
         }
 
@@ -297,7 +303,7 @@ PROMPT;
             }
         }
 
-        return $value === 'uygulanamiyor' ? null : null;
+        return null;
     }
 
     private function normalizeCategory(mixed $value): string
@@ -325,11 +331,7 @@ PROMPT;
         }
 
         $value = trim((string) $value);
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
-            return $value;
-        }
-
-        return null;
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) ? $value : null;
     }
 
     private function stringOrNull(mixed $value): ?string
