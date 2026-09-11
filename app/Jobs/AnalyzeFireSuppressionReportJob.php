@@ -17,7 +17,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
@@ -120,11 +119,16 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $draft['equipment']
         )));
 
-        $progress->completeWithResult($this->analysisId, [
-            'draft' => $draft,
-            'matched_inventory_items' => $matchedInventoryItems,
-            'candidate_inventory_items' => $candidateInventoryItems,
-            'unmatched_codes' => $unmatchedCodes,
+        // Frontend'in beklediği FireSuppressionReportAnalysisDraft şekli
+        // korunuyor. Eşleşme verileri ayrı bir "draft" zarfına konmak yerine
+        // draft ile aynı seviyede tutuluyor; böylece progress.result doğrudan
+        // mevcut upload.vue akışına verilebilir.
+        $result = $draft;
+        $result['matched_inventory_items'] = $matchedInventoryItems;
+        $result['candidate_inventory_items'] = $candidateInventoryItems;
+        $result['unmatched_codes'] = $unmatchedCodes;
+
+        $progress->completeWithResult($this->analysisId, $result, [
             'counts' => [
                 'equipment' => count($draft['equipment'] ?? []),
                 'findings' => count($draft['findings'] ?? []),
