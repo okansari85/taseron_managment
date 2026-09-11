@@ -27,7 +27,6 @@ class FireSuppressionAiReportAnalyzer
 
         $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 12000);
         $normalized = $this->normalize($result);
-        $normalized['ai_raw_result'] = $result;
 
         return $normalized;
     }
