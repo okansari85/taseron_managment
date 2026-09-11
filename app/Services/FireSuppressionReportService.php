@@ -182,14 +182,76 @@ class FireSuppressionReportService
                     ]);
                 }
 
+                // Rapor satırının "equipment_code"u (örn. "YD15"), kalıcı
+                // Sistem Bileşeni kaydındaki AYNI kategori + AYNI koda sahip
+                // bir satırla TAM eşleşiyorsa bağlanır. Eşleşme bulunamazsa
+                // kod TESİSATTA GERÇEKTEN VAR ama henüz kayıtlı değil demektir
+                // — rapor bu bileşenin varlığının kanıtıdır, bu yüzden
+                // otomatik olarak (onay istemeden) yeni bir Sistem Bileşeni
+                // kaydı açılır ve hemen bağlanır.
+                $componentIdByKey = FireSuppressionInventoryItem::query()
+                    ->where('location_business_entity_id', $locationBusinessEntity->id)
+                    ->whereNotNull('code')
+                    ->get(['id', 'category', 'code'])
+                    ->mapWithKeys(fn (FireSuppressionInventoryItem $item) => [
+                        $item->category . '|' . mb_strtolower(trim($item->code), 'UTF-8') => $item->id,
+                    ]);
+
+                // Bazı kategoriler (örn. yangin_pompasi) proje mimari
+                // kararına göre AYRI bir ana sistem bileşeni DEĞİLDİR —
+                // "Yangın Pompa Dairesi" TEK bir ana bileşendir, Pompa 1/
+                // Pompa 2/Jokey bunun İÇİNDEKİ ayrı kayıtlı ekipmandır. Bu
+                // kategorilerde equipment_code'a karşılık yeni bir kayıt
+                // açılırken, önce o kategori için TEK bir üst kapsayıcı
+                // ("parent") bileşen bulunur/oluşturulur, yeni kayıt onun
+                // ALTINA (parent_component_id) bağlanır.
+                $nestedEquipmentCategories = ['yangin_pompasi'];
+                $parentComponentIdByCategory = [];
+
                 foreach ($controlItemsInput as $index => $controlItem) {
+                    $inventoryItemId = $controlItem['inventory_item_id'] ?? null;
+                    $equipmentCode = $controlItem['equipment_code'] ?? null;
+                    $category = $controlItem['category'] ?? null;
+
+                    if ($inventoryItemId === null && $equipmentCode !== null && $category !== null) {
+                        $key = $category . '|' . mb_strtolower(trim($equipmentCode), 'UTF-8');
+                        $inventoryItemId = $componentIdByKey[$key] ?? null;
+
+                        if ($inventoryItemId === null) {
+                            $parentComponentId = null;
+
+                            if (in_array($category, $nestedEquipmentCategories, true)) {
+                                if (! array_key_exists($category, $parentComponentIdByCategory)) {
+                                    $parentComponentIdByCategory[$category] = $this->resolveOrCreateParentComponent(
+                                        $tenantId,
+                                        $locationBusinessEntity->id,
+                                        $category
+                                    );
+                                }
+
+                                $parentComponentId = $parentComponentIdByCategory[$category];
+                            }
+
+                            $newComponent = FireSuppressionInventoryItem::query()->create([
+                                'tenant_id' => $tenantId,
+                                'location_business_entity_id' => $locationBusinessEntity->id,
+                                'parent_component_id' => $parentComponentId,
+                                'category' => $category,
+                                'code' => $equipmentCode,
+                            ]);
+
+                            $inventoryItemId = $newComponent->id;
+                            $componentIdByKey[$key] = $inventoryItemId;
+                        }
+                    }
+
                     FireSuppressionReportControlItem::query()->create([
                         'tenant_id' => $tenantId,
                         'report_id' => $report->id,
                         'template_id' => $controlItem['template_id'] ?? null,
-                        'equipment_code' => $controlItem['equipment_code'] ?? null,
-                        'inventory_item_id' => $controlItem['inventory_item_id'] ?? null,
-                        'category' => $controlItem['category'] ?? null,
+                        'equipment_code' => $equipmentCode,
+                        'inventory_item_id' => $inventoryItemId,
+                        'category' => $category,
                         'code' => $controlItem['code'] ?? null,
                         'section' => $controlItem['section'] ?? null,
                         'title' => $controlItem['title'],
@@ -298,6 +360,31 @@ class FireSuppressionReportService
         if ($additionalPaths !== []) {
             Storage::disk('public')->delete($additionalPaths);
         }
+    }
+
+    // "Yangın Pompa Dairesi" gibi ana bileşenler kategori başına TEK bir
+    // kapsayıcı kayıttır (code=null, unit_scope=whole_unit) — Pompa 1/Pompa
+    // 2/Jokey gibi alt-ekipmanlar bunun altına (parent_component_id) bağlanır.
+    // Zaten varsa bulunur, yoksa açılır — asla ikinci bir kapsayıcı açılmaz.
+    private function resolveOrCreateParentComponent(int $tenantId, int $locationBusinessEntityId, string $category): int
+    {
+        $existing = FireSuppressionInventoryItem::query()
+            ->where('location_business_entity_id', $locationBusinessEntityId)
+            ->where('category', $category)
+            ->whereNull('parent_component_id')
+            ->whereNull('code')
+            ->first();
+
+        if ($existing) {
+            return $existing->id;
+        }
+
+        return FireSuppressionInventoryItem::query()->create([
+            'tenant_id' => $tenantId,
+            'location_business_entity_id' => $locationBusinessEntityId,
+            'category' => $category,
+            'unit_scope' => 'whole_unit',
+        ])->id;
     }
 
     // scope='specific' → data'dan gelen id'ler; scope='all' → aynı şube +

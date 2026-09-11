@@ -33,6 +33,7 @@ use App\Http\Controllers\EmergencyEquipmentTypeController;
 use App\Http\Controllers\LocationEmergencyEquipmentController;
 use App\Http\Controllers\FieldFindingController;
 use App\Http\Controllers\FireSuppressionInventoryController;
+use App\Http\Controllers\FireSuppressionSystemComponentController;
 use App\Http\Controllers\FireSuppressionReportController;
 use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
@@ -154,6 +155,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-inventory', [FireSuppressionInventoryController::class, 'store']);
             Route::put('fire-suppression-inventory/{fireSuppressionInventoryItem}', [FireSuppressionInventoryController::class, 'update']);
             Route::delete('fire-suppression-inventory/{fireSuppressionInventoryItem}', [FireSuppressionInventoryController::class, 'destroy']);
+            Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-systems/{category}', [FireSuppressionSystemComponentController::class, 'show']);
             Route::get('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports', [FireSuppressionReportController::class, 'store']);
             Route::post('location-business-entities/{locationBusinessEntity}/fire-suppression-reports/analyze', [FireSuppressionReportController::class, 'analyze']);

@@ -17,6 +17,8 @@ class FireSuppressionOptimizedReportParser
         private FireSuppressionReportParser $baseParser,
         private ReportSectionSplitter $splitter,
         private FireSuppressionEquipmentListParser $equipmentListParser,
+        private FireSuppressionPumpListParser $pumpListParser,
+        private FireSuppressionGeneralInfoParser $generalInfoParser,
     ) {
     }
 
@@ -41,6 +43,9 @@ class FireSuppressionOptimizedReportParser
         $equipmentListRecords = [];
         $controlCriteriaSkipped = 0;
         $telemetry = [];
+        $deterministicMetaDraft = $this->emptyDraft();
+        $generalInfoSkipped = false;
+        $resultSkipped = false;
 
         foreach ($sections as $section) {
             $type = $section['type'];
@@ -57,6 +62,18 @@ class FireSuppressionOptimizedReportParser
             // sayfa üstü birim listesi gibi kalıntı metinler) AI'a göndermeye
             // değmez — gerçek içerik değil, ayrıştırma artığı.
             if ($type === PdfPageClassifier::UNKNOWN && mb_strlen($text) < 300) {
+                continue;
+            }
+
+            if ($section['topic'] === 'equipment_list:pompa') {
+                $records = $this->pumpListParser->parse($text);
+
+                if ($records !== []) {
+                    $equipmentListRecords = [...$equipmentListRecords, ...$records];
+                    continue;
+                }
+
+                $aiEquipmentTexts[] = $text;
                 continue;
             }
 
@@ -119,6 +136,50 @@ class FireSuppressionOptimizedReportParser
                 continue;
             }
 
+            // Genel Bilgiler ve Sonuç ve Kanaat, TÜRKAK akreditasyonunun
+            // zorunlu kıldığı yapısal bölümlerdir — etiket kelimeleri firmaya
+            // göre değişse de (bkz. FireSuppressionGeneralInfoParser'daki
+            // gerekçe) şekli hep aynı. Deterministik olarak ÇÖZÜLEBİLDİĞİ
+            // kadarıyla bu metin AI'a hiç gönderilmez; eksik/emin olunamayan
+            // kısım normal şekilde AI'a (aiMetaTexts) düşmeye devam eder.
+            if ($type === PdfPageClassifier::GENERAL_INFO) {
+                $resolved = $this->generalInfoParser->parseGeneralInfo($text);
+
+                if ($deterministicMetaDraft['control_date'] === null) {
+                    $deterministicMetaDraft['control_date'] = $resolved['control_date'];
+                }
+                if ($deterministicMetaDraft['next_control_date'] === null) {
+                    $deterministicMetaDraft['next_control_date'] = $resolved['next_control_date'];
+                }
+                if ($deterministicMetaDraft['company_name'] === null) {
+                    $deterministicMetaDraft['company_name'] = $resolved['company_name'];
+                }
+
+                if ($this->generalInfoParser->isGeneralInfoComplete($resolved)) {
+                    $generalInfoSkipped = true;
+                    continue;
+                }
+
+                $aiMetaTexts[] = $text;
+                continue;
+            }
+
+            if ($type === PdfPageClassifier::RESULT) {
+                $resolvedResult = $this->generalInfoParser->parseOverallResult($text);
+
+                if ($resolvedResult !== null) {
+                    if ($deterministicMetaDraft['overall_result'] === null) {
+                        $deterministicMetaDraft['overall_result'] = $resolvedResult;
+                    }
+
+                    $resultSkipped = true;
+                    continue;
+                }
+
+                $aiMetaTexts[] = $text;
+                continue;
+            }
+
             $aiMetaTexts[] = $text;
         }
 
@@ -147,13 +208,19 @@ class FireSuppressionOptimizedReportParser
             : $this->baseParser->parse($deterministicTexts);
         $deterministicDraft['equipment'] = [];
 
-        $draft = $this->mergeDrafts($metaAiDraft, $deterministicDraft);
+        // Deterministik meta alanları (tarih/firma/sonuç) EN YÜKSEK öncelik
+        // — AI'dan geldiyse onun üzerine yazılmaz (mergeDrafts zaten "primary
+        // alanı doluysa dokunma" kuralıyla çalışıyor).
+        $draft = $this->mergeDrafts($deterministicMetaDraft, $metaAiDraft);
+        $draft = $this->mergeDrafts($draft, $deterministicDraft);
         $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentAiDraft['equipment']);
         $draft['equipment'] = $this->mergeEquipment($draft['equipment'], $equipmentListRecords);
         $draft = $this->attachFindingDescriptions($draft);
 
         Log::info('FireSuppressionOptimizedReportParser: bölüm yönlendirme', [
             'total_pages' => count($pages),
+            'general_info_deterministic' => $generalInfoSkipped,
+            'result_deterministic' => $resultSkipped,
             'total_sections' => count($sections),
             'ai_equipment_sections' => count($aiEquipmentTexts),
             'ai_meta_sections' => count($aiMetaTexts),

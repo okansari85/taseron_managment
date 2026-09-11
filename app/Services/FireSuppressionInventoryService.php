@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Domain\Tenancy\TenantContext;
 use App\Models\FireSuppressionInventoryItem;
+use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -87,6 +88,41 @@ class FireSuppressionInventoryService
             'total_nonconformity' => $items->sum('open_nonconformity_count'),
             'last_control_date' => $lastControlDate?->toDateString(),
             'categories' => $categories,
+        ];
+    }
+
+    // "Tesisat Durumu > Sistem" detay ekranı için — bir kategorinin KALICI
+    // bileşen kayıtlarını (Bileşenler sekmesi) SON raporun o kategoriye ait
+    // kontrol maddeleri/bulgularıyla (Kontroller/Uygunsuzluklar sekmeleri)
+    // birlikte döner. İkisi AYRI kaynaktır — bileşenler rapordan bağımsız
+    // kalıcıdır, kontrol/bulgu verisi sadece son raporun o anki kaydıdır
+    // (bkz. proje mimari kararı: "rapor tesisatı oluşturmaz").
+    public function componentDetail(LocationBusinessEntity $locationBusinessEntity, string $category): array
+    {
+        $this->assertEntityTenant($locationBusinessEntity);
+        $this->assertCategory($category);
+
+        $components = $this->all($locationBusinessEntity)->where('category', $category)->values();
+
+        $latestReport = FireSuppressionReport::query()
+            ->where('location_business_entity_id', $locationBusinessEntity->id)
+            ->orderByDesc('report_date')
+            ->with([
+                'controlItems' => fn ($q) => $q->where('category', $category)->orderBy('sort_order'),
+                'findings' => fn ($q) => $q->where('category', $category),
+            ])
+            ->first();
+
+        return [
+            'category' => $category,
+            'components' => $components,
+            'control_items' => $latestReport?->controlItems ?? collect(),
+            'findings' => $latestReport?->findings ?? collect(),
+            'report' => $latestReport ? [
+                'id' => $latestReport->id,
+                'report_date' => $latestReport->report_date?->toDateString(),
+                'report_no' => $latestReport->report_no,
+            ] : null,
         ];
     }
 

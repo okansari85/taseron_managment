@@ -37,7 +37,7 @@ class FireSuppressionInventoryController extends Controller
         $item = $this->service->create($locationBusinessEntity, $request->validated());
 
         return response()->json([
-            'message' => 'Envanter kaydı başarıyla eklendi.',
+            'message' => 'Sistem bileşeni başarıyla eklendi.',
             'data' => $item,
         ], 201);
     }
@@ -49,7 +49,7 @@ class FireSuppressionInventoryController extends Controller
         $item = $this->service->update($fireSuppressionInventoryItem, $request->validated());
 
         return response()->json([
-            'message' => 'Envanter kaydı güncellendi.',
+            'message' => 'Sistem bileşeni güncellendi.',
             'data' => $item,
         ]);
     }
@@ -59,7 +59,7 @@ class FireSuppressionInventoryController extends Controller
         $this->service->delete($fireSuppressionInventoryItem);
 
         return response()->json([
-            'message' => 'Envanter kaydı silindi.',
+            'message' => 'Sistem bileşeni silindi.',
         ]);
     }
 }

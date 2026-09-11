@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FireSuppressionInventoryItem extends Model
 {
@@ -24,11 +25,20 @@ class FireSuppressionInventoryItem extends Model
 
     public const COMPLIANCE_STATUSES = ['uygun', 'uygun_degil'];
 
+    // per_unit: tek tek sayılan bileşen (Yangın Dolabı, Hidrant — kendi kodu
+    // ve kendi matris satırı var). whole_unit: bütün olarak değerlendirilen
+    // sistem (Pompa Dairesi, Su Deposu, Sabit Boru Tesisatı — içindeki
+    // alt-birimler ayrı ayrı sayılmaz, tek bir checklist ile değerlendirilir).
+    public const UNIT_SCOPES = ['per_unit', 'whole_unit'];
+
     protected $fillable = [
         'tenant_id',
         'location_business_entity_id',
+        'parent_component_id',
         'category',
+        'unit_scope',
         'code',
+        'display_name',
         'location_note',
         'brand',
         'model',
@@ -63,6 +73,20 @@ class FireSuppressionInventoryItem extends Model
     public function locationBusinessEntity(): BelongsTo
     {
         return $this->belongsTo(LocationBusinessEntity::class);
+    }
+
+    // Bazı ana bileşenler (Yangın Pompa Dairesi gibi) TEK bir bütün olarak
+    // değerlendirilir ama içinde ayrı ayrı kayıtlı ekipman barındırır (Pompa
+    // 1, Pompa 2, Jokey Pompa). Pompa AYRI bir ana sistem bileşeni DEĞİLDİR
+    // — bu ilişki (proje mimari kararı) burada temsil edilir.
+    public function parentComponent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_component_id');
+    }
+
+    public function childComponents(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_component_id');
     }
 
     // Bu kalemi kontrol etmiş raporlar (periyodik kontrol geçmişi — section 6).

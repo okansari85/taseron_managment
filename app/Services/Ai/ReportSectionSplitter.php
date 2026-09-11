@@ -46,6 +46,16 @@ class ReportSectionSplitter
         'numaralı pompa' => ['topic' => 'equipment_list:pompa', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
         'muayene kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'kontrol kriterleri ve testler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
+        // OKCO'nun genel kontrol bölümü başlığı ("5. TESPİT VE
+        // DEĞERLENDİRMELER") NETA'nınkinden ("6. MUAYENE KRİTERLERİ VE
+        // TESTLER") tamamen farklı kelimeler kullanıyor — bu eksik olduğu
+        // için gerçek testte pompa bölümü bunu (ve ardından gelen dolap
+        // matrisini) yanlışlıkla yutuyordu. Bu needle yukarıdaki pompaya
+        // özel "pompaları tespit ve değerlendirmeler"DEN SONRA gelmeli
+        // (dizi sırası önemli — ilk eşleşen needle kazanır), aksi halde
+        // "2.1. YANGIN POMPALARI TESPİT VE DEĞERLENDİRMELER" gibi bir pompa
+        // başlığını da yanlışlıkla control_criteria sayardı.
+        'tespit ve değerlendirmeler' => ['topic' => 'control_criteria', 'type' => PdfPageClassifier::CONTROL_CRITERIA],
         'yangın dolabı listesi' => ['topic' => 'equipment_list:yangin_dolabi', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
         'hidrant listesi' => ['topic' => 'equipment_list:hidrant', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
         'sprinkler listesi' => ['topic' => 'equipment_list:sprinkler', 'type' => PdfPageClassifier::EQUIPMENT_LIST],
@@ -68,8 +78,19 @@ class ReportSectionSplitter
         $currentType = PdfPageClassifier::UNKNOWN;
         $currentLines = [];
         $currentPages = [];
+        // Bazı firmaların şablonu bölüm başlığını (tipik olarak "1. GENEL
+        // BİLGİLER") HER SAYFANIN ÜSTBİLGİSİNDE tekrarlıyor (gerçek veride
+        // OKCO'nun raporunda doğrulandı — NETA'da bu sorun yok, aynı başlık
+        // sadece bir kez geçiyor). Bir bölüm KAPANIP bir SONRAKİNE
+        // geçildikten sonra aynı başlığın tekrar görünmesi neredeyse her
+        // zaman bu tür bir sayfa-üstbilgisi tekrarıdır, gerçek bir ikinci
+        // bölüm değil — bu yüzden zaten KAPANMIŞ bir bölümün başlığı bir
+        // daha görülürse yoksayılır (yeni bölüm AÇILMAZ), aksi halde
+        // aradaki gerçek içerik (örn. kontrol kriterleri + ekipman matrisi)
+        // yanlışlıkla tekrar "genel bilgiler"e yutulurdu.
+        $closedTopics = [];
 
-        $flush = function () use (&$sections, &$currentTopic, &$currentType, &$currentLines, &$currentPages): void {
+        $flush = function () use (&$sections, &$currentTopic, &$currentType, &$currentLines, &$currentPages, &$closedTopics): void {
             $text = trim(implode("\n", $currentLines));
 
             if ($text !== '') {
@@ -79,6 +100,7 @@ class ReportSectionSplitter
                     'text' => $text,
                     'pages' => array_values(array_unique($currentPages)),
                 ];
+                $closedTopics[$currentTopic] = true;
             }
 
             $currentLines = [];
@@ -97,7 +119,7 @@ class ReportSectionSplitter
 
                 $heading = $this->headingFor($line);
 
-                if ($heading !== null && $heading['topic'] !== $currentTopic) {
+                if ($heading !== null && $heading['topic'] !== $currentTopic && ! isset($closedTopics[$heading['topic']])) {
                     $flush();
                     $currentTopic = $heading['topic'];
                     $currentType = $heading['type'];
