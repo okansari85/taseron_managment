@@ -7,7 +7,7 @@ use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
-use App\Services\Ai\FireSuppressionOptimizedReportParser;
+use App\Services\Ai\FireSuppressionSingleRequestReportParser;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
@@ -22,19 +22,11 @@ use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 // Rapor analizi (PDF çıkarma + NVIDIA NIM + eşleştirme) artık İSTEK İÇİNDE
-// SENKRON çalışmıyor — bu, tek iş parçacıklı yerel dev sunucusunda (php -S)
-// birkaç dakika süren bir AI çağrısı boyunca DİĞER HER İSTEĞİ (login dahil)
-// bloklamasına neden oluyordu ve progress polling'in de bir anlamı yoktu
-// (sunucu zaten aynı isteğe kilitliyken ilerleme sorgusu cevap alamıyordu).
-// Artık: controller bu Job'ı kuyruğa atıp HEMEN döner, gerçek iş ayrı bir
-// worker sürecinde (php artisan queue:work) çalışır.
+// SENKRON çalışmıyor. Controller Job'ı kuyruğa atıp HEMEN döner.
 class AnalyzeFireSuppressionReportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    // NVIDIA NIM çağrıları (özellikle büyük/alışılmadık raporlarda) birkaç
-    // dakika sürebiliyor — worker'ın varsayılan zaman aşımını (genelde 60sn)
-    // aşmaması için açıkça yükseltiyoruz.
     public int $timeout = 900;
 
     public int $tries = 1;
@@ -50,15 +42,12 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
     public function handle(
         PdfTextExtractor $extractor,
-        FireSuppressionOptimizedReportParser $parser,
+        FireSuppressionSingleRequestReportParser $parser,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
         TenantContext $tenantContext
     ): void {
-        // Worker süreci, isteği yönlendiren ResolveTenant middleware'inden
-        // habersizdir — TenantScope'un doğru çalışması (ve yanlış tenant'ın
-        // verisini görmemesi) için burada elle kuruyoruz.
         $tenant = Tenant::query()->findOrFail($this->tenantId);
         $tenantContext->set($tenant);
 
@@ -74,7 +63,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
                 'total_pages' => count($pages),
             ]);
 
-            $progress->stage($this->analysisId, 'ai', 'Rapor sayfaları analiz ediliyor');
+            $progress->stage($this->analysisId, 'ai', 'Rapor tek AI isteğiyle analiz ediliyor');
             $draft = $parser->parse($pages);
             $progress->stage($this->analysisId, 'matching', 'Envanter ile eşleştiriliyor');
         } catch (Throwable $exception) {
@@ -89,44 +78,71 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
         $draft['equipment'] = array_map(function (array $item) use ($matchingEngine, $matchingProfile, $locationBusinessEntity, &$candidateIds) {
             $match = $matchingEngine->match($matchingProfile, $locationBusinessEntity, $item);
-            $candidateIds = [...$candidateIds, ...$match['candidate_ids']];
+            $candidateIds = [...$candidateIds, ...($match['candidate_ids'] ?? [])];
             $item['match'] = $match;
 
             return $item;
-        }, $draft['equipment']);
+        }, $draft['equipment'] ?? []);
 
-        $exactIds = collect($draft['equipment'])->pluck('match.matched_id')->filter()->values()->all();
-        $allReferencedIds = array_values(array_unique([...$exactIds, ...$candidateIds]));
+        $exactIds = array_values(array_unique(array_filter(array_map(
+            fn (array $item) => ($item['match']['status'] ?? null) === 'exact' ? ($item['match']['matched_id'] ?? null) : null,
+            $draft['equipment']
+        ))));
 
-        $referencedItems = $allReferencedIds === []
-            ? new Collection()
-            : FireSuppressionInventoryItem::query()->whereIn('id', $allReferencedIds)->get();
+        $candidateIds = array_values(array_unique(array_filter($candidateIds)));
 
-        $draft['matched_inventory_items'] = $referencedItems->whereIn('id', $exactIds)->values();
-        $draft['candidate_inventory_items'] = $referencedItems->whereIn('id', $candidateIds)->values();
-        $draft['unmatched_codes'] = collect($draft['equipment'])
-            ->filter(fn (array $item) => $item['match']['status'] === 'new' && $item['code'])
-            ->pluck('code')
+        $matchedInventoryItems = FireSuppressionInventoryItem::query()
+            ->whereIn('id', $exactIds)
+            ->get()
+            ->map(fn (FireSuppressionInventoryItem $item) => [
+                'id' => $item->id,
+                'code' => $item->code,
+                'category' => $item->category,
+                'location_note' => $item->location_note,
+            ])
             ->values()
             ->all();
 
-        $progress->completeWithResult($this->analysisId, $draft, [
-            'equipment_count' => count($draft['equipment']),
-            'finding_count' => count($draft['findings'] ?? []),
+        $candidateInventoryItems = FireSuppressionInventoryItem::query()
+            ->whereIn('id', $candidateIds)
+            ->get()
+            ->map(fn (FireSuppressionInventoryItem $item) => [
+                'id' => $item->id,
+                'code' => $item->code,
+                'category' => $item->category,
+                'location_note' => $item->location_note,
+            ])
+            ->values()
+            ->all();
+
+        $unmatchedCodes = array_values(array_filter(array_map(
+            fn (array $item) => ($item['match']['status'] ?? null) === 'new' ? ($item['code'] ?? null) : null,
+            $draft['equipment']
+        )));
+
+        $progress->completeWithResult($this->analysisId, [
+            'draft' => $draft,
+            'matched_inventory_items' => $matchedInventoryItems,
+            'candidate_inventory_items' => $candidateInventoryItems,
+            'unmatched_codes' => $unmatchedCodes,
+            'counts' => [
+                'equipment' => count($draft['equipment'] ?? []),
+                'findings' => count($draft['findings'] ?? []),
+                'matched' => count($matchedInventoryItems),
+                'candidates' => count($candidateInventoryItems),
+                'unmatched' => count($unmatchedCodes),
+            ],
         ]);
 
         $this->cleanup();
     }
 
-    public function failed(Throwable $exception): void
-    {
-        report($exception);
-        app(FireSuppressionAnalysisProgress::class)->fail($this->analysisId, $exception->getMessage());
-        $this->cleanup();
-    }
-
     private function cleanup(): void
     {
-        Storage::disk('local')->delete($this->storedFilePath);
+        try {
+            Storage::disk('local')->delete($this->storedFilePath);
+        } catch (Throwable) {
+            // Cleanup failure must not mask the analysis result/error.
+        }
     }
 }
