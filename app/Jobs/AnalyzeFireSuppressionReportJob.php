@@ -17,7 +17,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
