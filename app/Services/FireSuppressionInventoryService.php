@@ -167,7 +167,14 @@ class FireSuppressionInventoryService
                 'tenant_id' => $this->tenantContext->id(),
                 'location_business_entity_id' => $locationBusinessEntity->id,
                 'category' => $data['category'],
+                // Kod verilmemişse (Su Deposu, Sabit Boru gibi elle eklenen
+                // whole_unit bir sistem) bunu açıkça işaretliyoruz — rapor
+                // pipeline'ındaki (FireSuppressionReportService::create())
+                // aynı kural burada da geçerli: kodsuz kayıt = kategori
+                // başına TEK, bütünsel bileşen.
+                'unit_scope' => ($data['code'] ?? null) === null ? 'whole_unit' : 'per_unit',
                 'code' => $data['code'] ?? null,
+                'display_name' => $data['display_name'] ?? null,
                 'location_note' => $data['location_note'] ?? null,
                 'brand' => $data['brand'] ?? null,
                 'model' => $data['model'] ?? null,
@@ -195,11 +202,18 @@ class FireSuppressionInventoryService
         return $item->refresh();
     }
 
-    public function delete(FireSuppressionInventoryItem $item): void
+    // $force=true, "rapor/kontrol geçmişi var" korumasını atlayıp kalemi
+    // yine de siler — kullanıcı bilerek geçmişi göz ardı etmek istediğinde
+    // (örn. yanlış eklenmiş bir sistemi tamamen kaldırmak). DB tarafında bu
+    // güvenli: fire_suppression_report_control_items.inventory_item_id
+    // nullOnDelete, fire_suppression_report_inventory_items ve
+    // fire_suppression_report_finding_items cascadeOnDelete — rapor/kontrol
+    // satırlarının kendisi silinmez, sadece bu kaleme olan bağlantısı düşer.
+    public function delete(FireSuppressionInventoryItem $item, bool $force = false): void
     {
         $this->assertOwnership($item);
 
-        if ($item->reports()->exists()) {
+        if (! $force && $item->reports()->exists()) {
             throw new RuntimeException('Bu envanter kaydının rapor/kontrol geçmişi var, silinemez. Bunun yerine pasife alabilirsiniz.');
         }
 

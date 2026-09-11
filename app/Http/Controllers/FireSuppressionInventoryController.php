@@ -8,6 +8,7 @@ use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Services\FireSuppressionInventoryService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class FireSuppressionInventoryController extends Controller
 {
@@ -54,9 +55,9 @@ class FireSuppressionInventoryController extends Controller
         ]);
     }
 
-    public function destroy(FireSuppressionInventoryItem $fireSuppressionInventoryItem): JsonResponse
+    public function destroy(Request $request, FireSuppressionInventoryItem $fireSuppressionInventoryItem): JsonResponse
     {
-        $this->service->delete($fireSuppressionInventoryItem);
+        $this->service->delete($fireSuppressionInventoryItem, $request->boolean('force'));
 
         return response()->json([
             'message' => 'Sistem bileşeni silindi.',

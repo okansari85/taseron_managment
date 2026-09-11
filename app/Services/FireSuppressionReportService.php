@@ -96,6 +96,13 @@ class FireSuppressionReportService
         $findingsInput = $data['findings'] ?? [];
         $controlItemsInput = $data['control_items'] ?? [];
         $coveredInventoryItemIds = array_map('intval', $data['covered_inventory_item_ids'] ?? []);
+        // Su Deposu / Sabit Boru gibi whole_unit kategoriler için kullanıcının
+        // Eşleştirme adımında AÇIKÇA "envanterime ekle" dediği kategori
+        // listesi (bkz. upload.vue: detectedNewCategories/newCategoryApprovals).
+        // Rapor tek başına envanter için kaynak sayılamaz — bir kategori burada
+        // yoksa ve zaten kayıtlı da değilse, o kategori için YENİ bir Sistem
+        // Bileşeni ASLA otomatik açılmaz (bkz. aşağıdaki whole_unit dalı).
+        $approvedNewCategories = array_map('strval', $data['approved_new_categories'] ?? []);
 
         $this->assertItemsBelongToBranch($locationBusinessEntity, array_unique(array_merge(
             $coveredInventoryItemIds,
@@ -115,7 +122,7 @@ class FireSuppressionReportService
         $staleAdditionalPaths = [];
 
         try {
-            $report = DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $tenantId, $file, $additionalFiles, $existingReportId, &$filePath, &$storedAdditionalPaths, &$staleFilePath, &$staleAdditionalPaths) {
+            $report = DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $approvedNewCategories, $tenantId, $file, $additionalFiles, $existingReportId, &$filePath, &$storedAdditionalPaths, &$staleFilePath, &$staleAdditionalPaths) {
                 $filePath = $file->store(self::FILE_DIRECTORY, 'public');
 
                 $attributes = [
@@ -205,6 +212,21 @@ class FireSuppressionReportService
                         $item->category . '|' . mb_strtolower(trim($item->code), 'UTF-8') => $item->id,
                     ]);
 
+                // Su Deposu / Sabit Boru gibi whole_unit kategorilerde equipment_code
+                // hiç OLMAZ (bkz. FireSuppressionInventoryItem::UNIT_SCOPES notu —
+                // içinde ayrı ayrı sayılan alt-birim yok, tek bir kayıt tüm
+                // kategoriyi temsil eder). Bu satırlar YUKARIDAKİ koda-göre eşleştirmeye
+                // hiç girmez — kategori başına TEK kayıt, sadece kategoriye göre
+                // eşleştirilir/oluşturulur. YENİ bir whole_unit kaydı ise per_unit'in
+                // aksine kod bazlı değil KATEGORİ bazlı onaya tabidir — bkz.
+                // $approvedNewCategories ve aşağıdaki elseif dalı.
+                $wholeUnitIdByCategory = FireSuppressionInventoryItem::query()
+                    ->where('location_business_entity_id', $locationBusinessEntity->id)
+                    ->whereNull('code')
+                    ->get(['id', 'category'])
+                    ->mapWithKeys(fn (FireSuppressionInventoryItem $item) => [$item->category => $item->id])
+                    ->all();
+
                 $touchedInventoryItemIds = [];
 
                 foreach ($controlItemsInput as $index => $controlItem) {
@@ -221,11 +243,34 @@ class FireSuppressionReportService
                                 'tenant_id' => $tenantId,
                                 'location_business_entity_id' => $locationBusinessEntity->id,
                                 'category' => $category,
+                                'unit_scope' => 'per_unit',
                                 'code' => $equipmentCode,
                             ]);
 
                             $inventoryItemId = $newComponent->id;
                             $componentIdByKey[$key] = $inventoryItemId;
+                        }
+                    } elseif ($inventoryItemId === null && $equipmentCode === null && $category !== null) {
+                        $inventoryItemId = $wholeUnitIdByCategory[$category] ?? null;
+
+                        // Kategori zaten kayıtlıysa yukarıda bulunur, sorun yok.
+                        // Kayıtlı DEĞİLSE: SADECE kullanıcı Eşleştirme adımında bu
+                        // kategoriyi "envantere ekle" diye AÇIKÇA onayladıysa yeni
+                        // bir Sistem Bileşeni açılır. Onaylanmadıysa inventory_item_id
+                        // null kalır — kontrol maddesi denetim izi için rapora yine de
+                        // yazılır, ama hiçbir kayıtlı bileşene bağlı olmadığı için
+                        // Tesisat Durumu ekranında (ana ekran) hiç görünmez.
+                        if ($inventoryItemId === null && in_array($category, $approvedNewCategories, true)) {
+                            $newComponent = FireSuppressionInventoryItem::query()->create([
+                                'tenant_id' => $tenantId,
+                                'location_business_entity_id' => $locationBusinessEntity->id,
+                                'category' => $category,
+                                'unit_scope' => 'whole_unit',
+                                'code' => null,
+                            ]);
+
+                            $inventoryItemId = $newComponent->id;
+                            $wholeUnitIdByCategory[$category] = $inventoryItemId;
                         }
                     }
 

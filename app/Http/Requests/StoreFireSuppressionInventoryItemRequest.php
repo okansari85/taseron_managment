@@ -18,6 +18,7 @@ class StoreFireSuppressionInventoryItemRequest extends FormRequest
         return [
             'category' => ['required', 'string', Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
             'code' => ['nullable', 'string', 'max:100'],
+            'display_name' => ['nullable', 'string', 'max:150'],
             'location_note' => ['nullable', 'string', 'max:500'],
             'brand' => ['nullable', 'string', 'max:150'],
             'model' => ['nullable', 'string', 'max:150'],
@@ -38,6 +39,7 @@ class StoreFireSuppressionInventoryItemRequest extends FormRequest
             'category.in' => 'Geçersiz kategori.',
             'code.string' => 'Ekipman kodu geçerli bir metin olmalıdır.',
             'code.max' => 'Ekipman kodu en fazla 100 karakter olabilir.',
+            'display_name.max' => 'Görünen ad en fazla 150 karakter olabilir.',
             'location_note.string' => 'Konum notu geçerli bir metin olmalıdır.',
             'location_note.max' => 'Konum notu en fazla 500 karakter olabilir.',
             'last_control_date.date' => 'Son kontrol tarihi geçerli bir tarih olmalıdır.',

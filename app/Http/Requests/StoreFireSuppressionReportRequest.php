@@ -59,6 +59,13 @@ class StoreFireSuppressionReportRequest extends FormRequest
             'covered_inventory_item_ids' => ['nullable', 'array'],
             'covered_inventory_item_ids.*' => ['integer', 'exists:fire_suppression_inventory_items,id'],
 
+            // Kullanıcının Eşleştirme adımında "envantere ekle" diye onayladığı,
+            // henüz kayıtlı olmayan whole_unit kategoriler (bkz.
+            // FireSuppressionReportService::create() — bu liste olmadan hiçbir
+            // whole_unit Sistem Bileşeni otomatik açılmaz).
+            'approved_new_categories' => ['nullable', 'array'],
+            'approved_new_categories.*' => [Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
+
             'control_items' => ['nullable', 'array'],
             'control_items.*.template_id' => ['nullable', 'integer', 'exists:fire_suppression_control_item_templates,id'],
             'control_items.*.equipment_code' => ['nullable', 'string', 'max:100'],

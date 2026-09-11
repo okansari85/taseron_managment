@@ -35,6 +35,7 @@ use App\Http\Controllers\FieldFindingController;
 use App\Http\Controllers\FireSuppressionInventoryController;
 use App\Http\Controllers\FireSuppressionSystemComponentController;
 use App\Http\Controllers\FireSuppressionReportController;
+use App\Http\Controllers\FireSuppressionCategorySettingController;
 use App\Http\Controllers\WorkRequestController;
 use App\Models\City;
 use App\Models\District;
@@ -163,6 +164,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'show']);
             Route::delete('fire-suppression-reports/{fireSuppressionReport}', [FireSuppressionReportController::class, 'destroy']);
             Route::get('fire-suppression-control-item-templates', [FireSuppressionReportController::class, 'controlItemTemplates']);
+            Route::get('fire-suppression-category-settings', [FireSuppressionCategorySettingController::class, 'index']);
+            Route::put('fire-suppression-category-settings/{category}', [FireSuppressionCategorySettingController::class, 'update']);
             Route::get('fire-safety/dashboard', [FireSafetyDashboardController::class, 'show']);
             Route::apiResource('organizations', OrganizationController::class);
             Route::apiResource('contractors', ContractorController::class);
