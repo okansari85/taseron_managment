@@ -25,9 +25,11 @@ class FireSuppressionAiReportAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için rapor analiz edilemedi.');
         }
 
-        // GEÇİCİ DEBUG: Gemini'nin döndürdüğü ham JSON'u doğrudan göster.
-        // normalize() bilinçli olarak bu aşamada devre dışı bırakılmıştır.
-        return $this->ai->extractStructuredJson($this->systemPrompt(), $text, 12000);
+        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 12000);
+        $normalized = $this->normalize($result);
+        $normalized['ai_raw_result'] = $result;
+
+        return $normalized;
     }
 
     private function buildDocumentText(array $pages): string
@@ -208,7 +210,6 @@ PROMPT;
                     'serial_no' => $serial,
                 ];
 
-                // Existing frontend/matching contract is preserved.
                 $equipment[] = [
                     'code' => $code ?? $name,
                     'category' => $category,
