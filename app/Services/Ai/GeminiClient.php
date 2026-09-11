@@ -39,12 +39,8 @@ class GeminiClient
             ],
             'generation_config' => [
                 'temperature' => 0.1,
-                // This extraction is deterministic; keep thinking minimal so
-                // max_output_tokens is spent on the actual JSON, not hidden
-                // reasoning tokens. Gemini reports incomplete when the hard
-                // output ceiling is reached.
                 'thinking_level' => 'minimal',
-                'max_output_tokens' => max($maxTokens, 30000),
+                'max_output_tokens' => max($maxTokens, 12000),
             ],
             'store' => false,
         ];
@@ -53,7 +49,7 @@ class GeminiClient
             'model' => config('services.gemini.text_model'),
             'prompt_length' => mb_strlen($systemPrompt),
             'input_length' => mb_strlen($userContent),
-            'max_tokens' => max($maxTokens, 30000),
+            'max_tokens' => max($maxTokens, 12000),
             'thinking_level' => 'minimal',
             'structured_output' => true,
         ]);
@@ -130,7 +126,8 @@ class GeminiClient
                         'properties' => [
                             'name' => ['type' => 'string'],
                             'category' => ['type' => 'string'],
-                            'description' => ['type' => ['string', 'null']],
+                            'control_count' => ['type' => 'integer'],
+                            'nonconforming_count' => ['type' => 'integer'],
                             'components' => [
                                 'type' => 'array',
                                 'items' => [
@@ -138,31 +135,16 @@ class GeminiClient
                                     'properties' => [
                                         'code' => ['type' => ['string', 'null']],
                                         'name' => ['type' => ['string', 'null']],
-                                        'location_note' => ['type' => ['string', 'null']],
+                                        'location' => ['type' => ['string', 'null']],
                                         'brand' => ['type' => ['string', 'null']],
                                         'model' => ['type' => ['string', 'null']],
                                         'serial_no' => ['type' => ['string', 'null']],
-                                        'result' => ['type' => ['string', 'null']],
-                                        'note' => ['type' => ['string', 'null']],
-                                        'control_items' => [
-                                            'type' => 'array',
-                                            'items' => [
-                                                'type' => 'object',
-                                                'properties' => [
-                                                    'code' => ['type' => ['string', 'null']],
-                                                    'title' => ['type' => 'string'],
-                                                    'status' => ['type' => 'string'],
-                                                    'description' => ['type' => ['string', 'null']],
-                                                ],
-                                                'required' => ['code', 'title', 'status', 'description'],
-                                            ],
-                                        ],
                                     ],
-                                    'required' => ['code', 'name', 'location_note', 'brand', 'model', 'serial_no', 'result', 'note', 'control_items'],
+                                    'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no'],
                                 ],
                             ],
                         ],
-                        'required' => ['name', 'category', 'description', 'components'],
+                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components'],
                     ],
                 ],
                 'findings' => [
@@ -170,15 +152,10 @@ class GeminiClient
                     'items' => [
                         'type' => 'object',
                         'properties' => [
-                            'category' => ['type' => ['string', 'null']],
                             'system_name' => ['type' => ['string', 'null']],
-                            'component_code' => ['type' => ['string', 'null']],
-                            'control_item' => ['type' => ['string', 'null']],
                             'description' => ['type' => 'string'],
-                            'scope' => ['type' => 'string'],
-                            'area_note' => ['type' => ['string', 'null']],
                         ],
-                        'required' => ['category', 'system_name', 'component_code', 'control_item', 'description', 'scope', 'area_note'],
+                        'required' => ['system_name', 'description'],
                     ],
                 ],
             ],
