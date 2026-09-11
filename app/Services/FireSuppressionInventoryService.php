@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\FireSuppressionReport;
+use App\Models\FireSuppressionReportControlItem;
 use App\Models\LocationBusinessEntity;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -69,23 +70,48 @@ class FireSuppressionInventoryService
             ->sort()
             ->last();
 
+        // "Kaç madde uygunsuz" — kategorinin SON raporundaki UD kontrol
+        // maddesi satırlarından, madde KODU bazında TEKİL sayılır (aynı madde
+        // 20 dolapta da UD ise 1 sayılır — bileşen sayısı değil, madde sayısı).
+        $latestReport = FireSuppressionReport::query()
+            ->where('location_business_entity_id', $locationBusinessEntity->id)
+            ->orderByDesc('report_date')
+            ->first();
+
+        $nonconformingCodesByCategory = collect();
+        if ($latestReport) {
+            $nonconformingCodesByCategory = FireSuppressionReportControlItem::query()
+                ->where('report_id', $latestReport->id)
+                ->where('status', 'uygun_degil')
+                ->get(['category', 'code'])
+                ->groupBy('category')
+                ->map(fn ($rows) => $rows->pluck('code')->filter()->unique()->count());
+        }
+
+        // Section: sistem bileşenleri proje bazlı belirlenir, biz önceden
+        // bilemeyiz — bu yüzden bir kategoride HİÇ kayıt/rapor verisi olmasa
+        // bile o kategori listeden ASLA düşürülmez (total: 0 olarak kalır,
+        // arayüzde "Raporda Yok" gösterilir).
         $categories = collect(FireSuppressionInventoryItem::CATEGORIES)
-            ->map(function (string $category) use ($items) {
+            ->map(function (string $category) use ($items, $nonconformingCodesByCategory) {
                 $categoryItems = $items->where('category', $category);
 
                 return [
                     'category' => $category,
                     'total' => $categoryItems->count(),
-                    'nonconformity_count' => $categoryItems->sum('open_nonconformity_count'),
+                    // Kaç bileşen/dolap uygunsuz — TEKİL kalem sayısı ("147
+                    // dolap var, 30'u uygunsuz" buradaki 30).
+                    'nonconforming_component_count' => $categoryItems->where('compliance_status', 'uygun_degil')->count(),
+                    // Kaç kontrol maddesi uygunsuz — TEKİL madde kodu sayısı.
+                    'nonconforming_control_item_count' => $nonconformingCodesByCategory->get($category, 0),
                 ];
             })
-            ->filter(fn (array $row) => $row['total'] > 0)
             ->values();
 
         return [
             'overall_status' => $overallStatus,
             'total_equipment' => $items->count(),
-            'total_nonconformity' => $items->sum('open_nonconformity_count'),
+            'total_nonconforming_components' => $items->where('compliance_status', 'uygun_degil')->count(),
             'last_control_date' => $lastControlDate?->toDateString(),
             'categories' => $categories,
         ];
@@ -196,22 +222,37 @@ class FireSuppressionInventoryService
         return $item->refresh();
     }
 
-    // compliance_status / open_nonconformity_count'u o kalemi etkileyen AÇIK
-    // rapor uygunsuzluklarından türetir (section 8: rapor kaynaklı otomatik
-    // güncelleme — section 5'teki "kullanıcı onayı" burada zaten sağlanmış
-    // sayılır çünkü bu aşamada uygunsuzluk elle/kullanıcı tarafından
-    // girilmektedir, AI çıkarımı yok). Sadece FireSuppressionReportService
-    // tarafından, bir finding oluşturulduğunda/kapatıldığında çağrılır.
+    // compliance_status / open_nonconformity_count'u bu kalemin KENDİ kontrol
+    // maddesi (matris) satırlarından türetir — "bulgular" (findings) bağımsız
+    // bir uygunluk kaynağı DEĞİLDİR, sadece bir UD maddenin açıklama metnidir
+    // (kullanıcı kararı). Kural basit: bu kalemin SON raporundaki kontrol
+    // maddesi satırlarından bir tanesi bile 'uygun_degil' ise kalem
+    // 'uygun_degil'dir — bitti. "Son rapor" ile sınırlanır ki eski/arşivlenmiş
+    // bir raporun UD'si, kalem daha sonra uygun çıkmış olsa bile sonsuza kadar
+    // uygunsuz göstermesin. Sadece FireSuppressionReportService tarafından,
+    // bir rapor oluşturulduğunda/silindiğinde çağrılır.
     public function recomputeNonconformityStatus(FireSuppressionInventoryItem $item): FireSuppressionInventoryItem
     {
         $this->assertOwnership($item);
 
-        $openCount = DB::table('fire_suppression_report_finding_items')
-            ->join('fire_suppression_report_findings', 'fire_suppression_report_findings.id', '=', 'fire_suppression_report_finding_items.finding_id')
-            ->where('fire_suppression_report_finding_items.inventory_item_id', $item->id)
-            ->where('fire_suppression_report_findings.status', 'open')
-            ->distinct('fire_suppression_report_findings.id')
-            ->count('fire_suppression_report_findings.id');
+        $latestReportId = DB::table('fire_suppression_report_control_items')
+            ->join('fire_suppression_reports', 'fire_suppression_reports.id', '=', 'fire_suppression_report_control_items.report_id')
+            ->where('fire_suppression_report_control_items.inventory_item_id', $item->id)
+            ->orderByDesc('fire_suppression_reports.report_date')
+            ->orderByDesc('fire_suppression_reports.id')
+            ->value('fire_suppression_reports.id');
+
+        if ($latestReportId === null) {
+            $item->update(['open_nonconformity_count' => 0, 'compliance_status' => null]);
+
+            return $item->refresh();
+        }
+
+        $openCount = DB::table('fire_suppression_report_control_items')
+            ->where('report_id', $latestReportId)
+            ->where('inventory_item_id', $item->id)
+            ->where('status', 'uygun_degil')
+            ->count();
 
         $item->update([
             'open_nonconformity_count' => $openCount,

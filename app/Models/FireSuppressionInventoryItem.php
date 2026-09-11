@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class FireSuppressionInventoryItem extends Model
 {
@@ -19,6 +18,7 @@ class FireSuppressionInventoryItem extends Model
         'hidrant',
         'yangin_pompasi',
         'su_deposu',
+        'sabit_boru',
         'gazli_sondurme',
         'diger',
     ];
@@ -34,7 +34,6 @@ class FireSuppressionInventoryItem extends Model
     protected $fillable = [
         'tenant_id',
         'location_business_entity_id',
-        'parent_component_id',
         'category',
         'unit_scope',
         'code',
@@ -73,20 +72,6 @@ class FireSuppressionInventoryItem extends Model
     public function locationBusinessEntity(): BelongsTo
     {
         return $this->belongsTo(LocationBusinessEntity::class);
-    }
-
-    // Bazı ana bileşenler (Yangın Pompa Dairesi gibi) TEK bir bütün olarak
-    // değerlendirilir ama içinde ayrı ayrı kayıtlı ekipman barındırır (Pompa
-    // 1, Pompa 2, Jokey Pompa). Pompa AYRI bir ana sistem bileşeni DEĞİLDİR
-    // — bu ilişki (proje mimari kararı) burada temsil edilir.
-    public function parentComponent(): BelongsTo
-    {
-        return $this->belongsTo(self::class, 'parent_component_id');
-    }
-
-    public function childComponents(): HasMany
-    {
-        return $this->hasMany(self::class, 'parent_component_id');
     }
 
     // Bu kalemi kontrol etmiş raporlar (periyodik kontrol geçmişi — section 6).

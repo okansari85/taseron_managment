@@ -268,6 +268,7 @@ class FireSuppressionReportParser
             'sprinkler' => ['sprink'],
             'yangin_pompasi' => ['pompa'],
             'su_deposu' => ['su deposu', 'depo hacmi'],
+            'sabit_boru' => ['sabit boru', 'kolektör', 'kolektor', 'boru tesisat'],
             'gazli_sondurme' => ['gazlı söndürme', 'gazli sondurme'],
         ];
 

@@ -138,13 +138,14 @@ class FireSuppressionReportService
                     $staleFilePath = $report->file_path;
                     $staleAdditionalPaths = $report->files()->pluck('file_path')->all();
 
-                    // Bu raporun eski bulgularının etkilediği envanter
-                    // kalemlerinin uygunsuzluk durumu, alttaki kayıtlar
-                    // silinip yeniden kurulduktan sonra yeniden hesaplanmalı.
-                    $affectedByOldFindings = $report->findings()
-                        ->with('affectedItems:id')
-                        ->get()
-                        ->flatMap(fn ($finding) => $finding->affectedItems->pluck('id'))
+                    // Uygunluk artık bu raporun KONTROL MADDELERİNDEN türetiliyor
+                    // (bkz. FireSuppressionInventoryService::recomputeNonconformityStatus) —
+                    // bu raporun eski kontrol maddelerinin bağlı olduğu kalemler,
+                    // alttaki kayıtlar silindikten sonra yeniden hesaplanmalı
+                    // (o kalemin "son raporu" artık değişmiş olabilir).
+                    $affectedByOldControlItems = $report->controlItems()
+                        ->whereNotNull('inventory_item_id')
+                        ->pluck('inventory_item_id')
                         ->unique();
 
                     // Rapor "düzeltilmiş/yeniden yüklenmiş" kabul edilir —
@@ -156,7 +157,7 @@ class FireSuppressionReportService
                     $report->inventoryItems()->detach();
                     $report->update($attributes);
 
-                    foreach ($affectedByOldFindings as $itemId) {
+                    foreach ($affectedByOldControlItems as $itemId) {
                         $item = FireSuppressionInventoryItem::query()->find($itemId);
                         if ($item) {
                             $this->inventoryService->recomputeNonconformityStatus($item);
@@ -185,10 +186,17 @@ class FireSuppressionReportService
                 // Rapor satırının "equipment_code"u (örn. "YD15"), kalıcı
                 // Sistem Bileşeni kaydındaki AYNI kategori + AYNI koda sahip
                 // bir satırla TAM eşleşiyorsa bağlanır. Eşleşme bulunamazsa
-                // kod TESİSATTA GERÇEKTEN VAR ama henüz kayıtlı değil demektir
-                // — rapor bu bileşenin varlığının kanıtıdır, bu yüzden
-                // otomatik olarak (onay istemeden) yeni bir Sistem Bileşeni
-                // kaydı açılır ve hemen bağlanır.
+                // burada YİNE DE otomatik yeni bir Sistem Bileşeni kaydı
+                // açılır — AMA rapor tek başına envanter için kaynak
+                // sayılamayacağı için "onay istemeden" davranış artık BURADA
+                // DEĞİL, frontend'de (upload.vue) uygulanıyor: sihirbazın
+                // Eşleştirme adımında "yeni" (envanterde karşılığı olmayan)
+                // her ekipman için kullanıcıya onay checkbox'ı gösterilir
+                // (varsayılan işaretli), onaylanmayanların equipment_code'u
+                // bu isteğe HİÇ dahil edilmez — yani bu satıra hiç ulaşmaz.
+                // Kısacası: buraya kadar gelen her control_item zaten
+                // kullanıcı onaylı sayılır, backend'in ayrıca bir onay
+                // kontrolü yapmasına gerek yoktur.
                 $componentIdByKey = FireSuppressionInventoryItem::query()
                     ->where('location_business_entity_id', $locationBusinessEntity->id)
                     ->whereNotNull('code')
@@ -197,16 +205,7 @@ class FireSuppressionReportService
                         $item->category . '|' . mb_strtolower(trim($item->code), 'UTF-8') => $item->id,
                     ]);
 
-                // Bazı kategoriler (örn. yangin_pompasi) proje mimari
-                // kararına göre AYRI bir ana sistem bileşeni DEĞİLDİR —
-                // "Yangın Pompa Dairesi" TEK bir ana bileşendir, Pompa 1/
-                // Pompa 2/Jokey bunun İÇİNDEKİ ayrı kayıtlı ekipmandır. Bu
-                // kategorilerde equipment_code'a karşılık yeni bir kayıt
-                // açılırken, önce o kategori için TEK bir üst kapsayıcı
-                // ("parent") bileşen bulunur/oluşturulur, yeni kayıt onun
-                // ALTINA (parent_component_id) bağlanır.
-                $nestedEquipmentCategories = ['yangin_pompasi'];
-                $parentComponentIdByCategory = [];
+                $touchedInventoryItemIds = [];
 
                 foreach ($controlItemsInput as $index => $controlItem) {
                     $inventoryItemId = $controlItem['inventory_item_id'] ?? null;
@@ -218,24 +217,9 @@ class FireSuppressionReportService
                         $inventoryItemId = $componentIdByKey[$key] ?? null;
 
                         if ($inventoryItemId === null) {
-                            $parentComponentId = null;
-
-                            if (in_array($category, $nestedEquipmentCategories, true)) {
-                                if (! array_key_exists($category, $parentComponentIdByCategory)) {
-                                    $parentComponentIdByCategory[$category] = $this->resolveOrCreateParentComponent(
-                                        $tenantId,
-                                        $locationBusinessEntity->id,
-                                        $category
-                                    );
-                                }
-
-                                $parentComponentId = $parentComponentIdByCategory[$category];
-                            }
-
                             $newComponent = FireSuppressionInventoryItem::query()->create([
                                 'tenant_id' => $tenantId,
                                 'location_business_entity_id' => $locationBusinessEntity->id,
-                                'parent_component_id' => $parentComponentId,
                                 'category' => $category,
                                 'code' => $equipmentCode,
                             ]);
@@ -259,9 +243,24 @@ class FireSuppressionReportService
                         'description' => $controlItem['description'] ?? null,
                         'sort_order' => $index,
                     ]);
+
+                    if ($inventoryItemId !== null) {
+                        $touchedInventoryItemIds[] = $inventoryItemId;
+                    }
                 }
 
-                $affectedItemIds = [];
+                // Uygunluk (compliance_status / open_nonconformity_count),
+                // bulgulardan DEĞİL, bu raporun kontrol maddesi (matris)
+                // satırlarından türetilir — bir kalemin bir tane bile UD
+                // maddesi varsa o kalem uygunsuzdur, bitti (bulgular sadece
+                // UD maddenin açıklama metnidir, ayrı bir uygunluk kaynağı
+                // değildir).
+                foreach (array_unique($touchedInventoryItemIds) as $itemId) {
+                    $item = FireSuppressionInventoryItem::query()->find($itemId);
+                    if ($item) {
+                        $this->inventoryService->recomputeNonconformityStatus($item);
+                    }
+                }
 
                 foreach ($findingsInput as $findingData) {
                     $finding = FireSuppressionReportFinding::query()->create([
@@ -278,15 +277,13 @@ class FireSuppressionReportService
                     $resolvedIds = $this->resolveFindingScope($locationBusinessEntity, $finding, $findingData);
 
                     if ($resolvedIds !== []) {
+                        // NOT: affectedItems sync'i sadece "Uygunsuzluklar"
+                        // sekmesinin gösterdiği, bulguya bağlı bileşen
+                        // listesi içindir — compliance_status artık bundan
+                        // türetilmiyor (yukarıda kontrol maddelerinden
+                        // hesaplandı), bu yüzden burada ayrıca recompute
+                        // TETİKLENMİYOR.
                         $finding->affectedItems()->sync($resolvedIds);
-                        $affectedItemIds = [...$affectedItemIds, ...$resolvedIds];
-                    }
-                }
-
-                foreach (array_unique($affectedItemIds) as $itemId) {
-                    $item = FireSuppressionInventoryItem::query()->find($itemId);
-                    if ($item) {
-                        $this->inventoryService->recomputeNonconformityStatus($item);
                     }
                 }
 
@@ -331,15 +328,15 @@ class FireSuppressionReportService
         $this->assertOwnership($report);
 
         // Section 25: rapor silinse de envanter kalemleri silinmez — burada
-        // sadece raporun kendisi (findings + pivot ilişkileri cascade ile)
-        // kaldırılır, FireSuppressionInventoryItem'a hiç dokunulmaz. Ama bu
-        // rapordaki bulguların etkilediği kalemlerin uygunsuzluk durumu artık
-        // güncel değildir (silinen finding'e dayanıyordu) — cascade'den ÖNCE
-        // etkilenen id'leri toplayıp silme sonrası yeniden hesaplanır.
-        $affectedItemIds = $report->findings()
-            ->with('affectedItems:id')
-            ->get()
-            ->flatMap(fn ($finding) => $finding->affectedItems->pluck('id'))
+        // sadece raporun kendisi (findings + control_items + pivot
+        // ilişkileri cascade ile) kaldırılır, FireSuppressionInventoryItem'a
+        // hiç dokunulmaz. Ama bu rapordaki kontrol maddelerinin bağlı olduğu
+        // kalemlerin uygunluk durumu artık güncel değildir (bu raporun
+        // verisine dayanıyordu) — cascade'den ÖNCE etkilenen id'leri toplayıp
+        // silme sonrası yeniden hesaplanır.
+        $affectedItemIds = $report->controlItems()
+            ->whereNotNull('inventory_item_id')
+            ->pluck('inventory_item_id')
             ->unique();
 
         $filePath = $report->file_path;
@@ -360,31 +357,6 @@ class FireSuppressionReportService
         if ($additionalPaths !== []) {
             Storage::disk('public')->delete($additionalPaths);
         }
-    }
-
-    // "Yangın Pompa Dairesi" gibi ana bileşenler kategori başına TEK bir
-    // kapsayıcı kayıttır (code=null, unit_scope=whole_unit) — Pompa 1/Pompa
-    // 2/Jokey gibi alt-ekipmanlar bunun altına (parent_component_id) bağlanır.
-    // Zaten varsa bulunur, yoksa açılır — asla ikinci bir kapsayıcı açılmaz.
-    private function resolveOrCreateParentComponent(int $tenantId, int $locationBusinessEntityId, string $category): int
-    {
-        $existing = FireSuppressionInventoryItem::query()
-            ->where('location_business_entity_id', $locationBusinessEntityId)
-            ->where('category', $category)
-            ->whereNull('parent_component_id')
-            ->whereNull('code')
-            ->first();
-
-        if ($existing) {
-            return $existing->id;
-        }
-
-        return FireSuppressionInventoryItem::query()->create([
-            'tenant_id' => $tenantId,
-            'location_business_entity_id' => $locationBusinessEntityId,
-            'category' => $category,
-            'unit_scope' => 'whole_unit',
-        ])->id;
     }
 
     // scope='specific' → data'dan gelen id'ler; scope='all' → aynı şube +
