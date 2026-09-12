@@ -25,6 +25,10 @@ class GeminiClient
             throw new RuntimeException('GEMINI_API_KEY tanımlı değil — Gemini destekli rapor analizi kullanılamıyor.');
         }
 
+        // GEÇİCİ TEST: Yalnızca Yangın Dolabı için fiziksel ekipmanları
+        // kompakt equipment_matrix formatında döndürmesini iste.
+        $systemPrompt .= "\n\nGEÇİCİ YANGIN DOLABI MATRIX TESTİ:\n- Yalnızca category = yangin_dolabi olan sistemlerde fiziksel ekipmanları tek tek components içine yazma.\n- Yangın Dolabı için equipment_matrix kullan. Her matrix kaydında codes, location ve results alanlarını üret.\n- codes ve results aynı uzunlukta ve aynı sırada olmalıdır.\n- Raporda grup halinde geçen kodları aynen koru; kodları uydurma, birleştirme veya yeniden yorumlama.\n- U/UD gibi sonuçları codes ile birebir sırada results içine koy.\n- Yangın Dolabı için components boş array olsun.\n- Diğer tüm sistemlerde mevcut components yapısını aynen kullan ve equipment_matrix üretme.\n";
+
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $startedAt = microtime(true);
 
@@ -163,7 +167,7 @@ class GeminiClient
                                 ],
                             ],
                         ],
-                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
+                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components'],
                     ],
                 ],
                 'findings' => [
