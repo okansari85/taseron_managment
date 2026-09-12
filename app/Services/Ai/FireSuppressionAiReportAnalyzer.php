@@ -25,7 +25,7 @@ class FireSuppressionAiReportAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için rapor analiz edilemedi.');
         }
 
-        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 12000);
+        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 50000);
         $normalized = $this->normalize($result);
 
         return $normalized;
