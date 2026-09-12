@@ -28,10 +28,10 @@ class FireSuppressionAiReportAnalyzer
         $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 50000);
         $normalized = $this->normalize($result);
 
-        // GEÇİCİ DEBUG: AI'ın normalize edilmeden önce ürettiği ham JSON'u
-        // frontend'e taşı. Böylece systems/components içinde ne geldiğini
-        // normalize veya eşleştirme aşamasından bağımsız görebiliriz.
-        $normalized['_debug_ai_raw'] = $result;
+        // GEÇİCİ DEBUG: Ham Gemini çıktısını normalize edilmiş sonuçtan
+        // ayrı bir üst seviye alan olarak taşı. Böylece frontend Console'da
+        // ham AI çıktısı ile normalize edilmiş sonucu doğrudan karşılaştırabiliriz.
+        $normalized['debug_ai_raw'] = $result;
 
         return $normalized;
     }
