@@ -87,10 +87,15 @@ DOMAIN HİYERARŞİSİ:
 - Aynı bileşeni farklı sayfalarda tekrar gördüğünde tek kayıtta birleştir.
 
 EKİPMAN KODU VE LOKASYON KURALI:
-- Her fiziksel ekipmanı raporda geçtiği şekliyle TEK TEK çıkar.
-- code ve location alanlarını raporda geçtiği haliyle AYNEN aktar.
-- code ve location değerlerini değiştirme, birleştirme veya yeniden yorumlama.
-- Aynı code farklı location değerleriyle geçiyorsa her birini ayrı component olarak çıkar.
+- category = "yangin_dolabi" olan sistem için ekipman listesini components olarak çıkarma.
+- Yangın Dolabı için raporda ne görüyorsan aynısını equipment_matrix olarak çıkar.
+- Raporun tablo yapısını, satır/sütun ilişkisini, ekipman kodlarını, lokasyonları ve sonuçları değiştirme veya yeniden düzenleme.
+- Hiçbir şeyi yeniden gruplayıp ayırma.
+- Hiçbir şeyi yorumlama veya tahmin etme.
+- Raporda bulunan tüm Yangın Dolabı ekipman bilgilerini koru.
+- Yangın Dolabı için components alanı boş array [] olmalıdır.
+- Raporda olmayan bilgi üretme.
+- Yangın Dolabı dışındaki sistemlerde mevcut components yapısını kullan.
 
 SAYIM:
 - control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
@@ -112,7 +117,7 @@ KATEGORİLER:
 KATEGORİDEN emin değilsen diger kullan; sistem name alanında rapordaki adı koru.
 
 BİLEŞEN KİMLİĞİ:
-Her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
+Yangın Dolabı dışındaki her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
 - code
 - name
 - location
@@ -120,7 +125,7 @@ Her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
 - model
 - serial_no
 
-Örneğin YD19 raporda geçiyorsa YD19'u mutlaka ayrı bileşen olarak çıkar. Konumu, markası, modeli veya seri numarası raporda yoksa null bırak.
+Örneğin YD19 raporda geçiyorsa YD19'u mutlaka ayrı bileşen olarak çıkar. Bu kural Yangın Dolabı için geçerli değildir; Yangın Dolabı ekipmanları equipment_matrix içinde çıkarılır.
 
 BULGULAR:
 findings AYRI bir array olmalıdır. Her kayıt yalnızca:
@@ -145,14 +150,12 @@ JSON ŞEMASI:
       "category": "kategori",
       "control_count": 0,
       "nonconforming_count": 0,
-      "components": [
+      "components": [],
+      "equipment_matrix": [
         {
-          "code": "string veya null",
-          "name": "string veya null",
-          "location": "string veya null",
-          "brand": "string veya null",
-          "model": "string veya null",
-          "serial_no": "string veya null"
+          "codes": ["raporda görülen kod"],
+          "location": "raporda görülen lokasyon veya null",
+          "results": ["raporda görülen sonuç"]
         }
       ]
     }
@@ -164,6 +167,10 @@ JSON ŞEMASI:
     }
   ]
 }
+
+JSON alanları:
+- Yangın Dolabı için components = [] ve equipment_matrix rapordaki Yangın Dolabı ekipman tablosunun karşılığıdır.
+- Yangın Dolabı dışındaki sistemler için equipment_matrix = [] ve components mevcut yapıda kullanılır.
 
 SADECE geçerli JSON döndür. Markdown, açıklama, kod bloğu veya JSON dışı metin döndürme.
 PROMPT;
