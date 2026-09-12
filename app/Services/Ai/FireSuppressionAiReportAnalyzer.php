@@ -70,7 +70,7 @@ KOMPAKTLIK KURALI:
 - Bileşen başına bulgu tekrarlama.
 - Kontrol maddesi başlıklarını, kodlarını veya açıklamalarını component içine yazma.
 - Bir sistemin bulgularını findings altında sistem bazında yaz; aynı bulguyu farklı bileşenlere tekrar etme.
-- findings içinde component_code, control_item, scope veya area_note üretme.
+- findings içinde equipment_codes, component_code, control_item, scope veya area_note üretme.
 - Bulguyu raporda nasıl ayrıntılı açıklanmışsa anlamını kaybetmeden tek açıklama olarak aktar.
 - Yangın Dolabı dışındaki sistemlerde fiziksel bileşen listesinde her gerçek bileşeni koru; eşleştirme için code/name/location/brand/model/serial_no bilgilerini mümkün olduğunca çıkar.
 - Bir bilgi raporda yoksa null kullan. Tahmin etme.
@@ -177,7 +177,6 @@ JSON ŞEMASI:
   "findings": [
     {
       "system_name": "string veya null",
-      "component_codes": [],
       "description": "ayrıntılı bulgu"
     }
   ]
