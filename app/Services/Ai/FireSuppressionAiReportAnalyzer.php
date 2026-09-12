@@ -92,6 +92,18 @@ DOMAIN HİYERARŞİSİ:
 - Bulgu metninde geçen bir kodu, fiziksel ekipman listesiyle doğrulamıyorsan bileşen listesine ekleme.
 - Aynı bileşeni farklı sayfalarda tekrar gördüğünde tek kayıtta birleştir.
 
+EKİPMAN KODU VE LOKASYON KURALI:
+- Her fiziksel ekipmanı raporda geçtiği haliyle TEK TEK çıkar.
+- Her component/equipment kaydında code ve location AYRI alanlardır.
+- code ile location değerlerini birleştirerek yeni bir kod, birleşik anahtar veya identity_key oluşturma.
+- Aynı code farklı bina, bölüm veya lokasyonlarda tekrar edebilir. Bu durumda kayıtları birleştirme; her birini ayrı component olarak çıkar.
+- Örneğin YD-1 İDARİ BİNA'da ve YD-1 SOLAR BİNA'da geçiyorsa bunlar iki ayrı component kaydıdır.
+- Tablo yapısında "Dolap No" ile aynı ekipmana ait "Bulunduğu Yer" bilgisini aynı component kaydındaki iki ayrı alan olarak çıkar.
+- Bir ekipmanın code değeri ve location değeri raporda ayrı yerlerde verilmiş olsa bile doğru satır/sütun bağlamını kullanarak aynı component kaydında ayrı alanlara koy.
+- location bilgisini raporda geçtiği şekliyle koru; bina/lokasyon adını kendin standartlaştırma, kısaltma veya başka kayıttan tahmin etme.
+- Raporda aynı ekipman birden fazla sayfada tekrar ediyorsa yalnızca gerçekten aynı code + aynı bağlamdaki kaydı birleştir.
+- Bir kodun farklı lokasyonlardaki tekrarlarını ASLA tek component altında toplama.
+
 SAYIM:
 - control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
 - nonconforming_count = raporda o sistem için uygunsuz/UD olarak işaretlenen kontrol maddesi sayısı.
