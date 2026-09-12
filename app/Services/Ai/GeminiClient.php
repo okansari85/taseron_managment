@@ -168,13 +168,9 @@ class GeminiClient
                         'type' => 'object',
                         'properties' => [
                             'system_name' => ['type' => ['string', 'null']],
-                            'component_codes' => [
-                                'type' => 'array',
-                                'items' => ['type' => 'string'],
-                            ],
                             'description' => ['type' => 'string'],
                         ],
-                        'required' => ['system_name', 'component_codes', 'description'],
+                        'required' => ['system_name', 'description'],
                     ],
                 ],
             ],
