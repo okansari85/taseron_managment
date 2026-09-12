@@ -25,27 +25,6 @@ class GeminiClient
             throw new RuntimeException('GEMINI_API_KEY tanımlı değil — Gemini destekli rapor analizi kullanılamıyor.');
         }
 
-        // GEÇİCİ YANGIN DOLABI MATRIX TESTİ:
-        // Analyzer'daki mevcut genel component talimatını yalnızca yangın dolabı
-        // için daha öncelikli matrix talimatıyla sınırla. Diğer sistemlerin
-        // mevcut component yapısı değişmez.
-        if (str_contains($systemPrompt, 'yangın tesisatı periyodik kontrol raporlarını')) {
-            $systemPrompt .= <<<'PROMPT'
-
-YANGIN DOLABI ÖZEL KURALI:
-- Bu kural yalnızca category = "yangin_dolabi" olan sistem için geçerlidir.
-- Yangın Dolabı sistemindeki ekipman listesini components olarak çıkarma.
-- Yangın Dolabı için raporda ne görüyorsan aynısını equipment_matrix olarak çıkar.
-- Raporun tablo yapısını, satır/sütun ilişkisini, ekipman kodlarını, lokasyonları ve sonuçları değiştirme veya yeniden düzenleme.
-- Hiçbir şeyi yeniden gruplayıp ayırma.
-- Hiçbir şeyi yorumlama veya tahmin etme.
-- Raporda bulunan tüm Yangın Dolabı ekipman bilgilerini koru.
-- Yangın Dolabı için components alanı boş array [] olmalıdır.
-- equipment_matrix içinde raporda görülen kodları, lokasyonları ve sonuçları koru.
-- Raporda olmayan bilgi üretme.
-PROMPT;
-        }
-
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $startedAt = microtime(true);
 
