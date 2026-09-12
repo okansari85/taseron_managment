@@ -60,7 +60,7 @@ Tek ve KOMPAKT bir JSON üret. JSON daha sonra backend tarafından mevcut tesisa
 ÇIKAR:
 1. Rapor üst bilgileri.
 2. Raporda gerçekten kontrol edilen sistemler/gruplar.
-3. Her sistem altında raporda gerçekten listelenen fiziksel bileşenler.
+3. Yangın Dolabı sistemi için raporda bulunan ekipmanları equipment_matrix olarak çıkar; Yangın Dolabı dışındaki sistemlerde fiziksel bileşenleri components altında çıkar.
 4. Her sistem için toplam kontrol sayısı ve uygunsuz kontrol sayısı.
 5. Uygunsuzluk/bulguları sistem bazında, ayrıntılı ve yalnızca bir kez.
 
@@ -72,7 +72,7 @@ KOMPAKTLIK KURALI:
 - Bir sistemin bulgularını findings altında sistem bazında yaz; aynı bulguyu farklı bileşenlere tekrar etme.
 - findings içinde component_code, control_item, scope veya area_note üretme.
 - Bulguyu raporda nasıl ayrıntılı açıklanmışsa anlamını kaybetmeden tek açıklama olarak aktar.
-- Ama fiziksel bileşen listesinde her gerçek bileşeni koru; eşleştirme için code/name/location/brand/model/serial_no bilgilerini mümkün olduğunca çıkar.
+- Yangın Dolabı dışındaki sistemlerde fiziksel bileşen listesinde her gerçek bileşeni koru; eşleştirme için code/name/location/brand/model/serial_no bilgilerini mümkün olduğunca çıkar.
 - Bir bilgi raporda yoksa null kullan. Tahmin etme.
 
 DOMAIN HİYERARŞİSİ:
@@ -86,16 +86,19 @@ DOMAIN HİYERARŞİSİ:
 - Bulgu metninde geçen bir kodu, fiziksel ekipman listesiyle doğrulamıyorsan bileşen listesine ekleme.
 - Aynı bileşeni farklı sayfalarda tekrar gördüğünde tek kayıtta birleştir.
 
-EKİPMAN KODU VE LOKASYON KURALI:
-- category = "yangin_dolabi" olan sistem için ekipman listesini components olarak çıkarma.
+EKİPMAN ÇIKARMA KURALI:
+- Bu özel kural yalnızca category = "yangin_dolabi" olan sistem için geçerlidir.
+- Yangın Dolabı sistemindeki ekipman listesini components olarak çıkarma.
 - Yangın Dolabı için raporda ne görüyorsan aynısını equipment_matrix olarak çıkar.
 - Raporun tablo yapısını, satır/sütun ilişkisini, ekipman kodlarını, lokasyonları ve sonuçları değiştirme veya yeniden düzenleme.
 - Hiçbir şeyi yeniden gruplayıp ayırma.
 - Hiçbir şeyi yorumlama veya tahmin etme.
 - Raporda bulunan tüm Yangın Dolabı ekipman bilgilerini koru.
 - Yangın Dolabı için components alanı boş array [] olmalıdır.
+- equipment_matrix içinde raporda görülen kodları, lokasyonları ve sonuçları koru.
 - Raporda olmayan bilgi üretme.
 - Yangın Dolabı dışındaki sistemlerde mevcut components yapısını kullan.
+- Yangın Dolabı dışındaki sistemlerde raporda geçen her gerçek fiziksel bileşeni ayrı component olarak çıkar.
 
 SAYIM:
 - control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
@@ -117,15 +120,14 @@ KATEGORİLER:
 KATEGORİDEN emin değilsen diger kullan; sistem name alanında rapordaki adı koru.
 
 BİLEŞEN KİMLİĞİ:
-Yangın Dolabı dışındaki her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
+- Yangın Dolabı için yukarıdaki equipment_matrix kuralı geçerlidir.
+- Yangın Dolabı dışındaki her gerçek fiziksel bileşen için yalnızca şu alanları çıkar:
 - code
 - name
 - location
 - brand
 - model
 - serial_no
-
-Örneğin YD19 raporda geçiyorsa YD19'u mutlaka ayrı bileşen olarak çıkar. Bu kural Yangın Dolabı için geçerli değildir; Yangın Dolabı ekipmanları equipment_matrix içinde çıkarılır.
 
 BULGULAR:
 findings AYRI bir array olmalıdır. Her kayıt yalnızca:
