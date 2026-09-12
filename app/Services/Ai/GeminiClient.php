@@ -29,8 +29,8 @@ class GeminiClient
         $startedAt = microtime(true);
 
         // Geçici kompakt analiz sözleşmesi:
-        // Tablo/ekipman detaylarını Gemini üretmez. Bunlar daha sonra universal
-        // table analyzer tarafından deterministik olarak çıkarılacaktır.
+        // Tablo/ekipman ve kontrol matrisi detaylarını Gemini üretmez. Bunlar
+        // daha sonra universal table analyzer tarafından deterministik olarak çıkarılacaktır.
         $compactSystemPrompt = <<<'PROMPT'
 Sen yangın tesisatı periyodik kontrol raporlarını anlayan bir veri çıkarma motorusun.
 
@@ -51,8 +51,6 @@ Raporda gerçekten kontrol edilen sistemleri/grupları belirle.
 Her sistem için:
 - name: rapordaki sistem adı
 - category: mümkünse yangin_dolabi, yangin_pompasi, hidrant, sprinkler, su_alma_verme, su_deposu, sabit_boru_tesisati, gazli_sondurme veya diger
-- control_count
-- nonconforming_count
 
 3. BULGULAR
 Uygunsuzlukları sistem bazında çıkar.
@@ -72,20 +70,19 @@ Aynı bulguyu bileşen bazında tekrar etme.
 - Marka, model, seri no, basınç, hortum uzunluğu, ölçüler veya diğer teknik tablo kolonlarını çıkarma.
 - U / UD / N değerlerini tek tek JSON'a aktarma.
 - Kontrol kriterlerini JSON'a aktarma.
+- control_count veya nonconforming_count hesaplama.
 - Tabloyu yeniden yapılandırma.
 - Tablo satırlarını özetleme.
 - Ekipman sayısını bulgu olarak üretme.
 - Raporda olmayan bilgi üretme.
 
 Ekipman, kod, lokasyon, teknik değerler ve U/UD/N ilişkileri daha sonra ayrı bir universal table analyzer tarafından PDF metninden çıkarılacaktır.
+Kontrol sayıları ve uygunsuz kontrol sayıları da aynı analiz katmanında, rapordaki kontrol matrisinden deterministik olarak hesaplanacaktır.
 
 BELGE / PROJE / KAYIT:
 Fiziksel ekipman olmayan proje, belge veya kayıt kontrollerini fiziksel sistem/equipment olarak üretme. Bunlara ilişkin önemli uygunsuzlukları findings içinde belirt.
 
 Rapor adını veya firma adını değiştirme/normalize etme.
-
-SAYIM:
-control_count ve nonconforming_count yalnızca rapor açıkça destekliyorsa çıkar. Emin olunmayan durumda 0 kullan.
 
 Yalnızca geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
 PROMPT;
@@ -190,10 +187,8 @@ PROMPT;
                         'properties' => [
                             'name' => ['type' => 'string'],
                             'category' => ['type' => 'string'],
-                            'control_count' => ['type' => ['integer', 'null']],
-                            'nonconforming_count' => ['type' => ['integer', 'null']],
                         ],
-                        'required' => ['name', 'category', 'control_count', 'nonconforming_count'],
+                        'required' => ['name', 'category'],
                     ],
                 ],
                 'findings' => [
