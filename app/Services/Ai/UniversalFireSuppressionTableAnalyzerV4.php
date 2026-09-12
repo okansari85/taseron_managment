@@ -82,6 +82,13 @@ class UniversalFireSuppressionTableAnalyzerV4
         return [$line];
     }
 
+    private function isContinuationLine(string $line,array $previous):bool
+    {
+        $key=$this->normalizeKey($previous['cells'][0]??'');
+        if(!in_array($key,['bulundugu yer','lokasyon','konum','yer','kat'],true)) return false;
+        return !preg_match('/^(?:No|Kod|Kat|Marka|Model|Seri|Dolap|Uzunluk|Tasarım|Basınç|Basinç|Debi|Çap|Cap|Hortum|Pompa|Yakıt|Güç|Devreye)\b/iu',trim($line));
+    }
+
     private function parts(array $parts,bool $preserveEmpty=false):array{$o=[];foreach($parts as $p){$v=trim((string)$p);if($preserveEmpty||$v!=='')$o[]=$v;}return $o;}
 
     private function mergeContinuations(array $tables):array
@@ -103,7 +110,6 @@ class UniversalFireSuppressionTableAnalyzerV4
             $text=mb_strtolower($t['text'],'UTF-8');$score=0;
             foreach($tokens as $token)if(mb_strlen($token,'UTF-8')>=3&&str_contains($text,$token))$score+=3;
             foreach($this->categoryWords($category) as $word)if(str_contains($text,$word))$score++;
-            // Control-only tables are matched by system/category headings, not by arbitrary numbers.
             if($this->hasTechnical($t))$score+=2;
             if($this->hasEquipmentCode($t['text']))$score++;
             if($this->hasControl($t['text'])&&$this->controlMentionsCategory($t,$category))$score++;
