@@ -93,16 +93,10 @@ DOMAIN HİYERARŞİSİ:
 - Aynı bileşeni farklı sayfalarda tekrar gördüğünde tek kayıtta birleştir.
 
 EKİPMAN KODU VE LOKASYON KURALI:
-- Her fiziksel ekipmanı raporda geçtiği haliyle TEK TEK çıkar.
-- Her component/equipment kaydında code ve location AYRI alanlardır.
-- code ile location değerlerini birleştirerek yeni bir kod, birleşik anahtar veya identity_key oluşturma.
-- Aynı code farklı bina, bölüm veya lokasyonlarda tekrar edebilir. Bu durumda kayıtları birleştirme; her birini ayrı component olarak çıkar.
-- Örneğin YD-1 İDARİ BİNA'da ve YD-1 SOLAR BİNA'da geçiyorsa bunlar iki ayrı component kaydıdır.
-- Tablo yapısında "Dolap No" ile aynı ekipmana ait "Bulunduğu Yer" bilgisini aynı component kaydındaki iki ayrı alan olarak çıkar.
-- Bir ekipmanın code değeri ve location değeri raporda ayrı yerlerde verilmiş olsa bile doğru satır/sütun bağlamını kullanarak aynı component kaydında ayrı alanlara koy.
-- location bilgisini raporda geçtiği şekliyle koru; bina/lokasyon adını kendin standartlaştırma, kısaltma veya başka kayıttan tahmin etme.
-- Raporda aynı ekipman birden fazla sayfada tekrar ediyorsa yalnızca gerçekten aynı code + aynı bağlamdaki kaydı birleştir.
-- Bir kodun farklı lokasyonlardaki tekrarlarını ASLA tek component altında toplama.
+- Her fiziksel ekipmanı raporda geçtiği şekliyle TEK TEK çıkar.
+- code ve location alanlarını raporda geçtiği haliyle AYNEN aktar.
+- code ve location değerlerini değiştirme, birleştirme veya yeniden yorumlama.
+- Aynı code farklı location değerleriyle geçiyorsa her birini ayrı component olarak çıkar.
 
 SAYIM:
 - control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
@@ -323,30 +317,20 @@ PROMPT;
 
     private function normalizeCategory(mixed $value): string
     {
-        $value = mb_strtolower(trim((string) $value), 'UTF-8');
+        $value = mb_strtolower(trim((string) ($value ?? '')), 'UTF-8');
         $value = str_replace(['ı', 'İ'], ['i', 'i'], $value);
 
         return match (true) {
-            str_contains($value, 'dolab') => 'yangin_dolabi',
+            str_contains($value, 'dolap') => 'yangin_dolabi',
             str_contains($value, 'pompa') => 'yangin_pompasi',
             str_contains($value, 'hidrant') => 'hidrant',
-            str_contains($value, 'sprink') || str_contains($value, 'yağmurlama') || str_contains($value, 'yagmurlama') => 'sprinkler',
-            str_contains($value, 'alma') || str_contains($value, 'verme') => 'su_alma_verme',
+            str_contains($value, 'sprinkler') => 'sprinkler',
+            str_contains($value, 'su alma') || str_contains($value, 'su verme') => 'su_alma_verme',
             str_contains($value, 'depo') => 'su_deposu',
-            str_contains($value, 'sabit boru') || str_contains($value, 'kolekt') || str_contains($value, 'vana') => 'sabit_boru_tesisati',
-            str_contains($value, 'gaz') => 'gazli_sondurme',
+            str_contains($value, 'boru') => 'sabit_boru_tesisati',
+            str_contains($value, 'gazli') || str_contains($value, 'gazli sondurme') => 'gazli_sondurme',
             default => 'diger',
         };
-    }
-
-    private function dateOrNull(mixed $value): ?string
-    {
-        if (!filled($value)) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) ? $value : null;
     }
 
     private function stringOrNull(mixed $value): ?string
@@ -357,5 +341,20 @@ PROMPT;
 
         $value = trim((string) $value);
         return $value === '' ? null : $value;
+    }
+
+    private function dateOrNull(mixed $value): ?string
+    {
+        $value = $this->stringOrNull($value);
+        if ($value === null) {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return $value;
+        }
+
+        $timestamp = strtotime($value);
+        return $timestamp !== false ? date('Y-m-d', $timestamp) : null;
     }
 }
