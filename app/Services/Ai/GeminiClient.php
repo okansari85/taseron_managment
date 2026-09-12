@@ -144,8 +144,26 @@ class GeminiClient
                                     'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no', 'result'],
                                 ],
                             ],
+                            'equipment_matrix' => [
+                                'type' => 'array',
+                                'items' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'codes' => [
+                                            'type' => 'array',
+                                            'items' => ['type' => 'string'],
+                                        ],
+                                        'location' => ['type' => ['string', 'null']],
+                                        'results' => [
+                                            'type' => 'array',
+                                            'items' => ['type' => ['string', 'null']],
+                                        ],
+                                    ],
+                                    'required' => ['codes', 'location', 'results'],
+                                ],
+                            ],
                         ],
-                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components'],
+                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
                     ],
                 ],
                 'findings' => [
