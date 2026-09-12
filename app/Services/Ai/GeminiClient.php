@@ -9,8 +9,8 @@ use RuntimeException;
 /**
  * Google Gemini Interactions API client for structured report extraction.
  *
- * Keeps the existing AI extraction contract so the report analyzer does not
- * need to know which provider is being used.
+ * Keeps provider transport separate from the report analysis flow while the
+ * temporary fire-suppression extraction contract is intentionally compact.
  */
 class GeminiClient
 {
@@ -28,9 +28,71 @@ class GeminiClient
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $startedAt = microtime(true);
 
+        // Geçici kompakt analiz sözleşmesi:
+        // Tablo/ekipman detaylarını Gemini üretmez. Bunlar daha sonra universal
+        // table analyzer tarafından deterministik olarak çıkarılacaktır.
+        $compactSystemPrompt = <<<'PROMPT'
+Sen yangın tesisatı periyodik kontrol raporlarını anlayan bir veri çıkarma motorusun.
+
+Sana biçimi önceden bilinmeyen bir yangın tesisatı/periyodik kontrol PDF'sinin tamamının metni verilecek.
+Firma şablonuna veya sabit bölüm sırasına güvenme.
+
+Yalnızca anlamsal olarak gerekli bilgileri çıkar:
+
+1. RAPOR
+- control_date
+- next_control_date
+- report_no
+- company_name
+- overall_result
+
+2. SİSTEMLER
+Raporda gerçekten kontrol edilen sistemleri/grupları belirle.
+Her sistem için:
+- name: rapordaki sistem adı
+- category: mümkünse yangin_dolabi, yangin_pompasi, hidrant, sprinkler, su_alma_verme, su_deposu, sabit_boru_tesisati, gazli_sondurme veya diger
+- control_count
+- nonconforming_count
+
+3. BULGULAR
+Uygunsuzlukları sistem bazında çıkar.
+Her kayıt yalnızca:
+- system_name
+- description
+
+Bulguda ekipman kodu açıkça geçiyorsa description içinde koru.
+Kodu kendin uydurma.
+Aynı bulguyu bileşen bazında tekrar etme.
+
+ÇOK ÖNEMLİ:
+- Ekipman listesi oluşturma.
+- Yangın dolabı kodlarını veya lokasyonlarını JSON'a çıkarma.
+- Yangın dolabı equipment_matrix oluşturma.
+- components oluşturma.
+- Marka, model, seri no, basınç, hortum uzunluğu, ölçüler veya diğer teknik tablo kolonlarını çıkarma.
+- U / UD / N değerlerini tek tek JSON'a aktarma.
+- Kontrol kriterlerini JSON'a aktarma.
+- Tabloyu yeniden yapılandırma.
+- Tablo satırlarını özetleme.
+- Ekipman sayısını bulgu olarak üretme.
+- Raporda olmayan bilgi üretme.
+
+Ekipman, kod, lokasyon, teknik değerler ve U/UD/N ilişkileri daha sonra ayrı bir universal table analyzer tarafından PDF metninden çıkarılacaktır.
+
+BELGE / PROJE / KAYIT:
+Fiziksel ekipman olmayan proje, belge veya kayıt kontrollerini fiziksel sistem/equipment olarak üretme. Bunlara ilişkin önemli uygunsuzlukları findings içinde belirt.
+
+Rapor adını veya firma adını değiştirme/normalize etme.
+
+SAYIM:
+control_count ve nonconforming_count yalnızca rapor açıkça destekliyorsa çıkar. Emin olunmayan durumda 0 kullan.
+
+Yalnızca geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
+PROMPT;
+
         $payload = [
             'model' => config('services.gemini.text_model'),
-            'system_instruction' => $systemPrompt,
+            'system_instruction' => $compactSystemPrompt,
             'input' => $userContent,
             'response_format' => [
                 'type' => 'text',
@@ -47,11 +109,12 @@ class GeminiClient
 
         Log::info('Gemini: Interactions çağrısı başladı', [
             'model' => config('services.gemini.text_model'),
-            'prompt_length' => mb_strlen($systemPrompt),
+            'prompt_length' => mb_strlen($compactSystemPrompt),
             'input_length' => mb_strlen($userContent),
             'max_tokens' => max($maxTokens, 12000),
             'thinking_level' => 'minimal',
             'structured_output' => true,
+            'compact_extraction' => true,
         ]);
 
         try {
@@ -90,6 +153,7 @@ class GeminiClient
             'model' => config('services.gemini.text_model'),
             'output_length' => mb_strlen($content),
             'status' => $status,
+            'compact_extraction' => true,
         ]);
 
         if (! is_array($decoded)) {
@@ -128,38 +192,8 @@ class GeminiClient
                             'category' => ['type' => 'string'],
                             'control_count' => ['type' => ['integer', 'null']],
                             'nonconforming_count' => ['type' => ['integer', 'null']],
-                            'components' => [
-                                'type' => 'array',
-                                'items' => [
-                                    'type' => 'object',
-                                    'properties' => [
-                                        'code' => ['type' => ['string', 'null']],
-                                        'name' => ['type' => ['string', 'null']],
-                                        'location' => ['type' => ['string', 'null']],
-                                        'brand' => ['type' => ['string', 'null']],
-                                        'model' => ['type' => ['string', 'null']],
-                                        'serial_no' => ['type' => ['string', 'null']],
-                                        'result' => ['type' => ['string', 'null']],
-                                    ],
-                                    'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no', 'result'],
-                                ],
-                            ],
-                            'equipment_matrix' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'codes' => [
-                                        'type' => 'array',
-                                        'items' => ['type' => 'string'],
-                                    ],
-                                    'locations' => [
-                                        'type' => 'array',
-                                        'items' => ['type' => ['string', 'null']],
-                                    ],
-                                ],
-                                'required' => ['codes', 'locations'],
-                            ],
                         ],
-                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
+                        'required' => ['name', 'category', 'control_count', 'nonconforming_count'],
                     ],
                 ],
                 'findings' => [
