@@ -60,7 +60,7 @@ Tek ve KOMPAKT bir JSON üret. JSON daha sonra backend tarafından mevcut tesisa
 ÇIKAR:
 1. Rapor üst bilgileri.
 2. Raporda gerçekten kontrol edilen sistemler/gruplar.
-3. Yangın Dolabı sistemi için raporda bulunan ekipmanları equipment_matrix olarak çıkar. Yangın Dolabı dışındaki sistemlerde raporda gerçekten listelenen fiziksel bileşenleri components altında çıkar.
+3. Yangın Dolabı sistemi için raporda bulunan ekipman tablosunu equipment_matrix olarak çıkar. Yangın Dolabı dışındaki sistemlerde raporda gerçekten listelenen fiziksel bileşenleri components altında çıkar.
 4. Her sistem için toplam kontrol sayısı ve uygunsuz kontrol sayısı.
 5. Uygunsuzluk/bulguları sistem bazında, ayrıntılı ve yalnızca bir kez.
 
@@ -89,22 +89,49 @@ DOMAIN HİYERARŞİSİ:
 EKİPMAN ÇIKARMA KURALI:
 - Bu özel kural yalnızca category = "yangin_dolabi" olan sistem için geçerlidir.
 - Yangın Dolabı sistemindeki ekipman listesini components olarak çıkarma.
-- Yangın Dolabı için raporda ne görüyorsan aynısını equipment_matrix olarak çıkar.
-- Raporun tablo yapısını, satır/sütun ilişkisini, ekipman kodlarını, lokasyonları ve sonuçları değiştirme veya yeniden düzenleme.
-- Hiçbir şeyi yeniden gruplayıp ayırma veya birleştirme.
-- Hiçbir şeyi yorumlama veya tahmin etme.
-- Raporda bulunan tüm Yangın Dolabı ekipman bilgilerini koru.
+- Yangın Dolabı için raporda bulunan tabloyu equipment_matrix olarak, mümkün olduğunca rapordaki matrix yapısını koruyarak çıkar.
+- equipment_matrix bir tablo/matrix olmalıdır; tabloyu tek tek ekipman objelerine dönüştürme.
+- Raporun tablo başlıklarını (headers), satır sırasını, sütun sırasını ve hücre içeriklerini koru.
+- Raporda birden fazla dolap kodu aynı hücrede/grup halinde yazılmışsa aynen tek hücrede bırak. Kodları ayrı satırlara bölme.
+- Aynı lokasyonda bulunan kodları kendin gruplayıp birleştirme; yalnızca raporda zaten birlikte yazılmışsa birlikte bırak.
+- Farklı sayfalardaki aynı tablonun devamını, rapordaki sıra ve yapıyı koruyarak tek matrix altında birleştir.
+- Hücrelerdeki değerleri normalize etme, yeniden adlandırma, yorumlama veya tahmin etme.
+- Raporda bulunan tüm Yangın Dolabı tablo bilgilerini koru.
+- Raporda olmayan bir sütun veya değer üretme.
 - Yangın Dolabı için components alanı boş array [] olmalıdır.
-- equipment_matrix içinde raporda görülen kodları, lokasyonları ve sonuçları koru.
-- codes ve results dizileri aynı uzunlukta ve aynı sırada olmalıdır. Aynı sıradaki kod ve sonuç, rapordaki aynı ekipmana karşılık gelmelidir.
-- Raporda olmayan bilgi üretme.
-- Yangın Dolabı dışındaki sistemlerde mevcut components yapısını kullan.
-- Yangın Dolabı dışındaki sistemlerde raporda geçen her gerçek fiziksel bileşeni ayrı component olarak çıkar.
+
+YANGIN DOLABI MATRIX SONUÇ KURALI:
+- equipment_matrix içindeki sonuçlar yalnızca raporda dolap/dolap grubu bazında açıkça bir sonuç sütunu veya sonuç değeri varsa çıkarılabilir.
+- Raporda dolap bazında sonuç yoksa equipment_matrix.results = null olmalıdır.
+- Sistem seviyesindeki kontrol kriterlerinin (ör. D.1-D.23) U, UD, UYGUN veya başka sonuçlarını dolapların sonuçlarına aktarma.
+- Sistem genel sonucu, kontrol kriteri sonucu veya raporun genel sonucu hiçbir şekilde dolap bazlı sonuç olarak yorumlanamaz.
+- Bir bulgunun bir dolabı etkilediğini görmek, o dolabın matrix sonucunu U veya UD yapma hakkı vermez.
+- Dolap bazında sonuç raporda açıkça bulunmuyorsa sonuç üretme, çıkarım yapma veya tahmin etme.
+- Dolap bazında sonuç açıkça varsa raporda görüldüğü haliyle ve matrix satırlarıyla aynı sırada koru.
+- equipment_matrix.results mevcutsa satırlarla birebir hizalı olmalıdır.
+
+MATRIX YAPISI:
+- equipment_matrix şu yapıda olmalıdır:
+  {
+    "headers": ["rapordaki sütun başlığı", "..."],
+    "rows": [
+      ["rapordaki hücre", "rapordaki hücre", "..."],
+      ["rapordaki hücre", "rapordaki hücre", "..."]
+    ],
+    "results": null
+  }
+- headers rapordaki gerçek sütun başlıklarını ve aynı sırayı korumalıdır.
+- rows rapordaki gerçek tablo satırlarını ve aynı hücre sırasını korumalıdır.
+- Eğer raporda dolap bazlı sonuç sütunu varsa bu sütunu headers ve rows içinde koru ve results alanını satır sonuçlarıyla doldur.
+- Eğer raporda dolap bazlı sonuç sütunu yoksa sonuç sütunu uydurma ve results alanını null bırak.
+- Bir satırdaki grup kodları tek hücredeyse tek hücre olarak kalmalıdır.
+- Tabloyu uzun bir ekipman listesine veya tekrar eden JSON objelerine çevirmeye çalışma.
 
 SAYIM:
 - control_count = raporda o sistem için kontrol edilmiş toplam kontrol maddesi sayısı.
 - nonconforming_count = raporda o sistem için uygunsuz/UD olarak işaretlenen kontrol maddesi sayısı.
-- Yangın Dolabı equipment_matrix içinde sonuçları raporda görüldüğü haliyle koru. Yangın Dolabı dışındaki sistemlerde U sonuçlarını bileşen bazında listeleme; yalnızca bu iki sistem toplamını ver.
+- Yangın Dolabı matrix sonuçlarını yalnızca dolap bazında açıkça raporlanan sonuçlardan çıkar. Sistem kontrol kriterlerindeki U/UD değerlerini matrix'e taşıma.
+- Yangın Dolabı dışındaki sistemlerde U sonuçlarını bileşen bazında listeleme; yalnızca sistem toplamını ver.
 - Sayıları rapordaki gerçek kontrol matrisinden/tablosundan çıkar. Emin değilsen 0 yazmak yerine raporun desteklediği sayıyı kullan; desteklenemiyorsa 0 kullan.
 
 KATEGORİLER:
@@ -154,13 +181,11 @@ JSON ŞEMASI:
       "control_count": 0,
       "nonconforming_count": 0,
       "components": [],
-      "equipment_matrix": [
-        {
-          "codes": ["raporda görülen kod"],
-          "location": "raporda görülen lokasyon veya null",
-          "results": ["raporda görülen sonuç"]
-        }
-      ]
+      "equipment_matrix": {
+        "headers": ["rapordaki sütun başlığı"],
+        "rows": [["rapordaki hücre"]],
+        "results": null
+      }
     }
   ],
   "findings": [
@@ -173,7 +198,8 @@ JSON ŞEMASI:
 
 VERİ YAPISI KURALI:
 - category = "yangin_dolabi" ise ekipman bilgilerini yalnızca equipment_matrix alanına yaz. components alanını [] bırak.
-- category = "yangin_dolabi" değilse fiziksel ekipman bilgilerini components alanına yaz. equipment_matrix alanını [] bırak.
+- category = "yangin_dolabi" ise equipment_matrix tablo/matrix nesnesi olmalıdır; equipment_matrix bir ekipman listesi olmamalıdır.
+- category = "yangin_dolabi" değilse fiziksel ekipman bilgilerini components alanına yaz. equipment_matrix alanını boş matrix olarak döndür: {"headers": [], "rows": [], "results": null}.
 
 SADECE geçerli JSON döndür. Markdown, açıklama, kod bloğu veya JSON dışı metin döndürme.
 PROMPT;
