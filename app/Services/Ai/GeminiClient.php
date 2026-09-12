@@ -145,22 +145,25 @@ class GeminiClient
                                 ],
                             ],
                             'equipment_matrix' => [
-                                'type' => 'array',
-                                'items' => [
-                                    'type' => 'object',
-                                    'properties' => [
-                                        'codes' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'headers' => [
+                                        'type' => 'array',
+                                        'items' => ['type' => 'string'],
+                                    ],
+                                    'rows' => [
+                                        'type' => 'array',
+                                        'items' => [
                                             'type' => 'array',
-                                            'items' => ['type' => 'string'],
-                                        ],
-                                        'location' => ['type' => ['string', 'null']],
-                                        'results' => [
-                                            'type' => 'array',
-                                            'items' => ['type' => ['string', 'null']],
+                                            'items' => ['type' => ['string', 'number', 'null']],
                                         ],
                                     ],
-                                    'required' => ['codes', 'location', 'results'],
+                                    'results' => [
+                                        'type' => ['array', 'null'],
+                                        'items' => ['type' => ['string', 'null']],
+                                    ],
                                 ],
+                                'required' => ['headers', 'rows', 'results'],
                             ],
                         ],
                         'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
