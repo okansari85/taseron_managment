@@ -3,60 +3,61 @@
 namespace App\Services\Ai;
 
 /**
- * Firma/rapor şablonundan bağımsız tablo çıkarıcı.
- *
- * Gemini'nin anlamsal çıktısını kaynak kabul eder; ekipman, teknik kolonlar,
- * devam tabloları ve U/UD/N matrisini PDF metninden deterministik olarak çıkarır.
+ * Firma ve rapor şablonundan bağımsız yangın tesisatı tablo analizörü.
+ * Gemini yalnızca sistem/bulgu semantiğini verir; bu sınıf PDF metninden
+ * tablo, devam sayfası, ekipman, teknik değer ve U/UD/N ilişkilerini çıkarır.
  */
 class UniversalFireSuppressionTableAnalyzer
 {
     public function analyze(array $pages, array $semantic): array
     {
-        $physicalTables = $this->discoverTables($pages);
-        $logicalTables = $this->mergeContinuationTables($physicalTables);
-        $systems = is_array($semantic['systems'] ?? null) ? $semantic['systems'] : [];
+        $tables = $this->mergeContinuationTables($this->discoverTables($pages));
+        $semanticSystems = is_array($semantic['systems'] ?? null) ? $semantic['systems'] : [];
+        $systems = [];
+        $equipment = [];
+        $controls = [];
+        $used = [];
 
-        $systemResults = [];
-        $allEquipment = [];
-        $allControls = [];
-        $usedTableIds = [];
-
-        foreach ($systems as $system) {
-            if (!is_array($system)) {
-                continue;
-            }
-
+        foreach ($semanticSystems as $system) {
+            if (!is_array($system)) continue;
             $name = trim((string) ($system['name'] ?? ''));
             $category = $this->category((string) ($system['category'] ?? ''), $name);
-            $matched = $this->matchTables($logicalTables, $name, $category);
-            $usedTableIds = array_merge($usedTableIds, array_column($matched, 'id'));
-
-            $components = [];
+            $matched = $this->matchTables($tables, $name, $category);
+            $used = array_merge($used, array_column($matched, 'id'));
             $matrix = ['codes' => [], 'locations' => []];
-            $controlItems = [];
-            $tableData = [];
+            $components = [];
+            $systemControls = [];
+            $systemTables = [];
 
             foreach ($matched as $table) {
-                $tableData[] = $this->tableForUi($table);
-                $controlItems = array_merge($controlItems, $this->extractControls($table));
-
+                $systemTables[] = $this->tableForUi($table);
+                $systemControls = array_merge($systemControls, $this->extractControls($table));
                 if ($category === 'yangin_dolabi') {
                     $matrix = $this->mergeMatrix($matrix, $this->extractEquipmentMatrix($table));
-                    $components = array_merge($components, $this->matrixComponents($matrix, $name, $category));
                 } else {
-                    $components = array_merge($components, $this->extractComponents($table, $category));
+                    $components = array_merge($components, $this->extractComponents($table));
+                }
+            }
+
+            if ($category === 'yangin_dolabi') {
+                foreach ($matrix['codes'] as $i => $code) {
+                    $components[] = [
+                        'code' => $code,
+                        'name' => 'Yangın Dolabı',
+                        'location' => $matrix['locations'][$i] ?? null,
+                        'brand' => null,
+                        'model' => null,
+                        'serial_no' => null,
+                        'properties' => [],
+                        'source_pages' => $this->pagesOfTables($matched),
+                    ];
                 }
             }
 
             $components = $this->uniqueComponents($components);
-            $controlItems = $this->uniqueControls($controlItems);
-
-            if ($category === 'yangin_dolabi') {
-                $components = $this->matrixComponents($matrix, $name, $category);
-            }
-
+            $systemControls = $this->uniqueControls($systemControls);
             foreach ($components as $component) {
-                $allEquipment[] = [
+                $equipment[] = [
                     'code' => $component['code'] ?? $component['name'] ?? null,
                     'category' => $category,
                     'system_name' => $name !== '' ? $name : null,
@@ -72,51 +73,41 @@ class UniversalFireSuppressionTableAnalyzer
                     'source_pages' => $component['source_pages'] ?? [],
                 ];
             }
-
-            foreach ($controlItems as $control) {
+            foreach ($systemControls as $control) {
                 $control['system_name'] = $name !== '' ? $name : null;
                 $control['category'] = $category;
-                $allControls[] = $control;
+                $controls[] = $control;
             }
 
-            $systemResults[] = [
+            $systems[] = [
                 'name' => $name !== '' ? $name : null,
                 'category' => $category,
-                'control_count' => count($controlItems),
-                'nonconforming_count' => count(array_filter($controlItems, fn ($c) => ($c['nonconforming_count'] ?? 0) > 0)),
+                'control_count' => count($systemControls),
+                'nonconforming_count' => count(array_filter($systemControls, fn ($c) => ($c['nonconforming_count'] ?? 0) > 0)),
                 'components' => $components,
                 'equipment_matrix' => $matrix,
-                'tables' => $tableData,
-                'control_items' => $controlItems,
+                'tables' => $systemTables,
+                'control_items' => $systemControls,
             ];
         }
 
-        // Gemini bir sistem başlığını kaçırmış olsa bile, güçlü tablo sinyali
-        // taşıyan ve hiçbir sisteme bağlanmayan tabloları kaybetme.
         $orphanTables = [];
-        foreach ($logicalTables as $table) {
-            if (in_array($table['id'], $usedTableIds, true)) {
-                continue;
-            }
-            if ($this->isRelevantFireTable($table)) {
+        foreach ($tables as $table) {
+            if (!in_array($table['id'], $used, true) && $this->isRelevantFireTable($table)) {
                 $orphanTables[] = $this->tableForUi($table);
             }
         }
 
-        $systemResults = $this->uniqueSystems($systemResults);
-        $allEquipment = $this->uniqueComponents($allEquipment);
-        $allControls = $this->uniqueControls($allControls);
-
         return [
-            'systems' => $systemResults,
-            'equipment' => $allEquipment,
-            'control_matrix' => $allControls,
+            'systems' => $this->uniqueSystems($systems),
+            'equipment' => $this->uniqueComponents($equipment),
+            'control_matrix' => $this->uniqueControls($controls),
             'tables' => $orphanTables,
             'analyzer' => [
-                'version' => '1.0.0',
-                'table_count' => count($logicalTables),
-                'equipment_count' => count($allEquipment),
-                'control_count' => count($allControls),
+                'version' => '1.1.0',
+                'table_count' => count($tables),
+                'equipment_count' => count($equipment),
+                'control_count' => count($controls),
             ],
         ];
     }
@@ -125,611 +116,251 @@ class UniversalFireSuppressionTableAnalyzer
     {
         $tables = [];
         $id = 1;
-
-        foreach (array_values($pages) as $pageIndex => $page) {
-            $lines = preg_split('/\R/u', (string) $page) ?: [];
+        foreach (array_values($pages) as $pageNo => $page) {
             $current = [];
-            $start = null;
-
-            foreach ($lines as $lineIndex => $line) {
-                $line = trim(preg_replace('/[ \t]+/u', ' ', $line));
+            $start = 0;
+            $lines = preg_split('/\R/u', (string) $page) ?: [];
+            foreach ($lines as $lineNo => $raw) {
+                $line = trim((string) $raw);
                 if ($line === '') {
-                    if (count($current) >= 2) {
-                        $tables[] = $this->makeTable($id++, $pageIndex + 1, $start ?? $lineIndex, $current);
-                    }
+                    if (count($current) >= 2) $tables[] = $this->makeTable($id++, $pageNo + 1, $start, $current);
                     $current = [];
-                    $start = null;
                     continue;
                 }
-
                 $cells = $this->splitRow($line);
-                $tableLike = count($cells) >= 2 || $this->isAttributeRow($line) || $this->isControlRow($line);
-
-                if ($tableLike) {
-                    $start ??= $lineIndex;
-                    $current[] = ['line' => $line, 'cells' => $cells, 'page' => $pageIndex + 1];
+                $isTable = count($cells) >= 2 || $this->isAttributeRow($line) || $this->isControlRow($line);
+                if ($isTable) {
+                    if ($current === []) $start = $lineNo;
+                    $current[] = ['line' => $line, 'cells' => $cells, 'page' => $pageNo + 1];
                 } elseif (count($current) >= 2) {
-                    $tables[] = $this->makeTable($id++, $pageIndex + 1, $start ?? $lineIndex, $current);
+                    $tables[] = $this->makeTable($id++, $pageNo + 1, $start, $current);
                     $current = [];
-                    $start = null;
                 }
             }
-
-            if (count($current) >= 2) {
-                $tables[] = $this->makeTable($id++, $pageIndex + 1, $start ?? 0, $current);
-            }
+            if (count($current) >= 2) $tables[] = $this->makeTable($id++, $pageNo + 1, $start, $current);
         }
-
         return $tables;
     }
 
     private function makeTable(int $id, int $page, int $start, array $rows): array
     {
+        $max = max(array_map(fn ($r) => count($r['cells']), $rows));
         $header = [];
-        $max = 0;
-        foreach ($rows as $row) {
-            $max = max($max, count($row['cells']));
+        foreach ($rows as $r) {
+            if (count($r['cells']) === $max && $max >= 2) { $header = $r['cells']; break; }
         }
-        foreach ($rows as $row) {
-            if (count($row['cells']) >= $max && $max >= 2) {
-                $header = $row['cells'];
-                break;
+        return ['id' => $id, 'pages' => [$page], 'start_line' => $start, 'header' => $header, 'rows' => $rows, 'text' => implode("\n", array_column($rows, 'line'))];
+    }
+
+    private function splitRow(string $line): array
+    {
+        if (str_contains($line, '|')) return $this->parts(preg_split('/\|/u', $line) ?: []);
+        if (str_contains($line, "\t")) return $this->parts(preg_split('/\t+/u', $line) ?: []);
+        $cells = preg_split('/\s{2,}/u', trim($line)) ?: [];
+        if (count($cells) > 1) return $this->parts($cells);
+        // Smalot bazı PDF'lerde kolon aralıklarını tek boşluğa indirger.
+        // Bilinen attribute satırlarında label'ı ayırıp kalan hücreleri token olarak korur.
+        if ($this->isAttributeRow($line)) {
+            if (preg_match('/^(No\s*\/\s*Kod|Kod|Kat|Marka|Model|Seri(?: No)?|Bulunduğu Yer|Bulundugu Yer|Lokasyon|Konum|Yer|Uzunluk|Tasarım Basıncı|Basınç|Basinç|Debi|Çap|Cap|Hortum Tipi|Tip|Tür|Tur|Pompa No|Ekipman No)\s+(.+)$/iu', $line, $m)) {
+                return array_merge([trim($m[1])], preg_split('/\s+/u', trim($m[2])) ?: []);
             }
         }
+        return [$line];
+    }
 
-        return [
-            'id' => $id,
-            'pages' => [$page],
-            'start_line' => $start,
-            'header' => $header,
-            'rows' => $rows,
-            'text' => implode("\n", array_column($rows, 'line')),
-        ];
+    private function parts(array $parts): array
+    {
+        return array_values(array_filter(array_map(fn ($v) => trim((string) $v), $parts), fn ($v) => $v !== ''));
     }
 
     private function mergeContinuationTables(array $tables): array
     {
-        $logical = [];
+        $out = [];
         foreach ($tables as $table) {
-            $merged = false;
-            $lastIndex = count($logical) - 1;
-
-            if ($lastIndex >= 0) {
-                $last = $logical[$lastIndex];
-                if ($this->looksLikeContinuation($last, $table)) {
-                    $last['rows'] = array_merge($last['rows'], $table['rows']);
-                    $last['pages'] = array_values(array_unique(array_merge($last['pages'], $table['pages'])));
-                    $last['text'] .= "\n" . $table['text'];
-                    if (count($last['header']) < count($table['header'])) {
-                        $last['header'] = $table['header'];
-                    }
-                    $logical[$lastIndex] = $last;
-                    $merged = true;
-                }
-            }
-
-            if (! $merged) {
-                $logical[] = $table;
+            $last = count($out) - 1;
+            if ($last >= 0 && $this->looksLikeContinuation($out[$last], $table)) {
+                $out[$last]['rows'] = array_merge($out[$last]['rows'], $table['rows']);
+                $out[$last]['pages'] = array_values(array_unique(array_merge($out[$last]['pages'], $table['pages'])));
+                $out[$last]['text'] .= "\n" . $table['text'];
+                if (count($out[$last]['header']) < count($table['header'])) $out[$last]['header'] = $table['header'];
+            } else {
+                $out[] = $table;
             }
         }
-
-        return $logical;
+        return $out;
     }
 
     private function looksLikeContinuation(array $a, array $b): bool
     {
-        $aHeader = $this->headerSignature($a['header']);
-        $bHeader = $this->headerSignature($b['header']);
-        $pageGap = min($b['pages']) - max($a['pages']);
-
-        if ($pageGap > 1) {
-            return false;
-        }
-        if ($aHeader !== '' && $aHeader === $bHeader) {
-            return true;
-        }
-
-        $aCols = count($a['header']);
-        $bCols = count($b['header']);
-        if ($aCols > 1 && $bCols > 1 && abs($aCols - $bCols) <= 1) {
-            $aTokens = $this->tokens($a['text']);
-            $bTokens = $this->tokens($b['text']);
-            return count(array_intersect($aTokens, $bTokens)) >= 2
-                || $this->hasEquipmentCode($a['text']) && $this->hasEquipmentCode($b['text']);
-        }
-
-        // Header olmayan devam sayfası: önceki tablonun veri biçimi devam ediyor.
-        return $this->hasEquipmentCode($a['text']) && $this->hasEquipmentCode($b['text'])
-            && count($b['header']) >= 2;
+        if (min($b['pages']) - max($a['pages']) > 1) return false;
+        $ah = $this->headerSignature($a['header']);
+        $bh = $this->headerSignature($b['header']);
+        if ($ah !== '' && $ah === $bh) return true;
+        $aCode = $this->hasEquipmentCode($a['text']);
+        $bCode = $this->hasEquipmentCode($b['text']);
+        if ($aCode && $bCode && abs(count($a['header']) - count($b['header'])) <= 1) return true;
+        return $aCode && $bCode && count($b['header']) === 0;
     }
 
-    private function matchTables(array $tables, string $systemName, string $category): array
+    private function matchTables(array $tables, string $name, string $category): array
     {
-        $nameTokens = $this->tokens($systemName);
-        $matched = [];
-
+        $nameTokens = $this->tokens($name);
+        $result = [];
         foreach ($tables as $table) {
             $text = mb_strtolower($table['text'], 'UTF-8');
             $score = 0;
-            foreach ($nameTokens as $token) {
-                if (mb_strlen($token) >= 3 && str_contains($text, $token)) {
-                    $score += 2;
-                }
-            }
-
-            $categoryWords = match ($category) {
-                'yangin_dolabi' => ['dolap', 'yd', 'hortum'],
-                'yangin_pompasi' => ['pompa', 'jokey', 'debi', 'basınç'],
-                'hidrant' => ['hidrant'],
-                'sprinkler' => ['sprinkler', 'yağmurlama'],
-                'su_deposu' => ['depo', 'hacim', 'su seviyesi'],
-                'su_alma_verme' => ['su alma', 'itfaiye su', 'verme ağz'],
-                'sabit_boru_tesisati' => ['boru', 'kollektör', 'vana'],
-                'gazli_sondurme' => ['gazlı', 'fm200', 'co2'],
-                default => [],
-            };
-            foreach ($categoryWords as $word) {
-                if (str_contains($text, $word)) {
-                    $score++;
-                }
-            }
-
-            if ($this->hasEquipmentCode($table['text'])) {
-                $score += 2;
-            }
-            if ($this->hasTechnicalColumns($table)) {
-                $score += 2;
-            }
-            if ($this->hasControlMarkers($table['text'])) {
-                $score += 1;
-            }
-
-            if ($score >= max(2, min(4, count($nameTokens)))) {
-                $matched[] = $table;
-            }
+            foreach ($nameTokens as $token) if (mb_strlen($token) >= 3 && str_contains($text, $token)) $score += 2;
+            foreach ($this->categoryWords($category) as $word) if (str_contains($text, $word)) $score++;
+            if ($this->hasTechnicalColumns($table)) $score += 2;
+            if ($this->hasControlMarkers($table['text'])) $score++;
+            if ($this->hasEquipmentCode($table['text'])) $score++;
+            if ($score >= 3) $result[] = $table;
         }
-
-        return $matched;
+        return $result;
     }
 
     private function extractEquipmentMatrix(array $table): array
     {
         $codes = [];
-        $locations = [];
-        $rows = $table['rows'];
-
-        // Yatay tablo: ilk anlamlı satır kod başlığıdır.
-        foreach ($rows as $row) {
+        foreach ($table['rows'] as $row) {
             foreach ($row['cells'] as $cell) {
-                if (preg_match('/\b(?:YD[- ]?)\d+[A-Z]?\b/iu', $cell, $m)) {
-                    $codes[] = strtoupper(str_replace(' ', '', $m[0]));
+                if (preg_match_all('/\bYD\s*[- ]?\s*\d+[A-Z]?\b/iu', $cell, $m)) {
+                    foreach ($m[0] as $code) $codes[] = strtoupper(preg_replace('/\s+/', '', str_replace('-', '', $code)));
                 }
             }
-            if (count($codes) >= 2) {
-                break;
-            }
+            if (count($codes) >= 2) break;
         }
-
         $codes = array_values(array_unique($codes));
-        if ($codes === []) {
-            $codes = $this->numberedHeaderCodes($rows);
-        }
+        if ($codes === []) return ['codes' => [], 'locations' => []];
 
-        if ($codes === []) {
-            return ['codes' => [], 'locations' => []];
-        }
+        $attrs = $this->attributeRows($table);
+        $locations = $this->findAttribute($attrs, ['kat', 'bulunduğu yer', 'bulundugu yer', 'lokasyon', 'konum', 'yer']);
+        $outLocations = [];
+        foreach ($codes as $i => $_) $outLocations[] = $this->clean($locations[$i] ?? null);
+        return ['codes' => $codes, 'locations' => $outLocations];
+    }
 
-        $attributeRows = [];
-        foreach ($rows as $row) {
-            $label = $this->cellLabel($row['cells'][0] ?? '');
-            if ($label === null) {
-                continue;
-            }
-            $attributeRows[$this->normalizeKey($label)] = array_slice($row['cells'], 1);
-        }
-
-        $locationValues = $this->findAttribute($attributeRows, ['kat', 'bulundugu yer', 'bulunduğu yer', 'lokasyon', 'konum', 'yer']);
-        if ($locationValues !== []) {
-            foreach ($codes as $index => $_code) {
-                $locations[] = $this->cleanValue($locationValues[$index] ?? null);
-            }
-        } else {
-            $locations = array_fill(0, count($codes), null);
-        }
-
-        return [
-            'codes' => $codes,
-            'locations' => $locations,
+    private function extractComponents(array $table): array
+    {
+        $attrs = $this->attributeRows($table);
+        $keys = [
+            'code' => ['kod', 'no', 'ekipman no', 'pompa no', 'hidrant no', 'cihaz no', 'etiket'],
+            'name' => ['ekipman', 'ekipman adi', 'ekipman adı', 'tip', 'tur', 'tür', 'pompa'],
+            'location' => ['kat', 'bulunduğu yer', 'bulundugu yer', 'lokasyon', 'konum', 'yer'],
+            'brand' => ['marka', 'üretici', 'uretici'],
+            'model' => ['model', 'model no'],
+            'serial_no' => ['seri no', 'serino', 'seri numarasi', 'seri numarası'],
         ];
-    }
-
-    private function matrixComponents(array $matrix, string $systemName, string $category): array
-    {
+        $values = [];
+        foreach ($keys as $field => $aliases) $values[$field] = $this->findAttribute($attrs, $aliases);
+        $technical = $attrs;
+        foreach (['kod','no','ekipman no','pompa no','hidrant no','cihaz no','etiket','ekipman','ekipman adi','ekipman adı','kat','bulunduğu yer','bulundugu yer','lokasyon','konum','yer','marka','üretici','uretici','model','model no','seri no','serino','seri numarasi','seri numarası'] as $skip) unset($technical[$this->normalizeKey($skip)]);
+        $count = max(array_map('count', $values));
+        if ($count === 0) return [];
         $items = [];
-        foreach ($matrix['codes'] as $i => $code) {
-            $items[] = [
-                'code' => $code,
-                'name' => 'Yangın Dolabı',
-                'location' => $matrix['locations'][$i] ?? null,
-                'brand' => null,
-                'model' => null,
-                'serial_no' => null,
-                'properties' => [],
-                'source_pages' => [],
-            ];
-        }
-        return $items;
-    }
-
-    private function extractComponents(array $table, string $category): array
-    {
-        $rows = $table['rows'];
-        if ($rows === []) {
-            return [];
-        }
-
-        // Transposed tablo: "Marka X X", "Model A B", "Seri ...".
-        $attributeRows = [];
-        foreach ($rows as $row) {
-            $label = $this->cellLabel($row['cells'][0] ?? '');
-            if ($label !== null && count($row['cells']) >= 2) {
-                $attributeRows[$this->normalizeKey($label)] = array_slice($row['cells'], 1);
-            }
-        }
-
-        $codeValues = $this->findAttribute($attributeRows, ['kod', 'no', 'ekipman no', 'pompa no', 'hidrant no', 'cihaz no', 'etiket']);
-        $nameValues = $this->findAttribute($attributeRows, ['ekipman', 'ekipman adi', 'ekipman adı', 'tip', 'tür', 'tur', 'pompa']);
-        $locationValues = $this->findAttribute($attributeRows, ['kat', 'bulundugu yer', 'bulunduğu yer', 'lokasyon', 'konum', 'yer']);
-        $brandValues = $this->findAttribute($attributeRows, ['marka', 'üretici', 'uretici']);
-        $modelValues = $this->findAttribute($attributeRows, ['model', 'model no']);
-        $serialValues = $this->findAttribute($attributeRows, ['seri no', 'serino', 'seri numarasi', 'seri numarası']);
-
-        $technical = $this->technicalAttributes($attributeRows);
-        $count = max(count($codeValues), count($nameValues), count($locationValues), count($brandValues), count($modelValues), count($serialValues));
-
-        if ($count >= 1) {
-            $items = [];
-            for ($i = 0; $i < $count; $i++) {
-                $item = [
-                    'code' => $this->cleanValue($codeValues[$i] ?? null),
-                    'name' => $this->cleanValue($nameValues[$i] ?? null),
-                    'location' => $this->cleanValue($locationValues[$i] ?? null),
-                    'brand' => $this->cleanValue($brandValues[$i] ?? null),
-                    'model' => $this->cleanValue($modelValues[$i] ?? null),
-                    'serial_no' => $this->cleanValue($serialValues[$i] ?? null),
-                    'properties' => $this->columnAt($technical, $i),
-                    'source_pages' => $table['pages'],
-                ];
-                if ($item['code'] !== null || $item['name'] !== null || $item['location'] !== null) {
-                    $items[] = $item;
-                }
-            }
-            if ($items !== []) {
-                return $items;
-            }
-        }
-
-        // Klasik tablo: header + veri satırları.
-        $header = array_map(fn ($v) => $this->normalizeKey($v), $table['header']);
-        if (count($header) < 2) {
-            return [];
-        }
-        $items = [];
-        foreach ($rows as $index => $row) {
-            if ($index === 0 || count($row['cells']) < 2) {
-                continue;
-            }
-            $assoc = [];
-            foreach ($header as $i => $key) {
-                if ($key !== '') {
-                    $assoc[$key] = $this->cleanValue($row['cells'][$i] ?? null);
-                }
-            }
-            if ($this->looksLikeControlAssoc($assoc)) {
-                continue;
-            }
-            $code = $this->pick($assoc, ['kod', 'no', 'ekipman no', 'pompa no', 'hidrant no', 'etiket']);
-            $name = $this->pick($assoc, ['ekipman', 'ekipman adi', 'ekipman adı', 'tip', 'tur', 'tür', 'pompa']);
-            $location = $this->pick($assoc, ['kat', 'bulundugu yer', 'bulunduğu yer', 'lokasyon', 'konum', 'yer']);
-            if ($code === null && $name === null && $location === null) {
-                continue;
-            }
-            $items[] = [
-                'code' => $code,
-                'name' => $name,
-                'location' => $location,
-                'brand' => $this->pick($assoc, ['marka', 'uretici', 'üretici']),
-                'model' => $this->pick($assoc, ['model', 'model no']),
-                'serial_no' => $this->pick($assoc, ['seri no', 'serino', 'seri numarasi', 'seri numarası']),
-                'properties' => $assoc,
-                'source_pages' => $table['pages'],
-            ];
+        for ($i = 0; $i < $count; $i++) {
+            $item = ['code'=> $this->clean($values['code'][$i] ?? null), 'name'=>$this->clean($values['name'][$i] ?? null), 'location'=>$this->clean($values['location'][$i] ?? null), 'brand'=>$this->clean($values['brand'][$i] ?? null), 'model'=>$this->clean($values['model'][$i] ?? null), 'serial_no'=>$this->clean($values['serial_no'][$i] ?? null), 'properties'=>$this->columnAt($technical, $i), 'source_pages'=>$table['pages']];
+            if ($item['code'] !== null || $item['name'] !== null || $item['location'] !== null) $items[] = $item;
         }
         return $items;
     }
 
     private function extractControls(array $table): array
     {
-        $controls = [];
+        $out = [];
         foreach ($table['rows'] as $row) {
-            if (! $this->isControlRow($row['line'])) {
-                continue;
-            }
-            $cells = $row['cells'];
-            $label = trim((string) ($cells[0] ?? $row['line']));
+            if (!$this->isControlRow($row['line'])) continue;
+            $label = trim((string) ($row['cells'][0] ?? $row['line']));
             preg_match('/^(\d+(?:\.\d+)*\.?)/u', $label, $m);
-            $code = $m[1] ?? null;
             $results = [];
-            foreach (array_slice($cells, 1) as $i => $cell) {
-                $status = $this->controlStatus($cell);
-                if ($status !== null) {
-                    $results[(string) ($i + 1)] = $status;
-                }
+            foreach (array_slice($row['cells'], 1) as $i => $cell) {
+                $v = $this->status($cell);
+                if ($v !== null) $results[(string) ($i + 1)] = $v;
             }
-            $statusTokens = preg_match_all('/\b(?:U|UD|N)\b/iu', $row['line'], $matches) ? $matches[0] : [];
-            if ($results === [] && $statusTokens === []) {
-                continue;
-            }
-            $controls[] = [
-                'control_code' => $code,
-                'description' => $code !== null ? trim(preg_replace('/^\d+(?:\.\d+)*\.?\s*/u', '', $label)) : $label,
-                'results' => $results,
-                'nonconforming_count' => count(array_filter($results, fn ($v) => $v === 'UD')),
-                'source_pages' => $table['pages'],
-            ];
+            preg_match_all('/\b(?:U|UD|N)\b/iu', $row['line'], $tokens);
+            if ($results === [] && empty($tokens[0])) continue;
+            $out[] = ['control_code'=>$m[1] ?? null, 'description'=>trim(preg_replace('/^\d+(?:\.\d+)*\.?\s*/u', '', $label)), 'results'=>$results, 'nonconforming_count'=>count(array_filter($results, fn($v)=>$v==='UD')), 'source_pages'=>$table['pages']];
         }
-        return $controls;
+        return $out;
     }
 
-    private function tableForUi(array $table): array
+    private function attributeRows(array $table): array
     {
-        return [
-            'table_id' => $table['id'],
-            'pages' => $table['pages'],
-            'headers' => $table['header'],
-            'rows' => array_map(fn ($r) => $r['cells'], $table['rows']),
-            'raw_text' => $table['text'],
-        ];
+        $out = [];
+        foreach ($table['rows'] as $row) {
+            $label = $this->cellLabel($row['cells'][0] ?? '');
+            if ($label !== null && count($row['cells']) >= 2) $out[$this->normalizeKey($label)] = array_slice($row['cells'], 1);
+        }
+        return $out;
+    }
+
+    private function findAttribute(array $attrs, array $aliases): array
+    {
+        foreach ($aliases as $alias) {
+            $key = $this->normalizeKey($alias);
+            foreach ($attrs as $actual => $values) if ($actual === $key || str_contains($actual, $key) || str_contains($key, $actual)) return array_values($values);
+        }
+        return [];
+    }
+
+    private function columnAt(array $attrs, int $index): array
+    {
+        $out = [];
+        foreach ($attrs as $key => $values) if (array_key_exists($index, $values)) $out[$key] = $values[$index];
+        return $out;
+    }
+
+    private function tableForUi(array $t): array
+    {
+        return ['table_id'=>$t['id'], 'pages'=>$t['pages'], 'headers'=>$t['header'], 'rows'=>array_map(fn($r)=>$r['cells'],$t['rows']), 'raw_text'=>$t['text']];
     }
 
     private function mergeMatrix(array $a, array $b): array
     {
-        $codes = $a['codes'];
-        $locations = $a['locations'];
         foreach ($b['codes'] as $i => $code) {
-            $key = array_search($code, $codes, true);
-            if ($key === false) {
-                $codes[] = $code;
-                $locations[] = $b['locations'][$i] ?? null;
-            } elseif (($locations[$key] ?? null) === null && isset($b['locations'][$i])) {
-                $locations[$key] = $b['locations'][$i];
-            }
+            $pos = array_search($code, $a['codes'], true);
+            if ($pos === false) { $a['codes'][] = $code; $a['locations'][] = $b['locations'][$i] ?? null; }
+            elseif (($a['locations'][$pos] ?? null) === null) $a['locations'][$pos] = $b['locations'][$i] ?? null;
         }
-        return ['codes' => $codes, 'locations' => $locations];
+        return $a;
+    }
+
+    private function pagesOfTables(array $tables): array
+    {
+        return array_values(array_unique(array_merge(...array_map(fn($t)=>$t['pages'], $tables ?: [['pages'=>[]]]))));
     }
 
     private function uniqueComponents(array $items): array
     {
-        $out = [];
-        $seen = [];
-        foreach ($items as $item) {
-            $key = mb_strtolower(implode('|', [
-                $item['code'] ?? '', $item['name'] ?? '', $item['location'] ?? '', $item['brand'] ?? '', $item['model'] ?? '', $item['serial_no'] ?? '',
-            ]), 'UTF-8');
-            if ($key === '|||||' || isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
-            $out[] = $item;
-        }
-        return $out;
+        $out=[];$seen=[]; foreach($items as $item){$key=mb_strtolower(implode('|',[$item['code']??'',$item['name']??'',$item['location']??'',$item['brand']??'',$item['model']??'',$item['serial_no']??'']),'UTF-8'); if($key==='|||||'||isset($seen[$key]))continue;$seen[$key]=1;$out[]=$item;} return $out;
     }
 
     private function uniqueControls(array $items): array
     {
-        $out = [];
-        $seen = [];
-        foreach ($items as $item) {
-            $key = mb_strtolower(($item['system_name'] ?? '') . '|' . ($item['control_code'] ?? '') . '|' . ($item['description'] ?? ''), 'UTF-8');
-            if (isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
-            $out[] = $item;
-        }
-        return $out;
+        $out=[];$seen=[]; foreach($items as $item){$key=mb_strtolower(($item['system_name']??'').'|'.($item['control_code']??'').'|'.($item['description']??''),'UTF-8');if(isset($seen[$key]))continue;$seen[$key]=1;$out[]=$item;}return $out;
     }
 
     private function uniqueSystems(array $items): array
     {
-        $out = [];
-        $seen = [];
-        foreach ($items as $item) {
-            $key = mb_strtolower((string) ($item['name'] ?? '') . '|' . (string) ($item['category'] ?? ''), 'UTF-8');
-            if (isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
-            $out[] = $item;
-        }
-        return $out;
+        $out=[];$seen=[];foreach($items as $item){$key=mb_strtolower(($item['name']??'').'|'.($item['category']??''),'UTF-8');if(isset($seen[$key]))continue;$seen[$key]=1;$out[]=$item;}return $out;
     }
 
-    private function splitRow(string $line): array
+    private function cellLabel(string $v): ?string
     {
-        $line = trim($line);
-        if (str_contains($line, '|')) {
-            return array_values(array_filter(array_map('trim', preg_split('/\|/u', $line) ?: []), fn ($v) => $v !== ''));
-        }
-        if (str_contains($line, "\t")) {
-            return array_values(array_filter(array_map('trim', preg_split('/\t+/u', $line) ?: []), fn ($v) => $v !== ''));
-        }
-        $cells = preg_split('/\s{2,}/u', $line) ?: [];
-        return array_values(array_filter(array_map('trim', $cells), fn ($v) => $v !== ''));
+        $v=trim($v); return preg_match('/^(No\s*\/\s*Kod|Kod|Kat|Marka|Model|Seri(?: No)?|Bulunduğu Yer|Bulundugu Yer|Lokasyon|Konum|Yer|Uzunluk|Tasarım Basıncı|Basınç|Basinç|Debi|Çap|Cap|Hortum Tipi|Tip|Tür|Tur|Pompa No|Ekipman No)\b/iu',$v)?$v:null;
     }
 
-    private function isAttributeRow(string $line): bool
-    {
-        return (bool) preg_match('/^(No\s*\/\s*Kod|Kod|Kat|Marka|Model|Seri|Seri No|Bulunduğu Yer|Bulundugu Yer|Lokasyon|Konum|Uzunluk|Basınç|Basinç|Tasarım|Debi|Çap|Cap|Tip|Tür|Tur)\b/iu', trim($line));
-    }
-
-    private function isControlRow(string $line): bool
-    {
-        return (bool) preg_match('/(?:^|\s)\d+(?:\.\d+)+\.?\s+.+?(?:\s|^)(?:U|UD|N)(?:\s|$)/iu', trim($line));
-    }
-
-    private function hasControlMarkers(string $text): bool
-    {
-        return preg_match('/\b(?:U|UD|N)\b/iu', $text) === 1;
-    }
-
-    private function hasEquipmentCode(string $text): bool
-    {
-        return preg_match('/\b(?:YD[- ]?\d+|H[- ]?\d+|P[- ]?\d+|HD[- ]?\d+|\d{1,4})\b/iu', $text) === 1;
-    }
-
-    private function hasTechnicalColumns(array $table): bool
-    {
-        return preg_match('/marka|model|seri|basınç|basinc|uzunluk|debi|çap|cap|kat|lokasyon|konum|hortum|tip|tür|tur/iu', implode(' ', $table['header'])) === 1;
-    }
-
-    private function isRelevantFireTable(array $table): bool
-    {
-        return $this->hasEquipmentCode($table['text']) || $this->hasControlMarkers($table['text']) || $this->hasTechnicalColumns($table);
-    }
-
-    private function numberedHeaderCodes(array $rows): array
-    {
-        foreach ($rows as $row) {
-            $cells = $row['cells'];
-            if (count($cells) < 3) {
-                continue;
-            }
-            $values = array_slice($cells, 1);
-            $numeric = array_values(array_filter($values, fn ($v) => preg_match('/^\d{1,4}[A-Z]?$/u', trim($v))));
-            if (count($numeric) >= 2 && count($numeric) / max(1, count($values)) > 0.5) {
-                return $numeric;
-            }
-        }
-        return [];
-    }
-
-    private function cellLabel(string $cell): ?string
-    {
-        $cell = trim($cell);
-        if ($cell === '') {
-            return null;
-        }
-        if (preg_match('/^(No\s*\/\s*Kod|Kod|Kat|Marka|Model|Seri(?: No)?|Bulunduğu Yer|Bulundugu Yer|Lokasyon|Konum|Yer|Uzunluk|Tasarım Basıncı|Basınç|Basinç|Debi|Çap|Cap|Hortum Tipi|Tip|Tür|Tur|Pompa No|Ekipman No)\b/iu', $cell)) {
-            return $cell;
-        }
-        return null;
-    }
-
-    private function findAttribute(array $rows, array $aliases): array
-    {
-        foreach ($aliases as $alias) {
-            $key = $this->normalizeKey($alias);
-            foreach ($rows as $rowKey => $values) {
-                if ($rowKey === $key || str_contains($rowKey, $key) || str_contains($key, $rowKey)) {
-                    return array_values($values);
-                }
-            }
-        }
-        return [];
-    }
-
-    private function technicalAttributes(array $rows): array
-    {
-        $skip = ['kod', 'no', 'ekipman no', 'ekipman adi', 'ekipman adı', 'kat', 'bulundugu yer', 'bulunduğu yer', 'lokasyon', 'konum', 'yer', 'marka', 'uretici', 'üretici', 'model', 'model no', 'seri no', 'serino', 'seri numarasi', 'seri numarası'];
-        $out = [];
-        foreach ($rows as $key => $values) {
-            if (in_array($key, $skip, true)) {
-                continue;
-            }
-            if (count($values) >= 1) {
-                $out[$key] = array_values($values);
-            }
-        }
-        return $out;
-    }
-
-    private function columnAt(array $attributes, int $index): array
-    {
-        $out = [];
-        foreach ($attributes as $key => $values) {
-            if (array_key_exists($index, $values)) {
-                $out[$key] = $values[$index];
-            }
-        }
-        return $out;
-    }
-
-    private function pick(array $assoc, array $keys): ?string
-    {
-        foreach ($keys as $key) {
-            $key = $this->normalizeKey($key);
-            foreach ($assoc as $actual => $value) {
-                if ($actual === $key || str_contains($actual, $key) || str_contains($key, $actual)) {
-                    return $this->cleanValue($value);
-                }
-            }
-        }
-        return null;
-    }
-
-    private function looksLikeControlAssoc(array $assoc): bool
-    {
-        return count(array_filter(array_values($assoc), fn ($v) => $this->controlStatus($v) !== null)) >= 1;
-    }
-
-    private function controlStatus(?string $value): ?string
-    {
-        $v = mb_strtoupper(trim((string) $value), 'UTF-8');
-        return in_array($v, ['U', 'UD', 'N'], true) ? $v : null;
-    }
-
-    private function cleanValue(?string $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-        $value = trim(preg_replace('/\s+/u', ' ', $value));
-        return $value === '' || $value === '-' ? null : $value;
-    }
-
-    private function normalizeKey(string $value): string
-    {
-        $v = mb_strtolower(trim($value), 'UTF-8');
-        $v = strtr($v, ['ı' => 'i', 'ş' => 's', 'ğ' => 'g', 'ü' => 'u', 'ö' => 'o', 'ç' => 'c']);
-        $v = preg_replace('/[^a-z0-9]+/u', ' ', $v) ?? $v;
-        return trim($v);
-    }
-
-    private function headerSignature(array $header): string
-    {
-        return implode('|', array_map(fn ($v) => $this->normalizeKey($v), $header));
-    }
-
-    private function tokens(string $value): array
-    {
-        $value = $this->normalizeKey($value);
-        return array_values(array_unique(array_filter(explode(' ', $value), fn ($v) => mb_strlen($v) >= 3)));
-    }
-
-    private function category(string $category, string $name): string
-    {
-        $v = $this->normalizeKey($category . ' ' . $name);
-        return match (true) {
-            str_contains($v, 'dolap') => 'yangin_dolabi',
-            str_contains($v, 'pompa') => 'yangin_pompasi',
-            str_contains($v, 'hidrant') => 'hidrant',
-            str_contains($v, 'sprinkler') || str_contains($v, 'yagmurlama') => 'sprinkler',
-            str_contains($v, 'su depo') || str_contains($v, 'su dep') => 'su_deposu',
-            str_contains($v, 'su alma') || str_contains($v, 'su verme') => 'su_alma_verme',
-            str_contains($v, 'boru') || str_contains($v, 'kollektor') => 'sabit_boru_tesisati',
-            str_contains($v, 'gazli') || str_contains($v, 'fm200') || str_contains($v, 'co2') => 'gazli_sondurme',
-            default => $category !== '' ? $category : 'diger',
-        };
-    }
+    private function isAttributeRow(string $v): bool { return $this->cellLabel($v)!==null; }
+    private function isControlRow(string $v): bool { return preg_match('/(?:^|\s)\d+(?:\.\d+)+\.?\s+.+\b(?:U|UD|N)\b/iu',trim($v))===1; }
+    private function hasControlMarkers(string $v): bool { return preg_match('/\b(?:U|UD|N)\b/iu',$v)===1; }
+    private function hasEquipmentCode(string $v): bool { return preg_match('/\b(?:YD\s*[- ]?\s*\d+|H\s*[- ]?\s*\d+|P\s*[- ]?\s*\d+)\b/iu',$v)===1; }
+    private function hasTechnicalColumns(array $t): bool { return preg_match('/marka|model|seri|basınç|basinc|uzunluk|debi|çap|cap|kat|lokasyon|konum|hortum|tip|tür|tur/iu',implode(' ',$t['header']))===1; }
+    private function isRelevantFireTable(array $t): bool { return $this->hasEquipmentCode($t['text'])||$this->hasControlMarkers($t['text'])||$this->hasTechnicalColumns($t); }
+    private function status(string $v): ?string { $v=mb_strtoupper(trim($v),'UTF-8'); return in_array($v,['U','UD','N'],true)?$v:null; }
+    private function clean(?string $v): ?string { if($v===null)return null;$v=trim(preg_replace('/\s+/u',' ',$v));return $v===''||$v==='-'?null:$v; }
+    private function normalizeKey(string $v): string { $v=mb_strtolower(trim($v),'UTF-8');$v=strtr($v,['ı'=>'i','ş'=>'s','ğ'=>'g','ü'=>'u','ö'=>'o','ç'=>'c']);return trim(preg_replace('/[^a-z0-9]+/u',' ',$v)??$v); }
+    private function headerSignature(array $h): string { return implode('|',array_map(fn($v)=>$this->normalizeKey($v),$h)); }
+    private function tokens(string $v): array { return array_values(array_unique(array_filter(explode(' ',$this->normalizeKey($v)),fn($x)=>mb_strlen($x)>=3))); }
+    private function category(string $category,string $name): string { $v=$this->normalizeKey($category.' '.$name); return match(true){str_contains($v,'dolap')=>'yangin_dolabi',str_contains($v,'pompa')=>'yangin_pompasi',str_contains($v,'hidrant')=>'hidrant',str_contains($v,'sprinkler')||str_contains($v,'yagmurlama')=>'sprinkler',str_contains($v,'su depo')=>'su_deposu',str_contains($v,'su alma')||str_contains($v,'su verme')=>'su_alma_verme',str_contains($v,'boru')||str_contains($v,'kollektor')=>'sabit_boru_tesisati',str_contains($v,'gazli')||str_contains($v,'fm200')||str_contains($v,'co2')=>'gazli_sondurme',default=>$category!==''?$category:'diger'}; }
+    private function categoryWords(string $c): array { return match($c){'yangin_dolabi'=>['dolap','hortum'],'yangin_pompasi'=>['pompa','jokey','debi'],'hidrant'=>['hidrant'],'sprinkler'=>['sprinkler','yagmurlama'],'su_deposu'=>['depo'],'su_alma_verme'=>['su alma','su verme','itfaiye'],'sabit_boru_tesisati'=>['boru','kollektor','vana'],'gazli_sondurme'=>['gazli','fm200','co2'],default=>[]}; }
 }
