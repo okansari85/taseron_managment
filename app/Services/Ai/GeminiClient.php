@@ -25,9 +25,26 @@ class GeminiClient
             throw new RuntimeException('GEMINI_API_KEY tanımlı değil — Gemini destekli rapor analizi kullanılamıyor.');
         }
 
-        // GEÇİCİ TEST: Yalnızca Yangın Dolabı için fiziksel ekipmanları
-        // kompakt equipment_matrix formatında döndürmesini iste.
-        $systemPrompt .= "\n\nGEÇİCİ YANGIN DOLABI MATRIX TESTİ:\n- Yalnızca category = yangin_dolabi olan sistemlerde fiziksel ekipmanları tek tek components içine yazma.\n- Yangın Dolabı için equipment_matrix kullan. Her matrix kaydında codes, location ve results alanlarını üret.\n- codes ve results aynı uzunlukta ve aynı sırada olmalıdır.\n- Raporda grup halinde geçen kodları aynen koru; kodları uydurma, birleştirme veya yeniden yorumlama.\n- U/UD gibi sonuçları codes ile birebir sırada results içine koy.\n- Yangın Dolabı için components boş array olsun.\n- Diğer tüm sistemlerde mevcut components yapısını aynen kullan ve equipment_matrix üretme.\n";
+        // GEÇİCİ YANGIN DOLABI MATRIX TESTİ:
+        // Analyzer'daki mevcut genel component talimatını yalnızca yangın dolabı
+        // için daha öncelikli matrix talimatıyla sınırla. Diğer sistemlerin
+        // mevcut component yapısı değişmez.
+        if (str_contains($systemPrompt, 'yangın tesisatı periyodik kontrol raporlarını')) {
+            $systemPrompt .= <<<'PROMPT'
+
+YANGIN DOLABI ÖZEL KURALI:
+- Bu kural yalnızca category = "yangin_dolabi" olan sistem için geçerlidir.
+- Yangın Dolabı sistemindeki ekipman listesini components olarak çıkarma.
+- Yangın Dolabı için raporda ne görüyorsan aynısını equipment_matrix olarak çıkar.
+- Raporun tablo yapısını, satır/sütun ilişkisini, ekipman kodlarını, lokasyonları ve sonuçları değiştirme veya yeniden düzenleme.
+- Hiçbir şeyi yeniden gruplayıp ayırma.
+- Hiçbir şeyi yorumlama veya tahmin etme.
+- Raporda bulunan tüm Yangın Dolabı ekipman bilgilerini koru.
+- Yangın Dolabı için components alanı boş array [] olmalıdır.
+- equipment_matrix içinde raporda görülen kodları, lokasyonları ve sonuçları koru.
+- Raporda olmayan bilgi üretme.
+PROMPT;
+        }
 
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $startedAt = microtime(true);
@@ -167,7 +184,7 @@ class GeminiClient
                                 ],
                             ],
                         ],
-                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components'],
+                        'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
                     ],
                 ],
                 'findings' => [
