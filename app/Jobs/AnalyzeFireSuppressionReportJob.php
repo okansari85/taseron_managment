@@ -3,12 +3,12 @@
 namespace App\Jobs;
 
 use App\Domain\Tenancy\TenantContext;
-use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
+use App\Services\Ai\UniversalFireSuppressionTableAnalyzer;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -20,13 +20,13 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-// Rapor analizi (PDF çıkarma + TEK AI isteği) artık İSTEK İÇİNDE SENKRON çalışmıyor.
+// Rapor analizi queue worker içinde çalışır: PDF çıkarma + tek Gemini isteği
+// + deterministic universal table analysis.
 class AnalyzeFireSuppressionReportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $timeout = 900;
-
     public int $tries = 1;
 
     public function __construct(
@@ -41,6 +41,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         FireSuppressionAiReportAnalyzer $analyzer,
+        UniversalFireSuppressionTableAnalyzer $tableAnalyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -48,8 +49,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     ): void {
         $tenant = Tenant::query()->findOrFail($this->tenantId);
         $tenantContext->set($tenant);
-
-        $locationBusinessEntity = LocationBusinessEntity::query()->findOrFail($this->locationBusinessEntityId);
+        LocationBusinessEntity::query()->findOrFail($this->locationBusinessEntityId);
 
         try {
             $absolutePath = Storage::disk('local')->path($this->storedFilePath);
@@ -57,31 +57,40 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
             $progress->stage($this->analysisId, 'extracting', 'PDF metni çıkarılıyor');
             $pages = $extractor->extractPages($file);
-            $progress->stage($this->analysisId, 'ai', 'Rapor tek AI isteğiyle analiz ediliyor');
-            $draft = $analyzer->analyze($pages);
 
-            // GEÇİCİ DOĞRULAMA MODU:
-            // AI'nin Gemini'den dönen ham JSON'unu olduğu gibi frontend'e ver.
-            // Normalize ve inventory matching bu modda bilinçli olarak atlanıyor.
+            $progress->stage($this->analysisId, 'ai', 'Rapor tek AI isteğiyle analiz ediliyor');
+            $semantic = $analyzer->analyze($pages);
+
+            $progress->stage($this->analysisId, 'tables', 'Rapor tabloları dinamik olarak analiz ediliyor');
+            $tables = $tableAnalyzer->analyze($pages, $semantic);
+
+            // Frontend tek bir nihai JSON görür. Gemini'nin rapor/sistem/bulgu
+            // semantiği korunur; ekipman ve teknik tablo verisi deterministic
+            // analyzer tarafından aynı JSON'a eklenir.
+            $draft = array_merge($semantic, [
+                'systems' => $tables['systems'],
+                'equipment' => $tables['equipment'],
+                'control_matrix' => $tables['control_matrix'],
+                'tables' => $tables['tables'],
+                'analyzer' => $tables['analyzer'],
+            ]);
+
             $progress->completeWithResult($this->analysisId, $draft, [
                 'counts' => [
                     'systems' => count($draft['systems'] ?? []),
                     'findings' => count($draft['findings'] ?? []),
+                    'equipment' => count($draft['equipment'] ?? []),
+                    'controls' => count($draft['control_matrix'] ?? []),
+                    'tables' => (int) ($draft['analyzer']['table_count'] ?? 0),
                 ],
             ]);
 
             $this->cleanup();
-            return;
         } catch (Throwable $exception) {
             report($exception);
             $progress->fail($this->analysisId, $exception->getMessage());
             $this->cleanup();
-
-            return;
         }
-
-        // Matching kodu normal çalışma modunda burada çalıştırılacaktır.
-        // Geçici ham JSON doğrulama modunda yukarıdaki return nedeniyle ulaşılmaz.
     }
 
     private function cleanup(): void
