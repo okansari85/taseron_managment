@@ -8,7 +8,7 @@ use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
-use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV2;
+use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV3;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -41,7 +41,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         FireSuppressionAiReportAnalyzer $analyzer,
-        UniversalFireSuppressionTableAnalyzerV2 $tableAnalyzer,
+        UniversalFireSuppressionTableAnalyzerV3 $tableAnalyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -64,9 +64,8 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId, 'tables', 'Rapor tabloları dinamik olarak analiz ediliyor');
             $tables = $tableAnalyzer->analyze($pages, $semantic);
 
-            // Frontend tek bir nihai JSON görür. Gemini'nin rapor/sistem/bulgu
-            // semantiği korunur; ekipman ve teknik tablo verisi deterministic
-            // analyzer tarafından aynı JSON'a eklenir.
+            // Gemini'nin rapor/sistem/bulgu semantiği korunur; ekipman ve
+            // teknik tablo verisi deterministic analyzer tarafından eklenir.
             $draft = array_merge($semantic, [
                 'systems' => $tables['systems'],
                 'equipment' => $tables['equipment'],
