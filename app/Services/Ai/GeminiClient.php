@@ -151,13 +151,12 @@ class GeminiClient
                                         'type' => 'array',
                                         'items' => ['type' => 'string'],
                                     ],
-                                    'location' => ['type' => ['string', 'null']],
-                                    'results' => [
+                                    'locations' => [
                                         'type' => 'array',
                                         'items' => ['type' => ['string', 'null']],
                                     ],
                                 ],
-                                'required' => ['codes', 'location', 'results'],
+                                'required' => ['codes', 'locations'],
                             ],
                         ],
                         'required' => ['name', 'category', 'control_count', 'nonconforming_count', 'components', 'equipment_matrix'],
