@@ -20,8 +20,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-// Rapor analizi (PDF çıkarma + TEK NVIDIA NIM isteği + eşleştirme) artık
-// İSTEK İÇİNDE SENKRON çalışmıyor. Controller Job'ı kuyruğa atıp HEMEN döner.
+// Rapor analizi (PDF çıkarma + TEK AI isteği) artık İSTEK İÇİNDE SENKRON çalışmıyor.
 class AnalyzeFireSuppressionReportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -60,7 +59,19 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $pages = $extractor->extractPages($file);
             $progress->stage($this->analysisId, 'ai', 'Rapor tek AI isteğiyle analiz ediliyor');
             $draft = $analyzer->analyze($pages);
-            $progress->stage($this->analysisId, 'matching', 'Envanter ile eşleştiriliyor');
+
+            // GEÇİCİ DOĞRULAMA MODU:
+            // AI'nin Gemini'den dönen ham JSON'unu olduğu gibi frontend'e ver.
+            // Normalize ve inventory matching bu modda bilinçli olarak atlanıyor.
+            $progress->completeWithResult($this->analysisId, $draft, [
+                'counts' => [
+                    'systems' => count($draft['systems'] ?? []),
+                    'findings' => count($draft['findings'] ?? []),
+                ],
+            ]);
+
+            $this->cleanup();
+            return;
         } catch (Throwable $exception) {
             report($exception);
             $progress->fail($this->analysisId, $exception->getMessage());
@@ -69,68 +80,8 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             return;
         }
 
-        $candidateIds = [];
-
-        $draft['equipment'] = array_map(function (array $item) use ($matchingEngine, $matchingProfile, $locationBusinessEntity, &$candidateIds) {
-            $match = $matchingEngine->match($matchingProfile, $locationBusinessEntity, $item);
-            $candidateIds = [...$candidateIds, ...($match['candidate_ids'] ?? [])];
-            $item['match'] = $match;
-
-            return $item;
-        }, $draft['equipment'] ?? []);
-
-        $exactIds = array_values(array_unique(array_filter(array_map(
-            fn (array $item) => ($item['match']['status'] ?? null) === 'exact' ? ($item['match']['matched_id'] ?? null) : null,
-            $draft['equipment']
-        ))));
-
-        $candidateIds = array_values(array_unique(array_filter($candidateIds)));
-
-        $matchedInventoryItems = FireSuppressionInventoryItem::query()
-            ->whereIn('id', $exactIds)
-            ->get()
-            ->map(fn (FireSuppressionInventoryItem $item) => [
-                'id' => $item->id,
-                'code' => $item->code,
-                'category' => $item->category,
-                'location_note' => $item->location_note,
-            ])
-            ->values()
-            ->all();
-
-        $candidateInventoryItems = FireSuppressionInventoryItem::query()
-            ->whereIn('id', $candidateIds)
-            ->get()
-            ->map(fn (FireSuppressionInventoryItem $item) => [
-                'id' => $item->id,
-                'code' => $item->code,
-                'category' => $item->category,
-                'location_note' => $item->location_note,
-            ])
-            ->values()
-            ->all();
-
-        $unmatchedCodes = array_values(array_filter(array_map(
-            fn (array $item) => ($item['match']['status'] ?? null) === 'new' ? ($item['code'] ?? null) : null,
-            $draft['equipment']
-        )));
-
-        $result = $draft;
-        $result['matched_inventory_items'] = $matchedInventoryItems;
-        $result['candidate_inventory_items'] = $candidateInventoryItems;
-        $result['unmatched_codes'] = $unmatchedCodes;
-
-        $progress->completeWithResult($this->analysisId, $result, [
-            'counts' => [
-                'equipment' => count($draft['equipment'] ?? []),
-                'findings' => count($draft['findings'] ?? []),
-                'matched' => count($matchedInventoryItems),
-                'candidates' => count($candidateInventoryItems),
-                'unmatched' => count($unmatchedCodes),
-            ],
-        ]);
-
-        $this->cleanup();
+        // Matching kodu normal çalışma modunda burada çalıştırılacaktır.
+        // Geçici ham JSON doğrulama modunda yukarıdaki return nedeniyle ulaşılmaz.
     }
 
     private function cleanup(): void
