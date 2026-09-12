@@ -25,15 +25,9 @@ class FireSuppressionAiReportAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için rapor analiz edilemedi.');
         }
 
-        $result = $this->ai->extractStructuredJson($this->systemPrompt(), $text, 50000);
-        $normalized = $this->normalize($result);
-
-        // GEÇİCİ DEBUG: Ham Gemini çıktısını normalize edilmiş sonuçtan
-        // ayrı bir üst seviye alan olarak taşı. Böylece frontend Console'da
-        // ham AI çıktısı ile normalize edilmiş sonucu doğrudan karşılaştırabiliriz.
-        $normalized['debug_ai_raw'] = $result;
-
-        return $normalized;
+        // GEÇİCİ DEBUG/DOĞRULAMA: Gemini'nin döndürdüğü ham JSON'u olduğu gibi
+        // geri ver. Normalize, eşleştirme veya debug_ai_raw sarmalaması yapma.
+        return $this->ai->extractStructuredJson($this->systemPrompt(), $text, 50000);
     }
 
     private function buildDocumentText(array $pages): string
