@@ -9,7 +9,7 @@ use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
-use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV6;
+use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV7;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -39,7 +39,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         FireSuppressionAiReportAnalyzer $analyzer,
-        UniversalFireSuppressionTableAnalyzerV6 $tableAnalyzer,
+        UniversalFireSuppressionTableAnalyzerV7 $tableAnalyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
