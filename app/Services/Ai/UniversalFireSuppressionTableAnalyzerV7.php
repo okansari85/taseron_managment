@@ -7,6 +7,12 @@ namespace App\Services\Ai;
  *
  * V7: Kontrol tablolarında aynı satır içinde birden fazla kontrol kodunu
  * ayırır ve her kodun kendi açıklama/status grubunu üretir.
+ *
+ * Kontrol normalizasyonu:
+ * - Bir sayısal değer tek başına kontrol kodu kabul edilmez; kodun yanında U/UD/N
+ *   sonucu bulunmalıdır.
+ * - Aynı kontrol kodu ve açıklama birden fazla sayfada tekrarlanırsa tek kayıtta
+ *   birleştirilir ve sonuçlar birleştirilir.
  */
 class UniversalFireSuppressionTableAnalyzerV7
 {
@@ -113,7 +119,7 @@ class UniversalFireSuppressionTableAnalyzerV7
             'candidate_inventory_items' => [],
             'unmatched_codes' => [],
             'analyzer' => [
-                'version' => '7.0.0',
+                'version' => '7.1.0',
                 'table_count' => count($tables),
                 'equipment_count' => count($uniqueEquipment),
                 'control_count' => count($controls),
@@ -245,14 +251,18 @@ class UniversalFireSuppressionTableAnalyzerV7
 
     private function isControlTable(array $t): bool
     {
-        $codes = 0;
-        $statuses = 0;
+        // A table is a control table only when actual control-code segments
+        // contain U/UD/N results. Decimal values such as 10.04 or 2026.2027
+        // are therefore not enough to classify a table as a control table.
+        $withStatus = 0;
         foreach ($t['rows'] as $r) {
-            $codes += $this->controlCodeCount($r['line']);
-            preg_match_all('/\b(?:U|UD|N)\b/iu', implode(' ', array_slice($r['cells'], 1)), $m);
-            $statuses += count($m[0]);
+            foreach ($this->parseControlSegments($r['line']) as $segment) {
+                if (!empty($segment['statuses'])) {
+                    $withStatus++;
+                }
+            }
         }
-        return $codes >= 2 || ($codes >= 1 && $statuses >= 2);
+        return $withStatus >= 2;
     }
 
     private function isControlLine(string $line): bool
@@ -524,6 +534,11 @@ class UniversalFireSuppressionTableAnalyzerV7
             }
 
             foreach ($this->parseControlSegments($r['line']) as $segment) {
+                // A decimal/reference number without a U/UD/N result is not a control.
+                if (empty($segment['statuses'])) {
+                    continue;
+                }
+
                 $results = [];
                 $non = 0;
                 foreach (array_values($segment['statuses']) as $i => $v) {
@@ -594,18 +609,57 @@ class UniversalFireSuppressionTableAnalyzerV7
 
     private function uniqueControls(array $items): array
     {
-        $seen = [];
-        $out = [];
+        $groups = [];
+
         foreach ($items as $x) {
-            $k = ($x['control_code'] ?? '') . '|' . ($x['description'] ?? '') . '|' . json_encode($x['results'] ?? []);
-            if (isset($seen[$k])) {
+            $results = $x['results'] ?? [];
+            if (!is_array($results) || !$results) {
                 continue;
             }
-            $seen[$k] = 1;
-            $out[] = $x;
+
+            $code = trim((string)($x['control_code'] ?? ''));
+            if ($code === '') {
+                continue;
+            }
+
+            $description = trim((string)($x['description'] ?? ''));
+            $key = $code . '|' . $this->normalizeKey($description);
+
+            if (!isset($groups[$key])) {
+                $groups[$key] = $x;
+                $groups[$key]['results'] = [];
+                $groups[$key]['nonconforming_count'] = 0;
+                $groups[$key]['source_pages'] = [];
+            }
+
+            foreach ($results as $result) {
+                $value = strtoupper(trim((string)$result));
+                if (!in_array($value, ['U', 'UD', 'N'], true)) {
+                    continue;
+                }
+                $next = (string)(count($groups[$key]['results']) + 1);
+                $groups[$key]['results'][$next] = $value;
+                if ($value === 'UD') {
+                    $groups[$key]['nonconforming_count']++;
+                }
+            }
+
+            $groups[$key]['source_pages'] = array_values(array_unique(array_merge(
+                $groups[$key]['source_pages'],
+                (array)($x['source_pages'] ?? [])
+            )));
         }
+
+        $out = array_values(array_filter($groups, fn($x) => !empty($x['results'])));
         usort($out, function ($a, $b) {
-            return version_compare((string)($a['control_code'] ?? '0'), (string)($b['control_code'] ?? '0'));
+            $cmp = version_compare((string)($a['control_code'] ?? '0'), (string)($b['control_code'] ?? '0'));
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+            return strcmp(
+                $this->normalizeKey((string)($a['description'] ?? '')),
+                $this->normalizeKey((string)($b['description'] ?? ''))
+            );
         });
         return $out;
     }
