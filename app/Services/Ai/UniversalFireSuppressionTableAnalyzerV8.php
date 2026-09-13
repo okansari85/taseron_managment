@@ -19,6 +19,14 @@ class UniversalFireSuppressionTableAnalyzerV8 extends UniversalFireSuppressionTa
         $equipment = $this->uniquePhysicalEquipment($result['equipment'] ?? []);
         $result['equipment'] = $equipment;
 
+        // V10 status_source alanını ekipman üzerinde güvenli şekilde kullanır.
+        // V7/V8 çıktılarında bu alan henüz bulunmayabilir.
+        $result['equipment'] = array_map(function (array $item): array {
+            $item['status_source'] = $item['status_source'] ?? null;
+            return $item;
+        }, (array)$result['equipment']);
+        $equipment = $result['equipment'];
+
         $preferredByCode = [];
         foreach ($equipment as $item) {
             $code = trim((string)($item['code'] ?? ''));
