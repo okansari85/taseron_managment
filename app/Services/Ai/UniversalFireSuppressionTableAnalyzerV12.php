@@ -15,11 +15,8 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         $result = parent::analyze($pages, $semantic);
 
-        // Some reports repeat a control code in the later findings/defects
-        // section. Those rows can contain equipment codes (YD1, YD2, ...),
-        // but they are findings, not additional control criteria. Canonical
-        // findings already come from Gemini, so remove only the duplicated
-        // equipment-specific control rows here.
+        // The semantic layer owns findings. Remove malformed narrative rows
+        // that the generic table parser can otherwise misclassify as controls.
         $result = $this->removeFindingRowsFromControls($result);
 
         if ($coordinatePages !== []) {
@@ -30,7 +27,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result = $this->applyCoordinateControls($result, $coordinateControls);
         }
 
-        $result['analyzer']['version'] = '12.2.0';
+        $result['analyzer']['version'] = '12.3.0';
         return $result;
     }
 
@@ -43,7 +40,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 $code = strtoupper(trim((string)($component['code'] ?? '')));
                 if ($code !== '') $knownCodes[$code] = true;
             }
-            if (!$knownCodes) continue;
 
             $controls = (array)($system['control_items'] ?? []);
             $normalCodes = [];
@@ -59,15 +55,29 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $seen = [];
             foreach ($controls as $control) {
                 $code = trim((string)($control['code'] ?? ''));
-                $description = (string)($control['description'] ?? '');
+                $description = trim((string)($control['description'] ?? ''));
 
-                // If the same criterion code has a normal control row and a
-                // later equipment-specific row, keep the normal control row.
-                if ($code !== '' && isset($normalCodes[$code]) && $this->containsEquipmentCode($description, $knownCodes)) {
+                // A repeated criterion row that explicitly contains equipment
+                // codes is the later finding/defect representation. Keep the
+                // normal criterion row instead.
+                if (
+                    $code !== ''
+                    && isset($normalCodes[$code])
+                    && $this->containsEquipmentCode($description, $knownCodes)
+                ) {
                     continue;
                 }
 
-                $key = $code . '|' . strtoupper(trim((string)($control['status'] ?? ''))) . '|' . trim($description);
+                // Generic PDF extraction can turn a numbered finding into a
+                // control whose description starts with a detached closing
+                // parenthesis. This is a structural extraction artifact, not
+                // a valid control description. Do not depend on a company or
+                // page number to identify it.
+                if ($this->looksLikeDetachedFindingRow($description)) {
+                    continue;
+                }
+
+                $key = $code . '|' . strtoupper(trim((string)($control['status'] ?? ''))) . '|' . $description;
                 if ($code !== '' && isset($seen[$key])) continue;
                 if ($code !== '') $seen[$key] = true;
                 $filtered[] = $control;
@@ -87,6 +97,16 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         ));
 
         return $result;
+    }
+
+    private function looksLikeDetachedFindingRow(string $description): bool
+    {
+        if ($description === '') return false;
+        $normalized = preg_replace('/\s+/u', ' ', trim($description));
+
+        // Preserve normal control text. Only treat a row as a detached
+        // finding when the parser left a leading punctuation fragment.
+        return (bool)preg_match('/^\)+\s+/u', $normalized);
     }
 
     private function containsEquipmentCode(string $text, array $knownCodes): bool
@@ -127,11 +147,14 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 foreach ((array)($system['control_items'] ?? []) as $controlIndex => $control) {
                     if ((string)($control['code'] ?? '') !== (string)($coordinateControl['code'] ?? '')) continue;
 
-                    $system['control_items'][$controlIndex]['scope'] = 'equipment';
-                    $system['control_items'][$controlIndex]['equipment_refs'] = $this->refsBelongingToSystem(
+                    $equipmentRefs = $this->refsBelongingToSystem(
                         $refs,
                         (array)($system['components'] ?? [])
                     );
+                    if (!$equipmentRefs) continue;
+
+                    $system['control_items'][$controlIndex]['scope'] = 'equipment';
+                    $system['control_items'][$controlIndex]['equipment_refs'] = $equipmentRefs;
                     $system['control_items'][$controlIndex]['status'] = 'UD';
                     if (!empty($coordinateControl['source_pages'])) {
                         $system['control_items'][$controlIndex]['source_pages'] = array_values($coordinateControl['source_pages']);
@@ -154,6 +177,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     if ($key !== '') $refs[$key] = true;
                 }
             }
+
+            // Findings are canonical in root findings and are projected into
+            // systems only when Gemini/normalizer can identify the equipment.
+            // They contribute to the nonconforming equipment count, but never
+            // mutate component status.
             foreach ((array)($system['findings'] ?? []) as $finding) {
                 foreach ((array)($finding['equipment_refs'] ?? []) as $ref) {
                     $key = $this->normalizeEquipmentCode((string)$ref);
@@ -182,7 +210,10 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
     private function systemsForEquipmentRefs(array $systems, array $refs): array
     {
-        $wanted = array_fill_keys(array_map(fn($r) => $this->normalizeEquipmentCode((string)$r), $refs), true);
+        $wanted = array_fill_keys(
+            array_filter(array_map(fn($r) => $this->normalizeEquipmentCode((string)$r), $refs)),
+            true
+        );
         $indexes = [];
         foreach ($systems as $index => $system) {
             foreach ((array)($system['components'] ?? []) as $component) {
@@ -215,6 +246,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         $code = strtoupper(trim($code));
         $code = preg_replace('/\s+/u', '', $code);
-        return str_replace(['–','—','‑'], '-', $code);
+        return str_replace(['–', '—', '‑'], '-', $code);
     }
 }
