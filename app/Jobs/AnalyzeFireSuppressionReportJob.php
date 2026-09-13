@@ -5,10 +5,11 @@ use App\Domain\Tenancy\TenantContext;
 use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
+use App\Services\Ai\CoordinatePdfWordExtractor;
 use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
-use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV11;
+use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV12;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -37,8 +38,9 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
     public function handle(
         PdfTextExtractor $extractor,
+        CoordinatePdfWordExtractor $coordinateExtractor,
         FireSuppressionAiReportAnalyzer $analyzer,
-        UniversalFireSuppressionTableAnalyzerV11 $tableAnalyzer,
+        UniversalFireSuppressionTableAnalyzerV12 $tableAnalyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -55,60 +57,43 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId,'ai','Rapor tek AI isteğiyle analiz ediliyor');
             $semantic=$analyzer->analyze($pages);
             $progress->stage($this->analysisId,'tables','Rapor tabloları dinamik olarak analiz ediliyor');
-            $tables=$tableAnalyzer->analyze($pages,$semantic);
+
+            // Coordinate extraction is kept separate from normal text extraction.
+            // V12 uses it for wide matrix control/equipment relationships.
+            $coordinatePages=$coordinateExtractor->extract($absolutePath);
+            $tables=$tableAnalyzer->analyze($pages,$semantic,$coordinatePages);
 
             $candidateIds=[];$matchedIds=[];$matches=[];
-            foreach($tables['equipment']??[] as $index=>$equipment){
-                $match=$matchingEngine->match($matchingProfile,$branch,$equipment);
-                $matches[$index]=$match;
-                $candidateIds=array_merge($candidateIds,$match['candidate_ids']??[]);
-                if(!empty($match['matched_id']))$matchedIds[]=$match['matched_id'];
+            foreach($tables['systems']??[] as $systemIndex=>$system){
+                foreach($system['components']??[] as $componentIndex=>$equipment){
+                    $match=$matchingEngine->match($matchingProfile,$branch,$equipment);
+                    $matches[$systemIndex][$componentIndex]=$match;
+                    $candidateIds=array_merge($candidateIds,$match['candidate_ids']??[]);
+                    if(!empty($match['matched_id']))$matchedIds[]=$match['matched_id'];
+                }
             }
             $candidateIds=array_values(array_unique(array_map('intval',$candidateIds)));
             $matchedIds=array_values(array_unique(array_map('intval',$matchedIds)));
             $candidateMap=FireSuppressionInventoryItem::query()->whereIn('id',$candidateIds)->get()->keyBy('id');
             $matchedMap=FireSuppressionInventoryItem::query()->whereIn('id',$matchedIds)->get()->keyBy('id');
             $matchedInventory=[];$candidateInventory=[];$unmatched=[];
-            foreach($tables['equipment']??[] as $index=>$equipment){
-                $match=$matches[$index]??['status'=>'new','matched_id'=>null,'candidate_ids'=>[]];
-                $tables['equipment'][$index]['match']=$match;
-                if(($match['status']??'')==='exact'&&isset($match['matched_id']))$matchedInventory[]=$matchedMap->get($match['matched_id']);
-                elseif(($match['status']??'')==='candidate_single'&&isset($match['candidate_ids'][0]))$matchedInventory[]=$candidateMap->get($match['candidate_ids'][0]);
-                elseif(($match['status']??'')==='candidate_multiple')foreach($match['candidate_ids']??[] as $id)if($candidateMap->has($id))$candidateInventory[]=$candidateMap->get($id);
-                elseif(!empty($equipment['code']))$unmatched[]=$equipment['code'];
+            foreach($tables['systems']??[] as $systemIndex=>$system){
+                foreach($system['components']??[] as $componentIndex=>$equipment){
+                    $match=$matches[$systemIndex][$componentIndex]??['status'=>'new','matched_id'=>null,'candidate_ids'=>[]];
+                    if(($match['status']??'')==='exact'&&isset($match['matched_id']))$matchedInventory[]=$matchedMap->get($match['matched_id']);
+                    elseif(($match['status']??'')==='candidate_single'&&isset($match['candidate_ids'][0]))$matchedInventory[]=$candidateMap->get($match['candidate_ids'][0]);
+                    elseif(($match['status']??'')==='candidate_multiple')foreach($match['candidate_ids']??[] as $id)if($candidateMap->has($id))$candidateInventory[]=$candidateMap->get($id);
+                    elseif(!empty($equipment['code']))$unmatched[]=$equipment['code'];
+                }
             }
-            $tables['equipment']=array_values($tables['equipment']);
             $tables['matched_inventory_items']=array_values(array_filter($matchedInventory));
             $tables['candidate_inventory_items']=array_values(array_filter($candidateInventory));
             $tables['unmatched_codes']=array_values(array_unique($unmatched));
 
-            $report=$semantic['report']??[];
-            $draft=array_merge($semantic,[
-                'report'=>$tables['report']??[
-                    'report_no'=>$report['report_no']??null,
-                    'company_name'=>$report['company_name']??null,
-                    'control_date'=>$report['control_date']??null,
-                    'next_control_date'=>$report['next_control_date']??null,
-                    'overall_result'=>$report['overall_result']??null,
-                ],
-                'control_date'=>$tables['report']['control_date']??($report['control_date']??null),
-                'next_control_date'=>$tables['report']['next_control_date']??($report['next_control_date']??null),
-                'report_no'=>$tables['report']['report_no']??($report['report_no']??null),
-                'company_name'=>$tables['report']['company_name']??($report['company_name']??null),
-                'overall_result'=>$tables['report']['overall_result']??($report['overall_result']??null),
-                'covered_categories'=>$tables['covered_categories']??[],
-                'systems'=>$tables['systems']??[],
-                'equipment'=>$tables['equipment']??[],
-                'findings'=>$tables['findings']??($semantic['findings']??[]),
-                'matched_inventory_items'=>$tables['matched_inventory_items']??[],
-                'candidate_inventory_items'=>$tables['candidate_inventory_items']??[],
-                'unmatched_codes'=>$tables['unmatched_codes']??[],
-                'analyzer'=>$tables['analyzer']??[],
-            ]);
-            $progress->completeWithResult($this->analysisId,$draft,['counts'=>[
-                'systems'=>count($draft['systems']??[]),'findings'=>count($draft['findings']??[]),
-                'equipment'=>count($draft['equipment']??[]),'controls'=>(int)($draft['analyzer']['control_count']??0),
-                'tables'=>(int)($draft['analyzer']['table_count']??0),
+            $progress->completeWithResult($this->analysisId,$tables,['counts'=>[
+                'systems'=>count($tables['systems']??[]),'findings'=>count($tables['findings']??[]),
+                'equipment'=>(int)($tables['analyzer']['equipment_count']??0),'controls'=>(int)($tables['analyzer']['control_count']??0),
+                'tables'=>(int)($tables['analyzer']['table_count']??0),
             ]]);
             $this->cleanup();
         } catch(Throwable $exception){
