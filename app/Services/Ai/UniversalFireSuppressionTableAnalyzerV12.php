@@ -15,6 +15,13 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         $result = parent::analyze($pages, $semantic);
 
+        // Some reports repeat a control code in the later findings/defects
+        // section. Those rows can contain equipment codes (YD1, YD2, ...),
+        // but they are findings, not additional control criteria. Canonical
+        // findings already come from Gemini, so remove only the duplicated
+        // equipment-specific control rows here.
+        $result = $this->removeFindingRowsFromControls($result);
+
         if ($coordinatePages !== []) {
             $coordinateControls = $this->coordinateAnalyzer->analyze(
                 $coordinatePages,
@@ -23,8 +30,75 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result = $this->applyCoordinateControls($result, $coordinateControls);
         }
 
-        $result['analyzer']['version'] = '12.1.0';
+        $result['analyzer']['version'] = '12.2.0';
         return $result;
+    }
+
+    private function removeFindingRowsFromControls(array $result): array
+    {
+        foreach ((array)($result['systems'] ?? []) as $systemIndex => $system) {
+            $components = (array)($system['components'] ?? []);
+            $knownCodes = [];
+            foreach ($components as $component) {
+                $code = strtoupper(trim((string)($component['code'] ?? '')));
+                if ($code !== '') $knownCodes[$code] = true;
+            }
+            if (!$knownCodes) continue;
+
+            $controls = (array)($system['control_items'] ?? []);
+            $normalCodes = [];
+            foreach ($controls as $control) {
+                $code = trim((string)($control['code'] ?? ''));
+                $description = (string)($control['description'] ?? '');
+                if ($code !== '' && !$this->containsEquipmentCode($description, $knownCodes)) {
+                    $normalCodes[$code] = true;
+                }
+            }
+
+            $filtered = [];
+            $seen = [];
+            foreach ($controls as $control) {
+                $code = trim((string)($control['code'] ?? ''));
+                $description = (string)($control['description'] ?? '');
+
+                // If the same criterion code has a normal control row and a
+                // later equipment-specific row, keep the normal control row.
+                if ($code !== '' && isset($normalCodes[$code]) && $this->containsEquipmentCode($description, $knownCodes)) {
+                    continue;
+                }
+
+                $key = $code . '|' . strtoupper(trim((string)($control['status'] ?? ''))) . '|' . trim($description);
+                if ($code !== '' && isset($seen[$key])) continue;
+                if ($code !== '') $seen[$key] = true;
+                $filtered[] = $control;
+            }
+
+            $result['systems'][$systemIndex]['control_items'] = array_values($filtered);
+            $result['systems'][$systemIndex]['control_count'] = count($filtered);
+            $result['systems'][$systemIndex]['nonconforming_count'] = count(array_filter(
+                $filtered,
+                fn(array $control) => ($control['status'] ?? null) === 'UD'
+            ));
+        }
+
+        $result['analyzer']['control_count'] = array_sum(array_map(
+            fn(array $system) => (int)($system['control_count'] ?? 0),
+            $result['systems'] ?? []
+        ));
+
+        return $result;
+    }
+
+    private function containsEquipmentCode(string $text, array $knownCodes): bool
+    {
+        if ($text === '' || !$knownCodes) return false;
+        $normalized = strtoupper($text);
+        foreach (array_keys($knownCodes) as $code) {
+            if (preg_match('/(?<![A-Z0-9])' . preg_quote($code, '/') . '(?![A-Z0-9])/u', $normalized)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function equipmentFromSystems(array $systems): array
@@ -53,9 +127,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 foreach ((array)($system['control_items'] ?? []) as $controlIndex => $control) {
                     if ((string)($control['code'] ?? '') !== (string)($coordinateControl['code'] ?? '')) continue;
 
-                    // A coordinate-derived equipment mapping is authoritative for
-                    // the equipment relationship. Keep a system-level control
-                    // separate if the same code exists elsewhere.
                     $system['control_items'][$controlIndex]['scope'] = 'equipment';
                     $system['control_items'][$controlIndex]['equipment_refs'] = $this->refsBelongingToSystem(
                         $refs,
