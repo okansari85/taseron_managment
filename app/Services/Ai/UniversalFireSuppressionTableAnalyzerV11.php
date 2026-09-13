@@ -7,8 +7,8 @@ namespace App\Services\Ai;
  * Rules:
  * - components contain equipment facts only; never status/relationship refs
  * - control_items own equipment_refs
- * - root findings are canonical; systems[].findings contain only id + equipment_refs
- * - coordinate/table analysis supplies deterministic equipment-column relationships
+ * - root findings are canonical and never expose equipment_refs
+ * - systems[].findings contain only id + equipment_refs
  */
 class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionTableAnalyzerV10
 {
@@ -33,7 +33,7 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
                 if ($this->sameSystemForFinding($finding, $system)) {
                     $systemFindingIds[] = [
                         'id' => $finding['id'],
-                        'equipment_refs' => $finding['equipment_refs']
+                        'equipment_refs' => array_values($finding['_equipment_refs'] ?? []),
                     ];
                 }
             }
@@ -62,13 +62,17 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
                 $system['control_items'],
                 fn(array $control) => ($control['status'] ?? null) === 'UD'
             ));
-            $system['status'] = $this->deriveSystemStatus(
-                $system['control_items'],
-                $system['findings']
-            );
+            $system['status'] = $this->deriveSystemStatus($system['control_items'], $system['findings']);
 
             $systems[] = $system;
         }
+
+        // equipment_refs are intentionally internal only. They are projected to
+        // systems[].findings and must never be exposed on canonical root findings.
+        foreach ($findings as &$finding) {
+            unset($finding['equipment_refs'], $finding['_equipment_refs']);
+        }
+        unset($finding);
 
         $result['report'] = $this->cleanReport((array)($result['report'] ?? []), (array)($semantic['report'] ?? []));
         $result['covered_categories'] = array_values(array_unique(array_filter(
@@ -77,17 +81,13 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
         $result['systems'] = $systems;
         $result['findings'] = $findings;
 
-        // Equipment is represented only under systems[].components in the final payload.
         unset($result['equipment'], $result['control_matrix'], $result['equipment_matrix'], $result['tables']);
 
         $result['analyzer'] = [
-            'version' => '11.1.0',
+            'version' => '11.2.0',
             'table_count' => (int)($result['analyzer']['table_count'] ?? 0),
             'equipment_count' => count($equipment),
-            'control_count' => array_sum(array_map(
-                fn(array $system) => (int)($system['control_count'] ?? 0),
-                $systems
-            )),
+            'control_count' => array_sum(array_map(fn(array $system) => (int)($system['control_count'] ?? 0), $systems)),
             'finding_count' => count($findings),
         ];
 
@@ -153,17 +153,14 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
         $out = [];
         foreach ($controls as $control) {
             if (!is_array($control)) continue;
-            $refs = $this->resolveEquipmentRefs(
-                (string)($control['description'] ?? ''),
-                (array)($control['equipment_refs'] ?? []),
-                $equipmentCodes
-            );
+            $refs = $this->resolveEquipmentRefs((string)($control['description'] ?? ''), (array)($control['equipment_refs'] ?? []), $equipmentCodes);
+            $scope = (($control['scope'] ?? 'system') === 'equipment' && $refs) ? 'equipment' : 'system';
             $out[] = [
                 'code' => $control['code'] ?? null,
                 'description' => $control['description'] ?? null,
                 'status' => $this->normalizeControlStatus($control['status'] ?? null),
-                'scope' => (($control['scope'] ?? 'system') === 'equipment') ? 'equipment' : 'system',
-                'equipment_refs' => $refs,
+                'scope' => $scope,
+                'equipment_refs' => $scope === 'equipment' ? $refs : [],
                 'source_pages' => array_values($control['source_pages'] ?? []),
             ];
         }
@@ -177,18 +174,13 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
             if (!is_array($finding)) continue;
             $description = trim((string)($finding['description'] ?? ''));
             if ($description === '') continue;
-            $id = trim((string)($finding['id'] ?? ''));
-            if ($id === '') $id = 'finding-' . ($index + 1);
-
+            $id = trim((string)($finding['id'] ?? '')) ?: 'finding-' . ($index + 1);
+            $refs = $this->resolveEquipmentRefs($description, (array)($finding['equipment_refs'] ?? []), $equipmentCodes);
             $out[] = [
                 'id' => $id,
                 'system_name' => $finding['system_name'] ?? null,
                 'description' => $description,
-                'equipment_refs' => $this->resolveEquipmentRefs(
-                    $description,
-                    (array)($finding['equipment_refs'] ?? []),
-                    $equipmentCodes
-                ),
+                '_equipment_refs' => $refs,
                 'source_pages' => array_values($finding['source_pages'] ?? []),
             ];
         }
@@ -200,20 +192,13 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
         $findingName = $this->normalizeKey((string)($finding['system_name'] ?? ''));
         $systemName = $this->normalizeKey((string)($system['name'] ?? ''));
         if ($findingName === '' || $systemName === '') return false;
-        return $findingName === $systemName
-            || str_contains($findingName, $systemName)
-            || str_contains($systemName, $findingName);
+        return $findingName === $systemName || str_contains($findingName, $systemName) || str_contains($systemName, $findingName);
     }
 
     private function deriveSystemStatus(array $controls, array $findings): string
     {
-        foreach ($controls as $control) {
-            if (($control['status'] ?? null) === 'UD') return 'uygun_degil';
-        }
-        foreach ($findings as $finding) {
-            // Any finding means a reported nonconformity at system level.
-            return 'uygun_degil';
-        }
+        foreach ($controls as $control) if (($control['status'] ?? null) === 'UD') return 'uygun_degil';
+        if ($findings) return 'uygun_degil';
         return $controls ? 'uygun' : 'belirtilmemis';
     }
 
@@ -221,7 +206,7 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
     {
         $status = strtoupper(trim((string)$status));
         $status = str_replace(['.', ' ', '_', '-'], '', $status);
-        if ($status === 'UD' || $status === 'U.D') return 'UD';
+        if ($status === 'UD' || $status === 'UD') return 'UD';
         if ($status === 'U') return 'U';
         if ($status === 'N') return 'N';
         return $status !== '' ? $status : null;
@@ -242,15 +227,13 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
     {
         $code = strtoupper(trim($code));
         $code = preg_replace('/\s+/u', '', $code);
-        $code = str_replace(['–', '—', '‑'], '-', $code);
-        return $code;
+        return str_replace(['–', '—', '‑'], '-', $code);
     }
 
     private function normalizeKey(string $value): string
     {
         $value = mb_strtolower(trim($value), 'UTF-8');
-        $value = preg_replace('/\s+/u', ' ', $value);
-        return $value;
+        return preg_replace('/\s+/u', ' ', $value);
     }
 
     private function resolveEquipmentRefs(string $text, array $existing, array $equipmentCodes): array
@@ -275,13 +258,12 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
 
         preg_match_all('/\b(YD|HD|H|P)\s*-?\s*(\d+)\s*(?:-|\b(?:ILE|İLE|TO|ARASI)\b)\s*(?:\1\s*-?\s*)?(\d+)\b/iu', $normalizedText, $ranges, PREG_SET_ORDER);
         foreach ($ranges as $range) {
-            $prefix = strtoupper($range[1]);
-            $from = (int)$range[2];
-            $to = (int)$range[3];
+            $prefix = strtoupper($range[1]); $from = (int)$range[2]; $to = (int)$range[3];
             if ($from > $to) [$from, $to] = [$to, $from];
             for ($n = $from; $n <= $to; $n++) {
-                $key = $prefix . '-' . $n;
-                if (isset($equipmentCodes[$key])) $refs[$key] = $equipmentCodes[$key];
+                foreach ([$prefix . $n, $prefix . '-' . $n] as $key) {
+                    if (isset($equipmentCodes[$key])) $refs[$key] = $equipmentCodes[$key];
+                }
             }
         }
         return array_values($refs);
