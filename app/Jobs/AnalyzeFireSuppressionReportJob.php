@@ -8,7 +8,7 @@ use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
-use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV9;
+use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV10;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -38,7 +38,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         FireSuppressionAiReportAnalyzer $analyzer,
-        UniversalFireSuppressionTableAnalyzerV9 $tableAnalyzer,
+        UniversalFireSuppressionTableAnalyzerV10 $tableAnalyzer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -84,14 +84,22 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
             $report=$semantic['report']??[];
             $draft=array_merge($semantic,[
-                'control_date'=>$tables['control_date']??($report['control_date']??null),
-                'next_control_date'=>$tables['next_control_date']??($report['next_control_date']??null),
-                'report_no'=>$tables['report_no']??($report['report_no']??null),
-                'company_name'=>$tables['company_name']??($report['company_name']??null),
-                'overall_result'=>$tables['overall_result']??($report['overall_result']??null),
+                'report'=>$tables['report']??[
+                    'report_no'=>$report['report_no']??null,
+                    'company_name'=>$report['company_name']??null,
+                    'control_date'=>$report['control_date']??null,
+                    'next_control_date'=>$report['next_control_date']??null,
+                    'overall_result'=>$report['overall_result']??null,
+                ],
+                'control_date'=>$tables['report']['control_date']??($report['control_date']??null),
+                'next_control_date'=>$tables['report']['next_control_date']??($report['next_control_date']??null),
+                'report_no'=>$tables['report']['report_no']??($report['report_no']??null),
+                'company_name'=>$tables['report']['company_name']??($report['company_name']??null),
+                'overall_result'=>$tables['report']['overall_result']??($report['overall_result']??null),
                 'covered_categories'=>$tables['covered_categories']??[],
                 'systems'=>$tables['systems']??[],
                 'equipment'=>$tables['equipment']??[],
+                'findings'=>$tables['findings']??($semantic['findings']??[]),
                 'matched_inventory_items'=>$tables['matched_inventory_items']??[],
                 'candidate_inventory_items'=>$tables['candidate_inventory_items']??[],
                 'unmatched_codes'=>$tables['unmatched_codes']??[],
