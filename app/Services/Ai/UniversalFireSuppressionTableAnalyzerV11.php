@@ -67,8 +67,6 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
             $systems[] = $system;
         }
 
-        // equipment_refs are intentionally internal only. They are projected to
-        // systems[].findings and must never be exposed on canonical root findings.
         foreach ($findings as &$finding) {
             unset($finding['equipment_refs'], $finding['_equipment_refs']);
         }
@@ -84,7 +82,7 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
         unset($result['equipment'], $result['control_matrix'], $result['equipment_matrix'], $result['tables']);
 
         $result['analyzer'] = [
-            'version' => '11.2.0',
+            'version' => '11.2.1',
             'table_count' => (int)($result['analyzer']['table_count'] ?? 0),
             'equipment_count' => count($equipment),
             'control_count' => array_sum(array_map(fn(array $system) => (int)($system['control_count'] ?? 0), $systems)),
@@ -195,7 +193,7 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
         return $findingName === $systemName || str_contains($findingName, $systemName) || str_contains($systemName, $findingName);
     }
 
-    private function deriveSystemStatus(array $controls, array $findings): string
+    protected function deriveSystemStatus(array $controls, array $findings): string
     {
         foreach ($controls as $control) if (($control['status'] ?? null) === 'UD') return 'uygun_degil';
         if ($findings) return 'uygun_degil';
@@ -206,7 +204,7 @@ class UniversalFireSuppressionTableAnalyzerV11 extends UniversalFireSuppressionT
     {
         $status = strtoupper(trim((string)$status));
         $status = str_replace(['.', ' ', '_', '-'], '', $status);
-        if ($status === 'UD' || $status === 'UD') return 'UD';
+        if ($status === 'UD') return 'UD';
         if ($status === 'U') return 'U';
         if ($status === 'N') return 'N';
         return $status !== '' ? $status : null;
