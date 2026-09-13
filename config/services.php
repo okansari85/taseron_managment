@@ -42,20 +42,22 @@ return [
         'api_key' => env('NVIDIA_NIM_API_KEY'),
         'base_url' => env('NVIDIA_NIM_BASE_URL', 'https://integrate.api.nvidia.com/v1'),
         'ocr_model' => env('NVIDIA_NIM_OCR_MODEL', 'nvidia/nemotron-ocr-v2'),
-        // meta/llama-3.1-8b-instruct VE meta/llama-3.3-70b-instruct NVIDIA
-        // NIM'de 2026-08-26'da EOL oldu (HTTP 410). nvidia/nemotron-3.5-
-        // lightning-30b-a3b canlı ve JSON çıktısı için test edilip
-        // doğrulandı (bkz. NvidiaNimClient — "thinking" kapatılıyor, aksi
-        // halde reasoning model chain-of-thought metniyle JSON'ı kirletiyor).
         'text_model' => env('NVIDIA_NIM_TEXT_MODEL', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
     ],
 
     // Google Gemini Interactions API — yangın tesisatı rapor analizinde
-    // alternatif AI sağlayıcısı.
+    // alternatif AI sağlayıcısı. Gemini yapılandırması ve client'ı aynen korunur.
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
         'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
         'text_model' => env('GEMINI_TEXT_MODEL', 'gemini-3.6-flash'),
+    ],
+
+    // Fire suppression semantic AI provider.
+    // Şimdilik NVIDIA kullanılır; Gemini aboneliği açıldığında yalnızca
+    // FIRE_SUPPRESSION_AI_PROVIDER=gemini yapılarak geri dönülebilir.
+    'fire_suppression' => [
+        'ai_provider' => env('FIRE_SUPPRESSION_AI_PROVIDER', 'nvidia'),
     ],
 
 ];
