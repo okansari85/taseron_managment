@@ -7,14 +7,19 @@ use RuntimeException;
 /**
  * Format-independent fire-suppression report analysis.
  *
- * The PDF text is sent to Gemini in ONE request. The model understands the
- * report structure; backend matching remains deterministic and happens after
- * extraction.
+ * The PDF text is sent to the selected AI provider in ONE request. The model
+ * understands the report structure; backend matching remains deterministic
+ * and happens after extraction.
+ *
+ * GeminiClient is intentionally kept untouched. Provider selection only
+ * determines which existing client receives the same semantic prompt.
  */
 class FireSuppressionAiReportAnalyzer
 {
-    public function __construct(private GeminiClient $ai)
-    {
+    public function __construct(
+        private GeminiClient $gemini,
+        private NvidiaNimClient $nvidia,
+    ) {
     }
 
     public function analyze(array $pages): array
@@ -25,9 +30,13 @@ class FireSuppressionAiReportAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için rapor analiz edilemedi.');
         }
 
-        // GEÇİCİ DEBUG/DOĞRULAMA: Gemini'nin döndürdüğü ham JSON'u olduğu gibi
-        // geri ver. Normalize, eşleştirme veya debug_ai_raw sarmalaması yapma.
-        return $this->ai->extractStructuredJson($this->systemPrompt(), $text, 50000);
+        $provider = mb_strtolower(trim((string) config('services.fire_suppression.ai_provider', 'nvidia')), 'UTF-8');
+
+        return match ($provider) {
+            'gemini' => $this->gemini->extractStructuredJson($this->systemPrompt(), $text, 50000),
+            'nvidia', 'nvidia_nim', 'nim' => $this->nvidia->extractStructuredJson($this->systemPrompt(), $text, 50000),
+            default => throw new RuntimeException('Geçersiz yangın raporu AI provider: ' . $provider . '. Desteklenen değerler: gemini, nvidia.'),
+        };
     }
 
     private function buildDocumentText(array $pages): string
@@ -189,188 +198,5 @@ VERİ YAPISI KURALI:
 
 SADECE geçerli JSON döndür. Markdown, açıklama, kod bloğu veya JSON dışı metin döndürme.
 PROMPT;
-    }
-
-    private function normalize(array $result): array
-    {
-        $report = is_array($result['report'] ?? null) ? $result['report'] : [];
-        $systems = is_array($result['systems'] ?? null) ? $result['systems'] : [];
-        $findings = is_array($result['findings'] ?? null) ? $result['findings'] : [];
-
-        $equipment = [];
-        $normalizedSystems = [];
-
-        foreach ($systems as $system) {
-            if (!is_array($system)) {
-                continue;
-            }
-
-            $category = $this->normalizeCategory($system['category'] ?? null);
-            $systemName = $this->stringOrNull($system['name'] ?? null);
-            $components = is_array($system['components'] ?? null) ? $system['components'] : [];
-
-            $normalizedComponents = [];
-
-            foreach ($components as $component) {
-                if (!is_array($component)) {
-                    continue;
-                }
-
-                $code = $this->stringOrNull($component['code'] ?? null);
-                $name = $this->stringOrNull($component['name'] ?? null);
-                $location = $this->stringOrNull($component['location'] ?? null);
-                $brand = $this->stringOrNull($component['brand'] ?? null);
-                $model = $this->stringOrNull($component['model'] ?? null);
-                $serial = $this->stringOrNull($component['serial_no'] ?? null);
-
-                if ($code === null && $name === null) {
-                    continue;
-                }
-
-                $normalizedComponents[] = [
-                    'code' => $code,
-                    'name' => $name,
-                    'location' => $location,
-                    'brand' => $brand,
-                    'model' => $model,
-                    'serial_no' => $serial,
-                ];
-
-                $equipment[] = [
-                    'code' => $code ?? $name,
-                    'category' => $category,
-                    'system_name' => $systemName,
-                    'system_category' => $category,
-                    'location_note' => $location,
-                    'brand' => $brand,
-                    'model' => $model,
-                    'serial_no' => $serial,
-                    'result' => ((int) ($system['nonconforming_count'] ?? 0)) > 0 ? 'uygun_degil' : 'uygun',
-                    'note' => null,
-                    'control_items' => [],
-                ];
-            }
-
-            $normalizedSystems[] = [
-                'name' => $systemName,
-                'category' => $category,
-                'control_count' => max(0, (int) ($system['control_count'] ?? 0)),
-                'nonconforming_count' => max(0, (int) ($system['nonconforming_count'] ?? 0)),
-                'components' => $normalizedComponents,
-            ];
-        }
-
-        return [
-            'control_date' => $this->dateOrNull($report['control_date'] ?? null),
-            'next_control_date' => $this->dateOrNull($report['next_control_date'] ?? null),
-            'overall_result' => $this->normalizeResult($report['overall_result'] ?? null),
-            'company_name' => $this->stringOrNull($report['company_name'] ?? null),
-            'covered_categories' => array_values(array_unique(array_filter(array_map(
-                fn ($system) => is_array($system) ? $this->normalizeCategory($system['category'] ?? null) : null,
-                $systems
-            )))),
-            'systems' => $normalizedSystems,
-            'equipment' => $equipment,
-            'findings' => $this->normalizeFindings($findings),
-        ];
-    }
-
-    private function normalizeFindings(array $findings): array
-    {
-        $normalized = [];
-
-        foreach ($findings as $finding) {
-            if (!is_array($finding) || !filled($finding['description'] ?? null)) {
-                continue;
-            }
-
-            $normalized[] = [
-                'category' => 'diger',
-                'control_item' => null,
-                'description' => trim((string) $finding['description']),
-                'scope' => 'unknown',
-                'area_note' => $this->stringOrNull($finding['system_name'] ?? null),
-                'system_name' => $this->stringOrNull($finding['system_name'] ?? null),
-                'equipment_codes' => [],
-            ];
-        }
-
-        return $normalized;
-    }
-
-    private function normalizeStatus(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        $value = mb_strtolower(trim((string) $value), 'UTF-8');
-        $value = str_replace(['ı', 'İ'], ['i', 'i'], $value);
-
-        return match (true) {
-            in_array($value, ['uygun', 'u', 'ok', 'okey', 'gecerli', 'geçerli'], true) => 'uygun',
-            in_array($value, ['uygun_degil', 'uygun değil', 'uygunsuz', 'ud', 'noktasi', 'nok'], true) => 'uygun_degil',
-            in_array($value, ['uygulanamiyor', 'uygulanamıyor', 'n/a', 'na', 'n', '-'], true) => 'uygulanamiyor',
-            default => null,
-        };
-    }
-
-    private function normalizeResult(mixed $value, array $controlItems = []): ?string
-    {
-        $value = $this->normalizeStatus($value);
-        if ($value !== null && $value !== 'uygulanamiyor') {
-            return $value;
-        }
-
-        foreach ($controlItems as $item) {
-            if (($item['status'] ?? null) === 'uygun_degil') {
-                return 'uygun_degil';
-            }
-        }
-
-        return null;
-    }
-
-    private function normalizeCategory(mixed $value): string
-    {
-        $value = mb_strtolower(trim((string) ($value ?? '')), 'UTF-8');
-        $value = str_replace(['ı', 'İ'], ['i', 'i'], $value);
-
-        return match (true) {
-            str_contains($value, 'dolap') => 'yangin_dolabi',
-            str_contains($value, 'pompa') => 'yangin_pompasi',
-            str_contains($value, 'hidrant') => 'hidrant',
-            str_contains($value, 'sprinkler') => 'sprinkler',
-            str_contains($value, 'su alma') || str_contains($value, 'su verme') => 'su_alma_verme',
-            str_contains($value, 'depo') => 'su_deposu',
-            str_contains($value, 'boru') => 'sabit_boru_tesisati',
-            str_contains($value, 'gazli') || str_contains($value, 'gazli sondurme') => 'gazli_sondurme',
-            default => 'diger',
-        };
-    }
-
-    private function stringOrNull(mixed $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-        return $value === '' ? null : $value;
-    }
-
-    private function dateOrNull(mixed $value): ?string
-    {
-        $value = $this->stringOrNull($value);
-        if ($value === null) {
-            return null;
-        }
-
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
-            return $value;
-        }
-
-        $timestamp = strtotime($value);
-        return $timestamp !== false ? date('Y-m-d', $timestamp) : null;
     }
 }
