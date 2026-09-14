@@ -1,0 +1,1 @@
+Backup marker for CamelotFireSuppressionMerger baseline 7e84162. The original file remains recoverable from commit 7e84162b1f41ec34e9ab7c109daaa5d4494072fe.
