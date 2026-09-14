@@ -31,12 +31,15 @@ class FireSuppressionReportController extends Controller
                 ->filter(fn (string $path) => str_ends_with($path, '.json'))
                 ->map(function (string $path) {
                     $fixture = json_decode(Storage::disk('local')->get($path), true);
+                    $fixtureId = $fixture['fixture_id'] ?? pathinfo($path, PATHINFO_FILENAME);
+                    $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
                     return [
-                        'fixture_id' => $fixture['fixture_id'] ?? pathinfo($path, PATHINFO_FILENAME),
+                        'fixture_id' => $fixtureId,
                         'provider' => $fixture['provider'] ?? 'gemini',
                         'model' => $fixture['model'] ?? null,
                         'original_file_name' => $fixture['original_file_name'] ?? pathinfo($path, PATHINFO_FILENAME),
                         'created_at' => $fixture['created_at'] ?? null,
+                        'pdf_available' => Storage::disk('local')->exists($pdfPath),
                     ];
                 })
                 ->sortByDesc('created_at')
@@ -47,6 +50,7 @@ class FireSuppressionReportController extends Controller
 
         if ($request->boolean('gemini_fixture_get')) {
             $fixtureId = trim((string) $request->input('fixture_id'));
+            abort_unless($fixtureId !== '' && preg_match('/^[0-9a-f-]{36}$/i', $fixtureId), 422, 'Geçersiz fixture ID.');
             $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
             abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
 
@@ -73,10 +77,17 @@ class FireSuppressionReportController extends Controller
             $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
             abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
             $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
-            $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
-            abort_unless(Storage::disk('local')->exists($pdfPath), 404, 'Fixture PDF bulunamadı.');
-            $absolutePath = Storage::disk('local')->path($pdfPath);
-            $file = new UploadedFile($absolutePath, $fixture['original_file_name'] ?? "{$fixtureId}.pdf", 'application/pdf', null, true);
+
+            $storedPdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
+            if ($request->hasFile('file')) {
+                $file = $request->file('file');
+                $absolutePath = $file->getRealPath();
+            } else {
+                abort_unless(Storage::disk('local')->exists($storedPdfPath), 404, 'Bu eski fixture için PDF kayıtlı değil. V12 için aynı PDF\'yi seçmelisin.');
+                $absolutePath = Storage::disk('local')->path($storedPdfPath);
+                $file = new UploadedFile($absolutePath, $fixture['original_file_name'] ?? "{$fixtureId}.pdf", 'application/pdf', null, true);
+            }
+
             $pages = $extractor->extractPages($file);
             $coordinatePages = $coordinateExtractor->extract($absolutePath);
             $result = $tableAnalyzer->analyze($pages, (array) ($fixture['semantic'] ?? []), $coordinatePages);
