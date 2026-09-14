@@ -19,6 +19,10 @@ class AnalyzeReportFileRequest extends FormRequest
             ];
         }
 
+        if ($this->boolean('gemini_fixture_list')) {
+            return [];
+        }
+
         return [
             'file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
         ];
