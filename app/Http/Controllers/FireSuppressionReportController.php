@@ -112,7 +112,7 @@ class FireSuppressionReportController extends Controller
             );
             $result['fixture_id'] = $fixtureId;
             $result['original_file_name'] = $fixture['original_file_name'] ?? null;
-            return response()->json(['data' => $result]);
+            return response()->json(['data' => $result], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
         }
 
         if ($request->boolean('gemini_fixture_delete')) {
