@@ -168,11 +168,13 @@ class CoordinateTableAnalyzer
             $width = max(1.0, (float)($cell['width'] ?? 1));
             $center = $left + ($width / 2.0);
 
-            // Prefer the equipment column whose center is closest to the status cell.
+            // Compare centers to centers. Using the header's left edge here
+            // shifts every status toward the previous/next equipment column.
             $nearest = null;
             $nearestDistance = PHP_FLOAT_MAX;
             foreach ($columns as $column) {
-                $distance = abs($center - (float)$column['x']);
+                $columnCenter = (float)$column['x'] + ((float)($column['width'] ?? 1.0) / 2.0);
+                $distance = abs($center - $columnCenter);
                 if ($distance < $nearestDistance) {
                     $nearestDistance = $distance;
                     $nearest = $column;
@@ -182,7 +184,6 @@ class CoordinateTableAnalyzer
             if ($nearest === null) continue;
 
             // Do not attach a status from the description area to a distant column.
-            // The threshold is based on the actual column spacing.
             if ($nearestDistance > max($tolerance * 3.0, $this->medianColumnGap($columns) * 0.60)) {
                 continue;
             }
@@ -192,8 +193,8 @@ class CoordinateTableAnalyzer
             if ($width > max(2.0, $tolerance * 1.5)) {
                 $right = $left + $width;
                 foreach ($columns as $column) {
-                    $cx = (float)$column['x'];
-                    if ($cx >= $left - $tolerance && $cx <= $right + $tolerance) {
+                    $columnCenter = (float)$column['x'] + ((float)($column['width'] ?? 1.0) / 2.0);
+                    if ($columnCenter >= $left - $tolerance && $columnCenter <= $right + $tolerance) {
                         $covered[] = $column;
                     }
                 }
