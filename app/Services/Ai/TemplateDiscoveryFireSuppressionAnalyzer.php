@@ -5,8 +5,8 @@ namespace App\Services\Ai;
 use RuntimeException;
 
 /**
- * Discovers report structure and produces the stable target JSON in one AI pass.
- * Findings are intentionally semantic/AI-owned and are not delegated to Camelot.
+ * Discovers report structure and produces AI semantic output.
+ * AI-owned extracted data is intentionally limited to findings.
  */
 class TemplateDiscoveryFireSuppressionAnalyzer
 {
@@ -46,31 +46,55 @@ class TemplateDiscoveryFireSuppressionAnalyzer
 Sen yangın tesisatı periyodik kontrol raporları için çalışan bir TEMPLATE DISCOVERY motorusun.
 
 ANA GÖREV:
-PDF'nin tek bir firma şablonuna ait olduğunu varsayma. Önce raporun yapısını keşfet, sonra aynı keşiften standart hedef JSON'u üret.
+PDF'yi belirli bir firma şablonuna zorlamadan önce raporun gerçek yapısını keşfet.
+Çıktın iki bölümden oluşur:
+1. template: Camelot'un bu PDF'den gerçek verileri çıkarabilmesi için keşfedilmiş yapısal okuma tarifi.
+2. extracted_data.findings: yalnızca raporda açıkça bulunan anlamsal bulgular.
 
-ÇIKTI İKİ BÖLÜMDEN OLUŞMALIDIR:
-1. template: bu rapor formatının nasıl okunacağını tarif eden yapısal tarif.
-2. extracted_data: sistemin sabit normalize edilmiş hedef JSON'u.
+EN KRİTİK KURAL — ÖRNEKLERİ KURAL OLARAK KULLANMA:
+- Prompt içinde geçen 5.x, A.x, YD1, YD2, 5 kolon, belirli sistem isimleri veya benzeri ifadeler SADECE açıklama örneğidir.
+- Gerçek PDF'de bunlardan farklı bir yapı varsa onu keşfet ve gerçek yapıyı template'e yaz.
+- Kontrol kodlarını, ekipman kodlarını, sistem adlarını, kolon sayılarını veya blok boyutlarını önceden varsayma.
+- Yeni bir raporda daha önce hiç görülmemiş kod, başlık, tablo yönü, blok yapısı veya sonuç gösterimi gelirse bunu da keşfet.
+- Asla örnek verileri raporda varmış gibi üretme.
 
-KRİTİK AYRIM:
-- template gerçek veriyi tekrar eden bir rapor özeti değildir.
-- template; bölüm, tablo, alan anlamı, tablo yönelimi, ekipman yerleşimi, kontrol kapsamı, sonuç hücreleri ve Camelot'un hangi tabloyu seçmesi gerektiğine dair kanıtları tarif eder.
-- extracted_data gerçek rapordan çıkarılan değerleri taşır.
-- Template'te gerçek ekipman kodları yalnızca yapısal kanıt olarak kullanılabilir; template'i rapora özel veri deposuna dönüştürme.
+AI SEMANTİK SINIRI:
+extracted_data içinde findings dışında hiçbir veri üretme.
+AI; report, organization, systems, equipment, components, control_items, results, covered_categories veya inventory eşleştirmesi çıkarmayacak.
+Bu verilerin tamamı daha sonraki Camelot/normalizasyon aşamasının sorumluluğundadır.
 
-1) RAPOR BİLGİLERİ DISCOVERY
-Raporun üst bilgi bölümünü bul.
-Aşağıdaki normalize alanların raporda hangi label/anlam ile bulunduğunu keşfet:
+1) RAPOR YAPISI DISCOVERY
+- Sayfa sayısını ve çok sayfalı yapı varsa bölüm devamlılığını keşfet.
+- Bölüm başlıklarının nasıl ayrıldığını keşfet.
+- Aynı tablonun sonraki sayfalarda devam edip etmediğini keşfet.
+- Aynı yapının tekrar eden tablolar halinde kullanılıp kullanılmadığını keşfet.
+- İlk sayfadan son sayfaya kadar tablo rolünü ve bölüm ilişkisini belirle.
+
+2) RAPOR BİLGİSİ TEMPLATE DISCOVERY
+Gerçek rapor değerlerini çıkarma.
+Bunun yerine Camelot'un gerçek değerleri nereden alacağını tarif et.
+Örneğin keşfedilebilecek normalize alanlar:
 - report_no
 - company_name
 - control_date
 - next_control_date
 - overall_result
 
-Başlık isimleri değişebilir. Örneğin "Muayene Tarihi ve Saati" ve "Kontrol Tarihi" aynı normalize anlama gelebilir. Bunu template'e yaz.
+Her alan için mümkünse:
+- section
+- label_patterns
+- value_position
+- table_or_text
+- page_hints
+belirt.
 
-2) KURULUŞ BİLGİLERİ DISCOVERY
-Varsa:
+Label isimlerini önceden sabitleme. PDF'de gerçekten kullanılan label varyasyonlarını keşfet.
+Örneğin "Kontrol Tarihi", "Muayene Tarihi", "Muayene Tarihi ve Saati" gibi farklı ifadeler varsa bunları pattern olarak tarif edebilirsin; ancak gerçek tarih değerini template'e koyma.
+
+3) ORGANİZASYON BİLGİSİ TEMPLATE DISCOVERY
+Gerçek şirket/adres/telefon değerlerini çıkarma.
+Camelot'un bunları bulacağı bölüm ve label/value ilişkisini keşfet.
+Örneğin olası alanlar:
 - company_name
 - address
 - inspection_address
@@ -78,215 +102,183 @@ Varsa:
 - email
 - contract_id
 - sgk_no
-alanlarının label varyasyonlarını ve bölümünü template'e yaz.
 
-3) SİSTEM DISCOVERY
-Raporda gerçekten kontrol edilen sistemleri/grupları belirle.
-Her sistem için:
-- name: rapordaki gerçek sistem adı
-- category: yangin_dolabi, yangin_pompasi, hidrant, sprinkler, su_alma_verme, su_deposu, sabit_boru_tesisati, gazli_sondurme veya diger
+Rapor hangi alanları gerçekten içeriyorsa sadece onların yapısını tarif et.
 
-Her sistemin ilgili tablolarını template'te tanımla.
+4) SİSTEM YAPISI DISCOVERY
+Sistem isimlerini veri olarak extracted_data'ya koyma.
+Template içinde sistem bölümlerinin nasıl tanındığını keşfet:
+- heading_patterns
+- code_patterns
+- table association
+- section continuation
+- nearest heading relation
 
-4) EKİPMAN YAPISI DISCOVERY
-Ekipmanın tabloda nasıl temsil edildiğini belirle:
-- none
+Birden fazla sistem yapısı varsa hepsini ayrı yapısal tarif olarak belirt.
+Sistem isimlerini önceden varsayma.
+
+5) EKİPMAN YAPISI DISCOVERY
+Ekipmanların gerçek listesini extracted_data'ya koyma.
+Template'te ekipmanın PDF içinde nasıl bulunduğunu keşfet:
 - rows
 - columns
 - repeating_blocks
 - mixed
+- none
 
-Özellikle şunları keşfet:
-- ekipman kodu hangi label/başlıktan geliyor?
-- ekipmanlar kolon mu satır mı?
-- ekipman listesi ayrı tablo mu?
-- aynı tablo içinde ekipman özellikleri dikey satırlarda mı?
-- tekrar eden yatay bloklar var mı?
-- equipment code pattern nedir?
+Şunları gerçek PDF'den keşfet:
+- ekipman kimliği nerede?
+- kod hangi satır/kolon/header yapısında?
+- isim nerede?
+- ekipman özellikleri ayrı satırlarda mı?
+- ekipmanlar kolonlarda mı satırlarda mı?
+- yatay tekrar eden blok var mı?
+- blok boyutu nedir?
+- bloklar sayfalar arasında devam ediyor mu?
 
-5) KONTROL KAPSAMI DISCOVERY — ÇOK ÖNEMLİ
-Her kontrol tablosunun kapsamını açıkça belirle:
-- system_based
-- equipment_based
-- mixed
-- unknown
+Blok boyutunu asla önceden 5 kabul etme. PDF'de kaç ise onu keşfet; değişkense değişken olduğunu belirt.
 
-Ekipman bazlı olduğuna dair kanıt:
-Ekipman kodları kolon başlıklarında/satır başlıklarında bulunuyor ve aynı kontrol maddesi için her ekipmana ayrı sonuç hücresi bulunuyorsa equipment_based.
-
-Sistem bazlı olduğuna dair kanıt:
-Kontrol maddesi için tek bir sonuç hücresi bulunuyor ve sonuç belirli bir ekipmana bağlanmıyorsa system_based.
-
-Aynı raporda farklı tablolar farklı kapsam kullanabilir. Sistem genelinde tek bir varsayım yapma.
-
-6) CONTROL ITEM DISCOVERY
-Her kontrol maddesini normalize hedefe taşı.
-Her kayıt:
-- code
-- description
-- scope = system | equipment
-- equipment = ekipman bazlıysa bu kontrol maddesine bağlı ekipman kodlarını virgülle ayrılmış string; sistem bazlıysa ""
-- results = sistem bazlıysa örn. {"status":"U"}; ekipman bazlıysa örn. {"YD1":"UD","YD2":"U"}
-- source_pages
-
-Ekipman bazlı kontrol sonucunu sistem geneline yayma.
-Sistem bazlı sonucu bütün ekipmanlara kopyalama.
-
-7) COMPONENT DISCOVERY
-Raporda fiziksel ekipman/bileşen listesi varsa:
-- code
-- name
-- location
-- brand
-- model
-- serial_no
-- properties
-- source_pages
-alanlarını çıkar.
-
-Raporda olmayan ekipmanı uydurma.
-Yangın dolabı kodları raporda gerçek fiziksel ekipman olarak listeleniyorsa components altında tut.
-
-8) FINDINGS DISCOVERY — TAMAMEN AI SEMANTİK KATMANI
-Findings bölümü tablo extraction işi değildir. Bulguları PDF'nin anlamsal içeriğinden sen çıkaracaksın.
-
-Her bulgu için yalnızca:
-- id
-- system_name
-- description
-- affected_equipment
-- source_pages
-alanlarını üret.
-
-ANA KURAL:
-Her bulguyu ait olduğu sisteme kendin bağla.
-Örneğin rapor bir uygunsuzluğu açıkça Yangın Dolapları bölümünde veriyorsa system_name = "Yangın Dolapları" olarak ata.
-
-Bulgu belirli bir fiziksel ekipmana açıkça aitse affected_equipment içine ekipman kodunu koy.
-Örneğin bulgu metninde "YD3" açıkça geçiyorsa affected_equipment = ["YD3"] olabilir.
-
-Ekipman kodu bulgu metninde veya açık ve doğrudan bulgu bağlamında belirtilmiyorsa ekipman tahmin etme; affected_equipment = [].
-
-Bir sistemde birden fazla bulgu varsa ayrı findings kayıtları oluştur.
-Aynı bulguyu ekipman sayısı kadar kopyalama.
-
-Bulgu sistem bazlıysa affected_equipment boş kalabilir.
-
-Kontrol tablosundaki U / UD / N değerlerinden otomatik olarak yeni bir finding uydurma. Finding yalnızca raporda gerçek bir uygunsuzluk/bulgu/not/açıklama olarak ifade edilmişse çıkar.
-
-Aynı metnin hem kontrol tablosunda hem bulgular bölümünde tekrar edilmesi durumunda tek bir anlamlı finding oluştur; mümkünse gerçek bulgu/açıklama bölümünü source_pages olarak tercih et.
-
-Sistem adı açıkça yazmıyorsa yakın bölüm başlığı, tablo başlığı ve metinsel bağlamdan sistem ilişkisini çözmeye çalış. Yine de güvenilir biçimde belirlenemiyorsa system_name = null kullan.
-
-Bulgu açıklamasını anlamını bozmadan koru. Ekipman kodu, kontrol kodu veya önemli teknik ifade bulgu metninde geçiyorsa silme.
-
-BELGE / PROJE / KAYIT:
-Fiziksel ekipman olmayan proje, belge veya kayıt uygunsuzluklarını fiziksel ekipman olarak üretme. Bunları ait oldukları sistem altında finding olarak belirt.
-
-9) CAMELOT TEMPLATE DISCOVERY
-Her önemli tablo için template içinde şu bilgileri üret:
+6) TABLO YAPISI DISCOVERY
+Her önemli tablo rolü için template içinde mümkün olduğunca şu yapıyı tarif et:
 - role
-- page
+- page_hints
 - title_patterns
 - header_patterns
 - structure_type
 - orientation
+- row_structure
+- column_structure
 - equipment_axis
 - control_axis
 - result_binding
 - repeat_block
+- continuation
 - camelot.preferred_flavor
 - camelot.fallback_flavor
-- camelot.bbox = null (PDF metninden güvenilir koordinat çıkaramıyorsan uydurma)
+- camelot.bbox
 
-Camelot için sayfa + başlık/kolon pattern'i nokta atışı tablo seçimine yardımcı olacak şekilde yaz.
-Koordinat uydurma.
+Olası structure_type değerlerini sınırlı bir liste olarak kabul etme. PDF'deki gerçek yapıyı gerekiyorsa mixed veya başka açıklayıcı bir değerle tarif et.
 
-10) KANIT
-Template'teki kritik structural kararların yanında evidence üret.
-Özellikle:
-- equipment_structure
-- control_structure
-- result_binding
+Olası orientation örnekleri yalnızca açıklamadır:
+- vertical
+- horizontal
+- matrix
 - repeating_blocks
-kararlarının nedenini kısa metinlerle belirt.
+- mixed
 
-11) HEDEF JSON
-extracted_data şu yapıya uymalı:
+Bunları zorunlu enum gibi düşünme; gerçek yapıyı keşfet.
+
+Ekipman kodlarının kolonlarda, kontrol maddelerinin satırlarda olduğu bir matris görürsen bunu açıkça tarif et.
+Yatay tekrar eden ekipman blokları görürsen block_size'ı PDF'den keşfet.
+
+Camelot bbox koordinatını metinden güvenilir biçimde çıkaramıyorsan null bırak. Koordinat uydurma.
+
+7) KONTROL ITEM TEMPLATE DISCOVERY
+Gerçek kontrol maddelerini extracted_data'ya koyma.
+Template'te:
+- kontrol kodunun nerede bulunduğunu
+- açıklama hücresinin nerede bulunduğunu
+- sonuç hücrelerinin nerede bulunduğunu
+- kontrol maddesinin hangi bölüm/sistem başlığıyla ilişkilendirildiğini
+- kontrolün system_based mı equipment_based mı mixed mi olduğunu
+keşfet.
+
+Aynı PDF içinde bazı tablolar sistem bazlı, bazıları ekipman bazlı olabilir. Tek bir global varsayım yapma.
+
+Sonuç bağlama şeklini gerçek tablodan keşfet:
+- tek sonuç = system
+- ekipman başına sonuç = equipment
+- satır/kolon kesişimi = row_column_intersection
+- veya PDF'deki gerçek başka bir yapı
+
+U, UD, U.D, N gibi değerleri önceden beklenen tek format olarak kabul etme. Gerçek raporda kullanılan sonuç aliaslarını ve bunların tablo içindeki yerini template'te tarif et.
+
+8) FINDINGS DISCOVERY — TEK AI VERİSİ
+Findings bölümü AI'nin çıkardığı tek gerçek veri kümesidir.
+
+Her finding tam olarak şu alanlara sahip olmalıdır:
+- id
+- system_name
+- description
+- source_pages
+
+Başka alan EKLEME.
+Özellikle affected_equipment EKLEME.
+
+Kurallar:
+- Bulguyu rapordaki gerçek anlamsal içerikten çıkar.
+- U/UD/N veya başka sonuç hücrelerinden otomatik olarak yeni finding üretme.
+- Yalnızca raporda gerçek uygunsuzluk, kusur, tespit, bulgu, not veya açıklama olarak ifade edilen içerikleri finding yap.
+- Her finding'i ait olduğu sisteme AI olarak bağla.
+- Sistem güvenilir biçimde belirlenemiyorsa system_name = null.
+- Aynı bulguyu ekipman sayısı kadar kopyalama.
+- Bulgu metnini anlamını bozmadan mümkün olduğunca özgün haliyle koru.
+- Ekipman kodu bulgu metninde geçse bile bunu ayrı bir affected_equipment alanına çıkarma; gerekiyorsa description içinde koru.
+- Tekrarlanan aynı bulguları deduplicate et.
+- Belge/proje/kayıt uygunsuzluklarını fiziksel ekipman verisi olarak değil finding olarak ele al.
+- source_pages gerçek PDF sayfa numaraları olmalıdır.
+
+9) TEMPLATE EVIDENCE
+Template'teki önemli yapısal kararlar için kısa evidence kayıtları üret.
+Özellikle:
+- table orientation
+- equipment axis
+- control axis
+- result binding
+- repeating blocks
+- table continuation
+kararlarının PDF'deki hangi yapısal gözleme dayandığını belirt.
+
+Evidence de veri extraction'ı değildir; yalnızca template kararının gerekçesidir.
+
+10) DİNAMİK KEŞİF KURALI
+Aşağıdaki örneklerden hiçbirini zorunlu kabul etme:
+- 5.x kontrol kodları
+- A.x kontrol kodları
+- YD ekipman kodları
+- 5 ekipmanlı blok
+- belirli yangın sistemi isimleri
+- belirli sonuç harfleri
+
+PDF'de ne varsa onu keşfet.
+Örneğin kontrol kodları 1.1, K-01 veya "Madde 1" ise bunların gerçek yapısını tarif et.
+Ekipman kodları F-01, P-001 veya tamamen başka bir yapıysa onu keşfet.
+Blok 3, 5, 8 veya değişken sayıda ekipman içeriyorsa gerçek yapıyı tarif et.
+
+11) ÇIKTI SÖZLEŞMESİ
+Çıktı tam olarak şu iki ana anahtarı taşımalıdır:
+- template
+- extracted_data
+
+extracted_data yalnızca:
 {
-  "report": {
-    "report_no": null,
-    "company_name": null,
-    "control_date": null,
-    "next_control_date": null,
-    "overall_result": null
-  },
-  "covered_categories": [],
-  "systems": [
-    {
-      "name": "",
-      "category": "",
-      "equipment_count": 0,
-      "equipment_count_known": false,
-      "control_count": 0,
-      "components": [
-        {
-          "code": null,
-          "name": null,
-          "location": null,
-          "brand": null,
-          "model": null,
-          "serial_no": null,
-          "properties": {},
-          "source_pages": []
-        }
-      ],
-      "control_items": [
-        {
-          "code": "",
-          "description": null,
-          "scope": "system | equipment",
-          "equipment": "",
-          "results": {},
-          "source_pages": []
-        }
-      ]
-    }
-  ],
   "findings": [
     {
-      "id": null,
-      "system_name": null,
-      "description": "",
-      "affected_equipment": [],
-      "source_pages": []
+      "id": "finding-1",
+      "system_name": "...",
+      "description": "...",
+      "source_pages": [1]
     }
-  ],
-  "matched_inventory_items": [],
-  "candidate_inventory_items": [],
-  "unmatched_codes": [],
-  "analyzer": {
-    "version": "template-discovery-1",
-    "table_count": 0,
-    "equipment_count": 0,
-    "control_count": 0,
-    "finding_count": 0,
-    "fixture_mode": false
-  },
-  "fixture_id": null
+  ]
 }
+şeklindedir.
 
-HEDEF JSON KURALLARI:
-- findings tamamen AI tarafından çıkarılır; Camelot findings üretmez.
-- findings.system_name bulgunun ait olduğu sistemi göstermelidir.
-- findings.affected_equipment yalnızca açıkça desteklenen ekipmanları içermelidir.
-- equipment_count_known=false yalnızca rapor ekipman sayısını gerçekten belirlemeye izin vermiyorsa kullan.
-- equipment_count, components içindeki gerçek ekipman sayısı biliniyorsa ondan hesaplanabilir.
-- control_count, sistemin control_items sayısından hesaplanabilir.
-- covered_categories sistemlerden türetilmelidir.
-- matched_inventory_items, candidate_inventory_items ve unmatched_codes AI tarafından envanter eşleştirmesi yapılmadan boş bırakılır.
-- source_pages her veri kaynağı için gerçek sayfa numarasıdır.
-- Bilgi yoksa null/[] kullan; tahmin etme.
+Template ise gerçek PDF'nin yapısını dinamik olarak tarif eder ve en az şu ana bölümleri içerir:
+- template_type
+- template_version
+- report_structure
+- report_information
+- organization_information
+- systems_structure
+- equipment_structure
+- table_structure
+- control_item_structure
+- findings_structure
+- extraction_rules
+- table_hints
+- evidence
+
+Template içine gerçek rapor değerlerini extraction sonucu olarak doldurma. Template'te yalnızca Camelot/sonraki extraction aşamasının yapıyı bulmasına yardımcı olacak keşfedilmiş pattern, konum, ilişki ve yapısal kanıtları tut.
 
 SADECE geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
 PROMPT;
