@@ -4,12 +4,6 @@ namespace App\Services\Ai;
 
 use RuntimeException;
 
-/**
- * Extracts report values from a discovered fire-suppression template.
- * Template Discovery remains the source of structure; Camelot is the source
- * of report values. This service deliberately does not use the legacy V12
- * parser/merger.
- */
 class TemplateDrivenFireSuppressionExtractor
 {
     public function __construct(private CamelotPdfTableExtractor $camelot) {}
@@ -17,8 +11,9 @@ class TemplateDrivenFireSuppressionExtractor
     public function extract(string $pdfPath, array $semantic): array
     {
         $camelot = $this->camelot->extract($pdfPath);
-        $tables = array_values(array_filter((array) ($camelot['tables'] ?? []), fn ($table) => is_array($table) && ($table['flavor'] ?? '') === 'lattice' && !empty($table['data'])));
-        if (!$tables) throw new RuntimeException('Camelot template extraction için kullanılabilir lattice tablo bulamadı.');
+        $allTables = array_values(array_filter((array) ($camelot['tables'] ?? []), fn ($table) => is_array($table) && !empty($table['data'])));
+        $latticeTables = array_values(array_filter($allTables, fn ($table) => ($table['flavor'] ?? '') === 'lattice'));
+        if (!$latticeTables) throw new RuntimeException('Camelot template extraction için kullanılabilir lattice tablo bulamadı.');
 
         $template = is_array($semantic['template'] ?? null) ? $semantic['template'] : [];
         $systems = (array) ($template['fire_systems']['systems'] ?? []);
@@ -31,86 +26,53 @@ class TemplateDrivenFireSuppressionExtractor
             $equipment = [];
             foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
                 if (!is_array($equipmentTemplate)) continue;
-                foreach ($this->extractHorizontalEquipment($tables, $equipmentTemplate) as $item) $equipment[] = $item;
+                foreach ($this->extractHorizontalEquipment($latticeTables, $equipmentTemplate) as $item) $equipment[] = $item;
             }
             $extractedSystems[] = [
                 'system_name' => $systemName,
                 'equipment' => $equipment,
-                'control_items' => $this->extractControls($tables, (array) ($system['control_items'] ?? [])),
+                'control_items' => $this->extractControls($latticeTables, (array) ($system['control_items'] ?? [])),
             ];
         }
 
-        return [
-            'template' => $template,
+        $result = [
             'extracted_data' => [
-                'report_information' => $this->extractReportInformation($camelot),
-                'facility_or_project_information' => $this->extractFacilityInformation($camelot),
+                'report_information' => $this->extractReportInformation($allTables, (array) ($template['report_information']['fields'] ?? [])),
+                'facility_or_project_information' => $this->extractFacilityInformation($allTables, (array) ($template['facility_or_project_information'] ?? [])),
                 'fire_systems' => $extractedSystems,
-                'overall_result' => $this->extractOverallResult($camelot),
+                'overall_result' => $this->extractOverallResult($allTables, (array) ($template['overall_result'] ?? [])),
                 'findings' => (array) ($semantic['extracted_data']['findings'] ?? []),
             ],
         ];
-    }
 
-    private function findInvalidUtf8Path(mixed $value, string $path = '$'): ?string
-    {
-        if (is_string($value)) {
-            return mb_check_encoding($value, 'UTF-8') ? null : $path;
-        }
-
-        if (!is_array($value)) return null;
-
-        foreach ($value as $key => $item) {
-            if (is_string($key) && !mb_check_encoding($key, 'UTF-8')) return $path . '[key]';
-            $childPath = is_int($key) ? $path . '[' . $key . ']' : $path . '[' . json_encode($key, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ']';
-            $invalidPath = $this->findInvalidUtf8Path($item, $childPath);
-            if ($invalidPath !== null) return $invalidPath;
-        }
-
-        return null;
-    }
-
-    private function sanitizeUtf8(mixed $value): mixed
-    {
-        if (is_string($value)) {
-            if (mb_check_encoding($value, 'UTF-8')) return $value;
-            $clean = iconv('UTF-8', 'UTF-8//IGNORE', $value);
-            return $clean === false ? '' : $clean;
-        }
-
-        if (is_array($value)) {
-            $sanitized = [];
-            foreach ($value as $key => $item) {
-                $safeKey = is_string($key) ? $this->sanitizeUtf8($key) : $key;
-                $sanitized[$safeKey] = $this->sanitizeUtf8($item);
-            }
-            return $sanitized;
-        }
-
-        return $value;
+        $result = $this->sanitizeUtf8($result);
+        $invalidPath = $this->findInvalidUtf8Path($result);
+        if ($invalidPath !== null) throw new RuntimeException('Geçersiz UTF-8 çıktı alanı: ' . $invalidPath);
+        return $result;
     }
 
     private function extractHorizontalEquipment(array $tables, array $template): array
     {
-        $patterns = array_merge(
-            array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? [])))),
-            array_values(array_filter(array_map('strval', (array) ($template['table_structure']['left_column']['label_patterns'] ?? []))))
-        );
-        if (!$patterns) return [];
+        $headerPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? []))));
+        $labelPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['left_column_patterns'] ?? $template['table_structure']['left_column']['label_patterns'] ?? []))));
+        if (!$headerPatterns || !$labelPatterns) return [];
 
         $items = [];
         $currentHeader = [];
         foreach ($tables as $table) {
             foreach ($this->matrix($table) as $row) {
-                if (count($row) < 3) continue;
-                if ($this->matchesAny($row[1] ?? '', $patterns)) {
-                    $currentHeader = $this->headerFromRow($row);
+                if (!$row) continue;
+                $headerColumn = $this->findPatternColumn($row, $headerPatterns);
+                if ($headerColumn !== null) {
+                    $currentHeader = $this->headerFromRow($row, $headerColumn, $template);
                     continue;
                 }
                 if (!$currentHeader) continue;
-                $field = $this->equipmentField($this->normalizeLabel($row[1] ?? ''));
-                if ($field === null) continue;
+                $labelColumn = $this->findPatternColumn($row, $labelPatterns);
+                if ($labelColumn === null) continue;
+                $label = $this->cleanValue((string) $row[$labelColumn]);
                 foreach ($currentHeader as $column => $codes) {
+                    if ($column <= $labelColumn) continue;
                     $value = trim((string) ($row[$column] ?? ''));
                     if ($value === '' || $value === '-') continue;
                     foreach ($codes as $code) {
@@ -118,31 +80,30 @@ class TemplateDrivenFireSuppressionExtractor
                         $items[$key]['code'] = $code;
                         $items[$key]['name'] = $this->string($template['equipment_name'] ?? null);
                         $items[$key]['system_name'] = $this->string($template['system_name'] ?? null);
-                        $items[$key][$field] = $this->cleanValue($value);
+                        $items[$key]['properties'][$label] = $this->cleanValue($value);
                         $items[$key]['source_pages'][] = (int) ($table['page'] ?? 0);
                     }
                 }
             }
         }
-        foreach ($items as &$item) {
-            $item['source_pages'] = array_values(array_unique(array_filter(array_map('intval', (array) ($item['source_pages'] ?? [])))));
-            $item['properties'] = $item['properties'] ?? [];
-        }
+        foreach ($items as &$item) $item['source_pages'] = array_values(array_unique(array_filter(array_map('intval', (array) ($item['source_pages'] ?? [])))));
         unset($item);
         return array_values($items);
     }
 
-    private function headerFromRow(array $row): array
+    private function headerFromRow(array $row, int $headerColumn, array $template): array
     {
         $header = [];
-        foreach (array_slice($row, 2, null, true) as $column => $value) {
-            $tokens = $this->expandEquipmentCodes((string) $value);
+        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
+        foreach ($row as $column => $value) {
+            if ((int) $column <= $headerColumn) continue;
+            $tokens = $this->expandEquipmentCodes((string) $value, $identityPatterns);
             if ($tokens) $header[(int) $column] = $tokens;
         }
         return $header;
     }
 
-    private function expandEquipmentCodes(string $value): array
+    private function expandEquipmentCodes(string $value, array $identityPatterns = []): array
     {
         $value = trim(str_replace(["\n", "\r"], ' ', $value));
         if ($value === '' || $value === '-') return [];
@@ -150,123 +111,137 @@ class TemplateDrivenFireSuppressionExtractor
         foreach (preg_split('/\s+/u', $value) ?: [] as $token) {
             $token = trim($token, " ,;");
             if ($token === '') continue;
-            $compact = preg_replace('/\s+/u', '', $token) ?? $token;
-            if (preg_match('/^\d+(?:-\d+)+$/u', $compact)) {
-                foreach (explode('-', $compact) as $number) $tokens[] = $number;
-                continue;
-            }
-            if (preg_match('/^(\d+)-(\d+)$/u', $compact, $m)) {
-                $start = (int) $m[1]; $end = (int) $m[2];
-                if ($end >= $start && ($end - $start) <= 500) {
-                    for ($i = $start; $i <= $end; $i++) $tokens[] = (string) $i;
-                    continue;
-                }
-            }
-            if (preg_match_all('/\b\d+\b/u', $compact, $matches) && count($matches[0]) > 1) {
-                foreach ($matches[0] as $number) $tokens[] = $number;
-                continue;
-            }
-            if (preg_match('/^\d+$/u', $compact)) $tokens[] = $compact;
+            if ($identityPatterns && $this->matchesAny($token, $identityPatterns)) { $tokens[] = $token; continue; }
+            if (!$identityPatterns && preg_match('/^\d+$/u', $token)) $tokens[] = $token;
         }
         return array_values(array_unique($tokens));
     }
 
-    private function equipmentField(string $label): ?string
-    {
-        $map = [
-            'marka' => 'brand', 'model' => 'model', 'seri no' => 'serial_no', 'serino' => 'serial_no',
-            'bulunduğu yer' => 'location', 'bulundugu yer' => 'location',
-            'ölçülen basınç' => 'measured_pressure', 'olculen basinc' => 'measured_pressure',
-            'hortum uzunluğu' => 'hose_length', 'hortum uzunlugu' => 'hose_length',
-            'dolaplar arası mesafe' => 'distance_between', 'dolaplar arasi mesafe' => 'distance_between',
-            'korunan alandan uzaklığı ( 5 - 15m )' => 'protected_area_distance', 'korunan alandan uzakligi ( 5 - 15m )' => 'protected_area_distance',
-            'hidrantlar arası max. mesafe ( 150 - 125 - 100 - 50m )' => 'max_distance_between', 'hidrantlar arasi max. mesafe ( 150 - 125 - 100 - 50m )' => 'max_distance_between',
-        ];
-        return $map[$label] ?? null;
-    }
-
     private function extractControls(array $tables, array $controlTemplates): array
     {
-        $definitions = [];
+        $out = [];
         foreach ($controlTemplates as $control) {
             if (!is_array($control)) continue;
-            foreach ((array) ($control['control_code_patterns'] ?? []) as $pattern) $definitions[(string) $pattern] = true;
-        }
-        $out = [];
-        foreach ($tables as $table) {
-            foreach ($this->matrix($table) as $row) {
-                if (!$row) continue;
-                $codes = [];
-                foreach (array_slice($row, 0, 2) as $value) {
-                    $value = trim((string) $value);
-                    if (preg_match('/^([A-ZÇĞİÖŞÜ]+)\.?(\d+(?:\.\d+)*)\.?$/u', $value, $m)) $codes[] = rtrim($m[1] . '.' . $m[2], '.');
-                }
-                foreach ($codes as $code) {
-                    $definition = false;
-                    foreach (array_keys($definitions) as $pattern) if ($this->regexMatches($pattern, $code)) { $definition = true; break; }
-                    if (!$definition) continue;
-                    $result = null;
-                    foreach (array_slice($row, 2) as $value) {
-                        $status = $this->status($value);
-                        if ($status !== null) { $result = $status; break; }
+            $codePatterns = array_values(array_filter(array_map('strval', (array) ($control['control_code_patterns'] ?? []))));
+            $resultPatterns = array_values(array_filter(array_map('strval', (array) ($control['result_patterns'] ?? []))));
+            if (!$codePatterns) continue;
+            foreach ($tables as $table) {
+                foreach ($this->matrix($table) as $row) {
+                    foreach ($row as $index => $value) {
+                        $code = $this->matchPatternValue((string) $value, $codePatterns);
+                        if ($code === null) continue;
+                        $result = null;
+                        foreach ($row as $resultIndex => $candidate) {
+                            if ((int) $resultIndex === (int) $index) continue;
+                            $matched = $this->matchPatternValue((string) $candidate, $resultPatterns);
+                            if ($matched !== null) { $result = $matched; break; }
+                        }
+                        $out[$this->normalizeCode($code)] = [
+                            'code' => $code,
+                            'result' => $result,
+                            'source_pages' => array_values(array_unique(array_filter([(int) ($table['page'] ?? 0)]))),
+                        ];
                     }
-                    $out[$this->normalizeCode($code)] = [
-                        'code' => $code,
-                        'result' => $result,
-                        'source_pages' => array_values(array_unique(array_filter([(int) ($table['page'] ?? 0)]))),
-                    ];
                 }
             }
         }
         return array_values($out);
     }
 
-    private function extractReportInformation(array $camelot): array
+    private function extractReportInformation(array $tables, array $fieldTemplates): array
     {
-        $fields = [
-            'report_no' => ['Rapor No'], 'inspection_date' => ['Muayene Tarihi ve Saati', 'Muayene Tarihi'],
-            'report_date' => ['Rapor Tarihi'], 'next_inspection_date' => ['Gelecek Muayene Tarihi'],
-            'equipment_serial_or_code' => ['Ekipman Seri No / Kod'], 'equipment_location' => ['Ekipmanın Bulunduğu Yer'],
-            'company_title' => ['Ünvanı', 'Unvanı'], 'address' => ['Adresi'], 'inspection_address' => ['Muayene Adresi'],
-            'contract_id' => ['Sözleşme ID'], 'sgk_registration_no' => ['SGK Sicil No'],
-        ];
         $result = [];
-        foreach ((array) ($camelot['tables'] ?? []) as $table) {
-            if (!is_array($table) || ($table['flavor'] ?? '') !== 'stream') continue;
+        foreach ($tables as $table) {
+            if (($table['flavor'] ?? '') !== 'stream') continue;
             foreach ($this->matrix($table) as $row) {
-                for ($i = 0; $i < count($row); $i++) {
-                    $label = trim((string) ($row[$i] ?? ''));
-                    foreach ($fields as $key => $labels) if (in_array($label, $labels, true)) {
-                        $value = $this->nextNonEmpty($row, $i + 1);
-                        if ($value !== null) $result[$key] = $this->cleanValue($value);
-                    }
+                foreach ($fieldTemplates as $field) {
+                    if (!is_array($field)) continue;
+                    $key = $this->string($field['key'] ?? null);
+                    $patterns = array_values(array_filter(array_map('strval', (array) ($field['label_patterns'] ?? []))));
+                    if ($key === null || !$patterns) continue;
+                    $labelColumn = $this->findPatternColumn($row, $patterns);
+                    if ($labelColumn === null) continue;
+                    $value = $this->nextNonEmpty($row, $labelColumn + 1);
+                    if ($value !== null) $result[$key] = $this->cleanValue($value);
                 }
             }
         }
         return $result;
     }
 
-    private function extractFacilityInformation(array $camelot): array
+    private function extractFacilityInformation(array $tables, array $template): array
     {
         $result = [];
-        foreach ((array) ($camelot['tables'] ?? []) as $table) {
-            if (!is_array($table) || ($table['flavor'] ?? '') !== 'stream' || (int) ($table['page'] ?? 0) !== 1) continue;
+        $sectionPatterns = array_values(array_filter(array_map('strval', (array) ($template['section_heading_patterns'] ?? []))));
+        $fields = (array) ($template['fields'] ?? []);
+        $sectionFound = !$sectionPatterns;
+        foreach ($tables as $table) {
+            if (($table['flavor'] ?? '') !== 'stream') continue;
             foreach ($this->matrix($table) as $row) {
-                $text = trim(implode(' ', array_filter(array_map('strval', $row))));
-                if (preg_match('/^4\.1\. YANGIN MEKANİK TESİSATI PROJE BİLGİLERİ$/iu', $text)) $result['section'] = '4.1. YANGIN MEKANİK TESİSATI PROJE BİLGİLERİ';
+                $text = $this->rowText($row);
+                if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $sectionFound = true; continue; }
+                if (!$sectionFound) continue;
+                foreach ($fields as $field) {
+                    if (!is_array($field)) continue;
+                    $key = $this->string($field['key'] ?? null);
+                    $patterns = array_values(array_filter(array_map('strval', (array) ($field['label_patterns'] ?? []))));
+                    if ($key === null || !$patterns) continue;
+                    $labelColumn = $this->findPatternColumn($row, $patterns);
+                    if ($labelColumn === null) continue;
+                    $value = $this->nextNonEmpty($row, $labelColumn + 1);
+                    if ($value !== null) $result[$key] = $this->cleanValue($value);
+                }
             }
         }
         return $result;
     }
 
-    private function extractOverallResult(array $camelot): array
+    private function extractOverallResult(array $tables, array $template): array
     {
-        foreach ((array) ($camelot['tables'] ?? []) as $table) {
-            if (!is_array($table) || ($table['flavor'] ?? '') !== 'stream' || (int) ($table['page'] ?? 0) !== 12) continue;
-            $text = trim(implode(' ', array_filter(array_map('strval', (array) ($table['data'][0] ?? [])))));
-            if ($text !== '') return ['raw' => $text];
+        $sectionPatterns = array_values(array_filter(array_map('strval', (array) ($template['section_heading_patterns'] ?? $template['camelot_extraction']['section_patterns'] ?? []))));
+        $textPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['text_patterns'] ?? $template['overall_text']['text_boundary_patterns'] ?? []))));
+        $statusPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['status_patterns'] ?? $template['overall_status']['status_patterns'] ?? []))));
+        $active = !$sectionPatterns; $textParts = []; $status = null;
+        foreach ($tables as $table) {
+            if (($table['flavor'] ?? '') !== 'stream') continue;
+            foreach ($this->matrix($table) as $row) {
+                $text = $this->rowText($row);
+                if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $active = true; continue; }
+                if (!$active) continue;
+                if ($text !== '') $textParts[] = $text;
+                $matchedStatus = $this->matchPatternValue($text, $statusPatterns);
+                if ($matchedStatus !== null) $status = $matchedStatus;
+            }
         }
-        return [];
+        $fullText = trim(implode(' ', $textParts));
+        if ($textPatterns) {
+            foreach ($textPatterns as $pattern) {
+                $match = @preg_match('~' . $pattern . '~iu', $fullText, $m);
+                if ($match === 1 && !empty($m[0])) { $fullText = trim($m[0]); break; }
+            }
+        }
+        $result = [];
+        if ($fullText !== '') $result['text'] = $this->cleanValue($fullText);
+        if ($status !== null) $result['status'] = $status;
+        return $result;
+    }
+
+    private function findPatternColumn(array $row, array $patterns): ?int
+    {
+        foreach ($row as $index => $value) if ($this->matchesAny((string) $value, $patterns)) return (int) $index;
+        return null;
+    }
+
+    private function matchPatternValue(string $value, array $patterns): ?string
+    {
+        $value = trim($value);
+        if ($value === '') return null;
+        return $this->matchesAny($value, $patterns) ? $value : null;
+    }
+
+    private function rowText(array $row): string
+    {
+        return trim(implode(' ', array_values(array_filter(array_map('strval', $row), fn ($v) => trim($v) !== ''))));
     }
 
     private function matrix(array $table): array
@@ -282,16 +257,15 @@ class TemplateDrivenFireSuppressionExtractor
 
     private function regexMatches(string $pattern, string $value): bool
     {
-        $result = @preg_match($pattern, $value);
-        if ($result === 1) return true;
+        if (@preg_match($pattern, $value) === 1) return true;
+        if (@preg_match('~' . $pattern . '~iu', $value) === 1) return true;
         return $this->normalizeLabel($pattern) === $this->normalizeLabel($value);
     }
 
     private function normalizeLabel(string $value): string
     {
         $value = mb_strtolower(trim($value), 'UTF-8');
-        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
-        return rtrim($value, ':');
+        return rtrim(preg_replace('/\s+/u', ' ', $value) ?? $value, ':');
     }
 
     private function normalizeCode(string $value): string
@@ -299,17 +273,9 @@ class TemplateDrivenFireSuppressionExtractor
         return mb_strtoupper(preg_replace('/\s+/u', '', trim($value)) ?? '', 'UTF-8');
     }
 
-    private function status(mixed $value): ?string
-    {
-        $value = mb_strtoupper(trim((string) $value), 'UTF-8');
-        $value = preg_replace('/[.\s_\-]+/u', '', $value) ?? $value;
-        if ($value === '' || mb_strlen($value, 'UTF-8') > 20) return null;
-        return in_array($value, ['U', 'UD', 'N'], true) ? $value : null;
-    }
-
     private function nextNonEmpty(array $row, int $start): ?string
     {
-        for ($i = $start, $count = count($row); $i < $count; $i++) {
+        for ($i = $start; $i < count($row); $i++) {
             $value = trim((string) ($row[$i] ?? ''));
             if ($value !== '' && $value !== '-') return $value;
         }
@@ -318,18 +284,46 @@ class TemplateDrivenFireSuppressionExtractor
 
     private function cleanValue(string $value): string
     {
-        return trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
+        return trim(preg_replace('/\s+/u', ' ', str_replace(["\n", "\r"], ' ', $value)) ?? $value);
     }
 
-    private function string(mixed $value): ?string
+    private function sanitizeUtf8(mixed $value): mixed
     {
-        $value = is_string($value) ? trim($value) : null;
-        return $value === '' ? null : $value;
+        if (is_string($value)) {
+            if (mb_check_encoding($value, 'UTF-8')) return $value;
+            $clean = iconv('UTF-8', 'UTF-8//IGNORE', $value);
+            return $clean === false ? '' : $clean;
+        }
+        if (is_array($value)) {
+            $out = [];
+            foreach ($value as $key => $item) $out[is_string($key) ? $this->sanitizeUtf8($key) : $key] = $this->sanitizeUtf8($item);
+            return $out;
+        }
+        return $value;
+    }
+
+    private function findInvalidUtf8Path(mixed $value, string $path = '$'): ?string
+    {
+        if (is_string($value)) return mb_check_encoding($value, 'UTF-8') ? null : $path;
+        if (!is_array($value)) return null;
+        foreach ($value as $key => $item) {
+            if (is_string($key) && !mb_check_encoding($key, 'UTF-8')) return $path . '[key]';
+            $child = is_int($key) ? $path . '[' . $key . ']' : $path . '[' . json_encode($key, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ']';
+            $bad = $this->findInvalidUtf8Path($item, $child);
+            if ($bad !== null) return $bad;
+        }
+        return null;
     }
 
     private function itemKey(array $template, string $code): string
     {
-        $name = $this->string($template['equipment_name'] ?? null) ?? 'equipment';
-        return $name . ':' . $code;
+        return $this->normalizeLabel((string) ($template['equipment_name'] ?? 'equipment')) . '|' . $code;
+    }
+
+    private function string(mixed $value): ?string
+    {
+        if ($value === null) return null;
+        $value = trim((string) $value);
+        return $value === '' ? null : $value;
     }
 }
