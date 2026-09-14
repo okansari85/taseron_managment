@@ -51,10 +51,10 @@ class CamelotPdfTableExtractor
 
         if ($exitCode !== 0) {
             Log::error('Camelot debug: process failed', [
-                'stderr_preview' => substr($stderr, 0, 1000),
-                'stdout_preview' => substr($stdout, 0, 1000),
+                'stderr_preview' => $this->utf8Preview($stderr),
+                'stdout_preview' => $this->utf8Preview($stdout),
             ]);
-            throw new RuntimeException('Camelot başarısız: ' . trim($stderr ?: $stdout));
+            throw new RuntimeException('Camelot başarısız: ' . $this->utf8Preview($stderr ?: $stdout));
         }
 
         $decoded = json_decode($stdout, true);
@@ -65,15 +65,15 @@ class CamelotPdfTableExtractor
 
         if (!is_array($decoded)) {
             Log::error('Camelot debug: invalid JSON', [
-                'stdout_preview' => substr($stdout, 0, 1000),
+                'stdout_preview' => $this->utf8Preview($stdout),
             ]);
-            throw new RuntimeException('Camelot geçerli JSON döndürmedi: ' . substr(trim($stdout), 0, 500));
+            throw new RuntimeException('Camelot geçerli JSON döndürmedi: ' . $this->utf8Preview($stdout));
         }
         if (!empty($decoded['error'])) {
             Log::error('Camelot debug: python returned error', [
-                'error' => (string) $decoded['error'],
+                'error' => $this->utf8Preview((string) $decoded['error']),
             ]);
-            throw new RuntimeException('Camelot: ' . $decoded['error']);
+            throw new RuntimeException('Camelot: ' . $this->utf8Preview((string) $decoded['error']));
         }
 
         Log::info('Camelot debug: extraction decoded successfully', [
@@ -81,5 +81,14 @@ class CamelotPdfTableExtractor
         ]);
 
         return $decoded;
+    }
+
+    private function utf8Preview(string $value, int $length = 1000): string
+    {
+        if (!mb_check_encoding($value, 'UTF-8')) {
+            $value = mb_convert_encoding($value, 'UTF-8', 'Windows-1254');
+        }
+
+        return mb_substr(trim($value), 0, $length);
     }
 }
