@@ -3,8 +3,8 @@ namespace App\Services\Ai;
 
 /**
  * Deterministic coordinate-based matrix analyzer.
- * Only resolves real U/UD/N cells against equipment columns. It never
- * invents relationships when the geometry is ambiguous.
+ * Maps every observed U/UD/N cell to the real equipment column that contains it.
+ * No status or equipment relationship is invented.
  */
 class CoordinateTableAnalyzer
 {
@@ -20,21 +20,24 @@ class CoordinateTableAnalyzer
             if (!$words) continue;
 
             $columns = $this->findEquipmentColumns($words, $equipmentCodes);
-            if (count($columns) < 2) continue;
+            if (!$columns) continue;
 
             foreach ($this->findControlRows($words) as $row) {
                 $mapping = $this->mapStatusCells($this->cellsNearY($words, $row['y']), $columns);
-                if (!$mapping['has_status'] || !$mapping['has_ud'] || !$mapping['ud_refs']) continue;
+                if (!$mapping['has_status']) continue;
 
-                $results[] = [
-                    'code' => $row['code'],
-                    'description' => $row['description'],
-                    'status' => 'UD',
-                    'scope' => 'equipment',
-                    'equipment_refs' => $mapping['ud_refs'],
-                    'source_pages' => [(int)($page['page'] ?? $page['page_number'] ?? 0)],
-                    'system_name' => null,
-                ];
+                foreach ($mapping['refs_by_status'] as $status => $refs) {
+                    if (!$refs) continue;
+                    $results[] = [
+                        'code' => $row['code'],
+                        'description' => $row['description'],
+                        'status' => $status,
+                        'scope' => 'equipment',
+                        'equipment_refs' => $refs,
+                        'source_pages' => [(int)($page['page'] ?? $page['page_number'] ?? 0)],
+                        'system_name' => null,
+                    ];
+                }
             }
         }
 
@@ -79,9 +82,6 @@ class CoordinateTableAnalyzer
 
         if (!$hits) return [];
 
-        // The equipment header is the Y-band containing the largest number
-        // of distinct equipment codes. This avoids mistaking data rows for
-        // the column definition.
         $bands = [];
         foreach ($hits as $hit) {
             $placed = false;
@@ -132,9 +132,6 @@ class CoordinateTableAnalyzer
             $rows[] = [
                 'code' => $code,
                 'description' => $this->descriptionForRow($cells, $code),
-                'status' => in_array('UD', $statuses, true)
-                    ? 'UD'
-                    : (in_array('N', $statuses, true) ? 'N' : 'U'),
                 'y' => $y,
             ];
         }
@@ -152,60 +149,71 @@ class CoordinateTableAnalyzer
 
     private function mapStatusCells(array $cells, array $columns): array
     {
-        $udRefs = [];
-        $statuses = [];
+        $refsByStatus = [
+            'U' => [],
+            'UD' => [],
+            'N' => [],
+        ];
         $hasStatus = false;
+
+        usort($columns, fn($a, $b) => (float)$a['x'] <=> (float)$b['x']);
         $tolerance = $this->xTolerance($columns);
 
         foreach ($cells as $cell) {
             $status = $this->normalizeStatus((string)$cell['text']);
             if ($status === null) continue;
-
             $hasStatus = true;
-            $statuses[] = $status;
-            if ($status !== 'UD') continue;
 
             $left = (float)$cell['x'];
             $width = max(1.0, (float)($cell['width'] ?? 1));
-            $right = $left + $width;
-            $center = ($left + $right) / 2;
+            $center = $left + ($width / 2.0);
 
-            $covered = [];
+            // Prefer the equipment column whose center is closest to the status cell.
+            $nearest = null;
+            $nearestDistance = PHP_FLOAT_MAX;
             foreach ($columns as $column) {
-                $cx = (float)$column['x'];
-
-                // A normal status token is assigned to the nearest equipment
-                // column. A genuinely wide/merged token may cover multiple
-                // columns, in which case every covered column is returned.
-                $overlap = min($right, $cx + $tolerance) - max($left, $cx - $tolerance);
-                if ($overlap > 0 || abs($center - $cx) <= $tolerance) {
-                    $covered[] = $column;
+                $distance = abs($center - (float)$column['x']);
+                if ($distance < $nearestDistance) {
+                    $nearestDistance = $distance;
+                    $nearest = $column;
                 }
             }
 
-            if (!$covered) continue;
+            if ($nearest === null) continue;
 
-            // If the token is narrow and happens to fall within the tolerance
-            // band of two columns, choose the closest one instead of guessing
-            // multiple equipment references.
-            if (count($covered) > 1 && $width <= ($tolerance * 1.5)) {
-                usort($covered, fn($a, $b) =>
-                    abs($center - (float)$a['x']) <=> abs($center - (float)$b['x'])
-                );
-                $covered = [$covered[0]];
+            // Do not attach a status from the description area to a distant column.
+            // The threshold is based on the actual column spacing.
+            if ($nearestDistance > max($tolerance * 3.0, $this->medianColumnGap($columns) * 0.60)) {
+                continue;
             }
+
+            // Wide status cells can represent a merged cell spanning several columns.
+            $covered = [];
+            if ($width > max(2.0, $tolerance * 1.5)) {
+                $right = $left + $width;
+                foreach ($columns as $column) {
+                    $cx = (float)$column['x'];
+                    if ($cx >= $left - $tolerance && $cx <= $right + $tolerance) {
+                        $covered[] = $column;
+                    }
+                }
+            }
+
+            if (!$covered) $covered = [$nearest];
 
             foreach ($covered as $column) {
                 $key = $this->normalizeCode($column['code']);
-                $udRefs[$key] = $column['code'];
+                $refsByStatus[$status][$key] = $column['code'];
             }
+        }
+
+        foreach ($refsByStatus as $status => $refs) {
+            $refsByStatus[$status] = array_values($refs);
         }
 
         return [
             'has_status' => $hasStatus,
-            'has_ud' => in_array('UD', $statuses, true),
-            'row_status' => in_array('N', $statuses, true) ? 'N' : 'U',
-            'ud_refs' => array_values($udRefs),
+            'refs_by_status' => $refsByStatus,
         ];
     }
 
@@ -235,7 +243,7 @@ class CoordinateTableAnalyzer
         return str_replace(['–', '—', '‑'], '-', $code);
     }
 
-    private function xTolerance(array $columns): float
+    private function medianColumnGap(array $columns): float
     {
         $xs = array_map(fn($c) => (float)$c['x'], $columns);
         sort($xs);
@@ -243,10 +251,14 @@ class CoordinateTableAnalyzer
         for ($i = 1; $i < count($xs); $i++) {
             if ($xs[$i] > $xs[$i - 1]) $gaps[] = $xs[$i] - $xs[$i - 1];
         }
-        if (!$gaps) return 8.0;
+        if (!$gaps) return 10.0;
         sort($gaps);
-        $median = $gaps[(int)floor(count($gaps) / 2)];
-        return max(3.0, min(12.0, $median * 0.30));
+        return $gaps[(int)floor(count($gaps) / 2)];
+    }
+
+    private function xTolerance(array $columns): float
+    {
+        return max(3.0, min(12.0, $this->medianColumnGap($columns) * 0.30));
     }
 
     private function yTolerance(array $words): float
@@ -266,7 +278,7 @@ class CoordinateTableAnalyzer
         foreach ($controls as $control) {
             $refs = array_values(array_unique($control['equipment_refs'] ?? []));
             sort($refs);
-            $key = ($control['code'] ?? '') . '|' . implode(',', $refs);
+            $key = ($control['code'] ?? '') . '|' . ($control['status'] ?? '') . '|' . implode(',', $refs);
             $control['equipment_refs'] = $refs;
             $out[$key] = $control;
         }
