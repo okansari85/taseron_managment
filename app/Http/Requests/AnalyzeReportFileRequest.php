@@ -13,7 +13,7 @@ class AnalyzeReportFileRequest extends FormRequest
 
     public function rules(): array
     {
-        if ($this->boolean('gemini_fixture_v12') || $this->boolean('gemini_fixture_get')) {
+        if ($this->boolean('gemini_fixture_v12') || $this->boolean('gemini_fixture_get') || $this->boolean('gemini_fixture_camelot') || $this->boolean('gemini_fixture_delete')) {
             return [
                 'fixture_id' => ['required', 'uuid'],
             ];
