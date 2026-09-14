@@ -4,9 +4,6 @@ namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-// Fire Suppression Reports ve YSC Yıllık Kontrol Raporları'nın "analyze"
-// (AI ön-analiz taslağı) uç noktalarında paylaşılan tek istek — sadece PDF
-// alır, hiçbir şey kaydetmez.
 class AnalyzeReportFileRequest extends FormRequest
 {
     public function authorize(): bool
@@ -16,6 +13,12 @@ class AnalyzeReportFileRequest extends FormRequest
 
     public function rules(): array
     {
+        if ($this->boolean('gemini_fixture_v12')) {
+            return [
+                'fixture_id' => ['required', 'uuid'],
+            ];
+        }
+
         return [
             'file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
         ];
@@ -27,6 +30,8 @@ class AnalyzeReportFileRequest extends FormRequest
             'file.required' => 'Analiz için bir PDF dosyası gereklidir.',
             'file.mimes' => 'Dosya PDF formatında olmalıdır.',
             'file.max' => 'Dosya en fazla 20 MB olabilir.',
+            'fixture_id.required' => 'Fixture ID gereklidir.',
+            'fixture_id.uuid' => 'Geçersiz fixture ID.',
         ];
     }
 }
