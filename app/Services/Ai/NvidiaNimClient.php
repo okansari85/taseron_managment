@@ -114,12 +114,17 @@ class NvidiaNimClient
 
 NVIDIA NIM EK KURALI — SİSTEM KEŞFİ:
 - PDF'nin tamamını baştan sona değerlendir ve RAPORDA GERÇEKTEN KONTROL EDİLEN TÜM AYRI SİSTEMLERİ systems dizisine koy.
-- Bir sistemin yalnızca bulgular içinde geçmesi onu başka bir sistemin altına taşıma nedeni değildir. Örneğin bir bulgu metninde Sprinkler, Su Deposu, Hidrant veya İtfaiye Su Alma/Verme sistemi açıkça ayrı bir tesisat/sistem olarak anlatılıyorsa ilgili sistemi ayrıca değerlendir.
-- "Yangın Tesisatı" gibi üst başlıkları alt sistemlerle aynı sistem olarak birleştirme.
+- Özellikle 5. TESPİT VE DEĞERLENDİRMELER bölümündeki kontrol matrisi/tablosunun bölüm başlıklarını sistem keşfi için birincil yapısal sinyal kabul et.
+- Kontrol matrisi birden fazla harfli veya isimlendirilmiş grup içeriyorsa, her ayrı grup kendi başına bir sistemdir. O grubun altında en az bir kontrol maddesi bulunması, ekipman listesi bulunmasa bile sistemi systems içine almak için yeterlidir.
+- Bir sistemin ekipmanı olmaması, o sistemi systems dizisinden çıkarma nedeni değildir. Sistem yalnızca kontrol maddelerinden oluşabilir.
+- Kontrol kodlarının farklı aralıklara ayrılması da ayrı sistemleri gösterebilir; kodları sadece başka bir sistemin alt maddeleriymiş gibi birleştirme. Önce ilgili kontrol grubunun başlığını ve kapsamını değerlendir.
+- Örneğin bir raporda "Su Deposu Kontrolü", "Yağmurlama Sistemi Kontrolü", "Yangın Dolapları ... Kontrolü" ve "Hidrant ... Kontrolü" ayrı başlıklarsa bunların her biri ayrı systems kaydıdır; ekipman tablosu yalnızca bazı sistemlerde bulunuyor olsa bile diğer sistemler atlanmaz.
+- Bir sistem yalnızca bulgular içinde geçiyorsa onu otomatik olarak sistem sayma; fakat aynı sistem kontrol matrisi içinde ayrı bir başlıkla veya o sisteme ait ayrı kontrol grubuyla tanımlanmışsa mutlaka systems içine ekle.
+- "Yangın Tesisatı" gibi üst başlıkları, altında ayrı kontrol grupları varsa tek sistem olarak kullanıp alt sistemleri birleştirme.
 - Yangın Pompa Dairesi; pompa ekipmanlarının bulunduğu sistemdir. Sprinkler, Su Deposu, Hidrant, İtfaiye Su Alma/Verme gibi raporda ayrı kontrol edilen veya ayrı fiziksel sistem olarak tanımlanan grupları otomatik olarak Yangın Pompa Dairesi içine katma.
-- Bir sistem için doğrudan kontrol tablosu, ekipman tablosu veya açık sistem başlığı bulunuyorsa systems içine ekle; yalnızca bulgu metninde tesadüfi kelime geçmesi durumunda sistem uydurma.
 - Aynı fiziksel sistemi farklı adlarla tekrar etme; rapordaki en anlamlı sistem adını koru.
-- systems dizisi raporun kapsamını eksik bırakmamalıdır. Önce tüm sistemleri belirle, sonra JSON'u oluştur.
+- systems dizisini oluşturmadan önce rapordaki tüm ayrı kontrol gruplarını çıkar ve hiçbir ayrı grubun atlanmadığını kontrol et.
+- systems dizisi raporun kapsamını eksik bırakmamalıdır. Özellikle ekipmanı olmayan ancak kontrol maddeleri bulunan sistemleri de dahil et.
 NVIDIA;
 
         return [
