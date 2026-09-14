@@ -6,6 +6,12 @@ from pathlib import Path
 import camelot
 
 
+# Windows subprocess stdout can use the system code page instead of UTF-8.
+# The PHP consumer expects UTF-8 JSON.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
 def clean(value):
     if value is None:
         return ""
