@@ -8,11 +8,10 @@ use App\Http\Requests\StoreFireSuppressionReportRequest;
 use App\Jobs\AnalyzeFireSuppressionReportJob;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
-use App\Services\Ai\CoordinatePdfWordExtractor;
-use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
-use App\Services\Ai\UniversalFireSuppressionTableAnalyzerV12;
+use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
+use App\Services\Ai\TemplateDiscoveryReportNormalizer;
 use App\Services\FireSuppressionReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,8 +23,15 @@ class FireSuppressionReportController extends Controller
 {
     public function __construct(private FireSuppressionReportService $service) {}
 
-    public function analyze(AnalyzeReportFileRequest $request, LocationBusinessEntity $locationBusinessEntity, TenantContext $tenantContext, FireSuppressionAnalysisProgress $progress, PdfTextExtractor $extractor, FireSuppressionAiReportAnalyzer $analyzer, CoordinatePdfWordExtractor $coordinateExtractor, UniversalFireSuppressionTableAnalyzerV12 $tableAnalyzer): JsonResponse
-    {
+    public function analyze(
+        AnalyzeReportFileRequest $request,
+        LocationBusinessEntity $locationBusinessEntity,
+        TenantContext $tenantContext,
+        FireSuppressionAnalysisProgress $progress,
+        PdfTextExtractor $extractor,
+        TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
+        TemplateDiscoveryReportNormalizer $normalizer
+    ): JsonResponse {
         if ($request->boolean('gemini_fixture_list')) {
             $items = collect(Storage::disk('local')->files('fire-suppression-gemini-fixtures'))
                 ->filter(fn (string $path) => str_ends_with($path, '.json'))
@@ -67,8 +73,19 @@ class FireSuppressionReportController extends Controller
             $fixtureId = (string) Str::uuid();
             $pdfPath = "fire-suppression-gemini-fixtures/{$fixtureId}.pdf";
             Storage::disk('local')->putFileAs('fire-suppression-gemini-fixtures', $file, "{$fixtureId}.pdf");
-            $fixture = ['fixture_id' => $fixtureId, 'provider' => 'gemini', 'model' => config('services.gemini.text_model'), 'original_file_name' => $file->getClientOriginalName(), 'created_at' => now()->toIso8601String(), 'pdf_path' => $pdfPath, 'semantic' => $semantic];
-            Storage::disk('local')->put("fire-suppression-gemini-fixtures/{$fixtureId}.json", json_encode($fixture, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+            $fixture = [
+                'fixture_id' => $fixtureId,
+                'provider' => 'gemini',
+                'model' => config('services.gemini.text_model'),
+                'original_file_name' => $file->getClientOriginalName(),
+                'created_at' => now()->toIso8601String(),
+                'pdf_path' => $pdfPath,
+                'semantic' => $semantic,
+            ];
+            Storage::disk('local')->put(
+                "fire-suppression-gemini-fixtures/{$fixtureId}.json",
+                json_encode($fixture, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)
+            );
             return response()->json(['data' => $fixture]);
         }
 
@@ -78,20 +95,9 @@ class FireSuppressionReportController extends Controller
             abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
             $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
 
-            $storedPdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
-            if ($request->hasFile('file')) {
-                $file = $request->file('file');
-                $absolutePath = $file->getRealPath();
-            } else {
-                abort_unless(Storage::disk('local')->exists($storedPdfPath), 404, 'Bu eski fixture için PDF kayıtlı değil. V12 için aynı PDF\'yi seçmelisin.');
-                $absolutePath = Storage::disk('local')->path($storedPdfPath);
-                $file = new UploadedFile($absolutePath, $fixture['original_file_name'] ?? "{$fixtureId}.pdf", 'application/pdf', null, true);
-            }
-
-            $pages = $extractor->extractPages($file);
-            $coordinatePages = $coordinateExtractor->extract($absolutePath);
-            $result = $tableAnalyzer->analyze($pages, (array) ($fixture['semantic'] ?? []), $coordinatePages);
-            $result['fixture_id'] = $fixtureId;
+            // V12 test endpoint is kept for the existing frontend flow. The
+            // result is now the stable Template Discovery target JSON.
+            $result = $normalizer->normalize((array) ($fixture['semantic'] ?? []), $fixtureId);
             $result['analyzer']['fixture_mode'] = true;
             return response()->json(['data' => $result]);
         }
@@ -111,13 +117,26 @@ class FireSuppressionReportController extends Controller
         return response()->json(['data' => $state]);
     }
 
-    public function index(LocationBusinessEntity $locationBusinessEntity): JsonResponse { return response()->json(['data' => $this->service->all($locationBusinessEntity)]); }
-    public function show(FireSuppressionReport $fireSuppressionReport): JsonResponse { return response()->json(['data' => $this->service->find($fireSuppressionReport)]); }
+    public function index(LocationBusinessEntity $locationBusinessEntity): JsonResponse
+    {
+        return response()->json(['data' => $this->service->all($locationBusinessEntity)]);
+    }
+
+    public function show(FireSuppressionReport $fireSuppressionReport): JsonResponse
+    {
+        return response()->json(['data' => $this->service->find($fireSuppressionReport)]);
+    }
 
     public function store(StoreFireSuppressionReportRequest $request, LocationBusinessEntity $locationBusinessEntity): JsonResponse
     {
         $validated = $request->validated();
-        $additionalFiles = collect($validated['additional_files'] ?? [])->map(fn (array $entry, int $index) => ['file' => $request->file("additional_files.{$index}.file"), 'type' => $entry['type'], 'description' => $entry['description'] ?? null])->all();
+        $additionalFiles = collect($validated['additional_files'] ?? [])->map(
+            fn (array $entry, int $index) => [
+                'file' => $request->file("additional_files.{$index}.file"),
+                'type' => $entry['type'],
+                'description' => $entry['description'] ?? null,
+            ]
+        )->all();
         $report = $this->service->create($locationBusinessEntity, $validated, $request->file('file'), $request->user(), $additionalFiles);
         return response()->json(['message' => 'Rapor başarıyla yüklendi.', 'data' => $report], 201);
     }
