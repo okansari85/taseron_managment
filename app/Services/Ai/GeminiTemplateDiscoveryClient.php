@@ -74,7 +74,183 @@ class GeminiTemplateDiscoveryClient
         $nullableString = ['type' => ['string', 'null']];
         $stringArray = ['type' => 'array', 'items' => ['type' => 'string']];
         $integerArray = ['type' => 'array', 'items' => ['type' => 'integer']];
-        $dynamicObject = ['type' => 'object', 'additionalProperties' => true];
+
+        $reportField = [
+            'type' => 'object',
+            'properties' => [
+                'key' => ['type' => 'string'],
+                'label_patterns' => $stringArray,
+            ],
+            'required' => ['key', 'label_patterns'],
+        ];
+
+        $facilityField = [
+            'type' => 'object',
+            'properties' => [
+                'key' => ['type' => 'string'],
+                'label_patterns' => $stringArray,
+            ],
+            'required' => ['key', 'label_patterns'],
+        ];
+
+        $controlItem = [
+            'type' => 'object',
+            'properties' => [
+                'control_code_patterns' => $stringArray,
+                'control_text_patterns' => $stringArray,
+                'result_patterns' => $stringArray,
+            ],
+            'required' => ['control_code_patterns', 'control_text_patterns', 'result_patterns'],
+        ];
+
+        $equipment = [
+            'type' => 'object',
+            'properties' => [
+                'equipment_name' => ['type' => 'string'],
+                'system_name' => ['type' => 'string'],
+                'equipment_identity' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'header_patterns' => $stringArray,
+                        'identity_patterns' => $stringArray,
+                    ],
+                    'required' => ['header_patterns', 'identity_patterns'],
+                ],
+                'table_structure' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'orientation' => ['type' => 'string'],
+                        'repeating_block' => ['type' => 'boolean'],
+                        'left_column' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'header_patterns' => $stringArray,
+                                'label_patterns' => $stringArray,
+                                'cell_patterns' => $stringArray,
+                            ],
+                            'required' => ['header_patterns', 'label_patterns', 'cell_patterns'],
+                        ],
+                        'right_column' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'header_patterns' => $stringArray,
+                                'value_patterns' => $stringArray,
+                                'cell_patterns' => $stringArray,
+                            ],
+                            'required' => ['header_patterns', 'value_patterns', 'cell_patterns'],
+                        ],
+                    ],
+                    'required' => ['orientation', 'repeating_block', 'left_column', 'right_column'],
+                ],
+                'camelot_extraction' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'equipment_header_patterns' => $stringArray,
+                        'system_section_patterns' => $stringArray,
+                        'left_column_patterns' => $stringArray,
+                        'right_column_patterns' => $stringArray,
+                        'value_location' => ['type' => 'string'],
+                        'block_detection' => ['type' => 'string'],
+                        'scope' => ['type' => 'string'],
+                    ],
+                    'required' => ['equipment_header_patterns', 'system_section_patterns', 'left_column_patterns', 'right_column_patterns', 'value_location', 'block_detection', 'scope'],
+                ],
+            ],
+            'required' => ['equipment_name', 'system_name', 'equipment_identity', 'table_structure', 'camelot_extraction'],
+        ];
+
+        $matrix = [
+            'type' => 'object',
+            'properties' => [
+                'present' => ['type' => 'boolean'],
+                'orientation' => ['type' => 'string'],
+                'axis_detection' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'enabled' => ['type' => 'boolean'],
+                        'equipment_axis' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'axis' => ['type' => 'string'],
+                                'header_patterns' => $stringArray,
+                                'identity_patterns' => $stringArray,
+                                'detection_patterns' => $stringArray,
+                            ],
+                            'required' => ['axis', 'header_patterns', 'identity_patterns', 'detection_patterns'],
+                        ],
+                        'control_axis' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'axis' => ['type' => 'string'],
+                                'header_patterns' => $stringArray,
+                                'code_patterns' => $stringArray,
+                                'label_patterns' => $stringArray,
+                                'detection_patterns' => $stringArray,
+                            ],
+                            'required' => ['axis', 'header_patterns', 'code_patterns', 'label_patterns', 'detection_patterns'],
+                        ],
+                        'result_axis' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'location' => ['type' => 'string'],
+                                'patterns' => $stringArray,
+                                'detection_patterns' => $stringArray,
+                            ],
+                            'required' => ['location', 'patterns', 'detection_patterns'],
+                        ],
+                    ],
+                    'required' => ['enabled', 'equipment_axis', 'control_axis', 'result_axis'],
+                ],
+                'matrix_relationship' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'equipment_vs_control' => ['type' => 'string'],
+                        'equipment_position' => ['type' => 'string'],
+                        'control_position' => ['type' => 'string'],
+                        'result_position' => ['type' => 'string'],
+                    ],
+                    'required' => ['equipment_vs_control', 'equipment_position', 'control_position', 'result_position'],
+                ],
+                'camelot_extraction' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'table_type' => ['type' => 'string'],
+                        'system_section_patterns' => $stringArray,
+                        'equipment_header_patterns' => $stringArray,
+                        'equipment_identity_patterns' => $stringArray,
+                        'control_code_patterns' => $stringArray,
+                        'control_label_patterns' => $stringArray,
+                        'result_cell_patterns' => $stringArray,
+                        'equipment_axis' => ['type' => 'string'],
+                        'control_axis' => ['type' => 'string'],
+                        'result_binding' => ['type' => 'string'],
+                    ],
+                    'required' => ['table_type', 'system_section_patterns', 'equipment_header_patterns', 'equipment_identity_patterns', 'control_code_patterns', 'control_label_patterns', 'result_cell_patterns', 'equipment_axis', 'control_axis', 'result_binding'],
+                ],
+            ],
+            'required' => ['present', 'orientation', 'axis_detection', 'matrix_relationship', 'camelot_extraction'],
+        ];
+
+        $system = [
+            'type' => 'object',
+            'properties' => [
+                'system_name' => ['type' => 'string'],
+                'section_heading_patterns' => $stringArray,
+                'control_items' => ['type' => 'array', 'items' => $controlItem],
+                'equipment' => ['type' => 'array', 'items' => $equipment],
+                'control_matrix' => $matrix,
+                'section_detection' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'start_heading_patterns' => $stringArray,
+                        'continuation_patterns' => $stringArray,
+                        'end_detection_patterns' => $stringArray,
+                    ],
+                    'required' => ['start_heading_patterns', 'continuation_patterns', 'end_detection_patterns'],
+                ],
+            ],
+            'required' => ['system_name', 'section_heading_patterns', 'control_items', 'equipment', 'control_matrix', 'section_detection'],
+        ];
 
         return [
             'type' => 'object',
@@ -84,162 +260,100 @@ class GeminiTemplateDiscoveryClient
                     'properties' => [
                         'template_type' => ['type' => 'string'],
                         'template_version' => ['type' => 'string'],
-                        'report_structure' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'page_scope' => ['type' => 'string'],
-                                'section_count' => ['type' => 'integer'],
-                                'sections' => ['type' => 'array', 'items' => $dynamicObject],
-                                'table_continuation_across_pages' => ['type' => 'boolean'],
-                                'repeating_tables_across_pages' => ['type' => 'boolean'],
-                            ],
-                            'required' => ['page_scope', 'section_count', 'sections', 'table_continuation_across_pages', 'repeating_tables_across_pages'],
-                        ],
                         'report_information' => [
                             'type' => 'object',
                             'properties' => [
-                                'discovery' => ['type' => 'string'],
-                                'fields' => [
+                                'fields' => ['type' => 'array', 'items' => $reportField],
+                            ],
+                            'required' => ['fields'],
+                        ],
+                        'facility_or_project_information' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'section_heading_patterns' => $stringArray,
+                                'fields' => ['type' => 'array', 'items' => $facilityField],
+                            ],
+                            'required' => ['section_heading_patterns', 'fields'],
+                        ],
+                        'fire_systems' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'systems' => ['type' => 'array', 'items' => $system],
+                            ],
+                            'required' => ['systems'],
+                        ],
+                        'overall_result' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'section_heading_patterns' => $stringArray,
+                                'overall_text' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'label_patterns' => $stringArray,
+                                        'value_location_patterns' => $stringArray,
+                                        'text_boundary_patterns' => $stringArray,
+                                    ],
+                                    'required' => ['label_patterns', 'value_location_patterns', 'text_boundary_patterns'],
+                                ],
+                                'overall_status' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'label_patterns' => $stringArray,
+                                        'status_patterns' => $stringArray,
+                                        'value_location_patterns' => $stringArray,
+                                    ],
+                                    'required' => ['label_patterns', 'status_patterns', 'value_location_patterns'],
+                                ],
+                                'camelot_extraction' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'section_patterns' => $stringArray,
+                                        'text_patterns' => $stringArray,
+                                        'status_patterns' => $stringArray,
+                                        'status_extraction' => ['type' => 'string'],
+                                    ],
+                                    'required' => ['section_patterns', 'text_patterns', 'status_patterns', 'status_extraction'],
+                                ],
+                            ],
+                            'required' => ['section_heading_patterns', 'overall_text', 'overall_status', 'camelot_extraction'],
+                        ],
+                        'findings_structure' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'system_assignment' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'required' => ['type' => 'boolean'],
+                                        'source' => $stringArray,
+                                        'fallback' => $nullableString,
+                                    ],
+                                    'required' => ['required', 'source', 'fallback'],
+                                ],
+                                'deduplication' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'enabled' => ['type' => 'boolean'],
+                                        'duplicate_finding_rule' => ['type' => 'string'],
+                                    ],
+                                    'required' => ['enabled', 'duplicate_finding_rule'],
+                                ],
+                                'finding_fields' => [
                                     'type' => 'array',
                                     'items' => [
                                         'type' => 'object',
                                         'properties' => [
-                                            'field' => ['type' => 'string'],
-                                            'section' => ['type' => 'string'],
-                                            'label_patterns' => $stringArray,
-                                            'value_position' => ['type' => 'string'],
-                                            'table_or_text' => ['type' => 'string'],
-                                            'page_hints' => $integerArray,
+                                            'key' => ['type' => 'string'],
+                                            'required' => ['type' => 'boolean'],
+                                            'nullable' => ['type' => 'boolean'],
                                         ],
-                                        'required' => ['field', 'section', 'label_patterns', 'value_position', 'table_or_text', 'page_hints'],
+                                        'required' => ['key', 'required', 'nullable'],
                                     ],
                                 ],
                             ],
-                            'required' => ['discovery', 'fields'],
-                        ],
-                        'organization_information' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'discovery' => ['type' => 'string'],
-                                'section' => ['type' => 'string'],
-                                'fields' => ['type' => 'array', 'items' => $dynamicObject],
-                            ],
-                            'required' => ['discovery', 'section', 'fields'],
-                        ],
-                        'systems_structure' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'discovery' => ['type' => 'string'],
-                                'heading_patterns' => $stringArray,
-                                'code_patterns' => $stringArray,
-                                'systems' => [
-                                    'type' => 'array',
-                                    'items' => [
-                                        'type' => 'object',
-                                        'properties' => [
-                                            'name' => ['type' => 'string'],
-                                            'category' => ['type' => 'string'],
-                                            'heading_pattern' => ['type' => 'string'],
-                                            'table_hints' => $stringArray,
-                                        ],
-                                        'required' => ['name', 'category', 'heading_pattern', 'table_hints'],
-                                    ],
-                                ],
-                                'table_association' => ['type' => 'string'],
-                                'section_continuation' => ['type' => 'string'],
-                            ],
-                            'required' => ['discovery', 'heading_patterns', 'code_patterns', 'systems', 'table_association', 'section_continuation'],
-                        ],
-                        'equipment_structure' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'discovery' => ['type' => 'string'],
-                                'representation' => ['type' => 'string'],
-                                'identity' => $dynamicObject,
-                                'properties' => $dynamicObject,
-                                'equipment_axis' => ['type' => 'string'],
-                                'block_size' => $nullableString,
-                                'continuation_across_pages' => ['type' => 'boolean'],
-                            ],
-                            'required' => ['discovery', 'representation', 'identity', 'properties', 'equipment_axis', 'block_size', 'continuation_across_pages'],
-                        ],
-                        'table_structure' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'orientation' => ['type' => 'string'],
-                                'row_structure' => $dynamicObject,
-                                'column_structure' => $dynamicObject,
-                                'binding' => $dynamicObject,
-                            ],
-                            'required' => ['orientation', 'row_structure', 'column_structure', 'binding'],
-                        ],
-                        'control_item_structure' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'discovery' => ['type' => 'string'],
-                                'code_pattern' => ['type' => 'string'],
-                                'description_location' => ['type' => 'string'],
-                                'result_location' => ['type' => 'string'],
-                                'system_binding' => ['type' => 'string'],
-                                'equipment_binding' => ['type' => 'string'],
-                                'result_aliases' => $stringArray,
-                            ],
-                            'required' => ['discovery', 'code_pattern', 'description_location', 'result_location', 'system_binding', 'equipment_binding', 'result_aliases'],
-                        ],
-                        'findings_structure' => $dynamicObject,
-                        'extraction_rules' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'report_information' => ['type' => 'string'],
-                                'organization_information' => ['type' => 'string'],
-                                'systems' => ['type' => 'string'],
-                                'equipment' => ['type' => 'string'],
-                                'components' => ['type' => 'string'],
-                                'control_items' => ['type' => 'string'],
-                                'results' => ['type' => 'string'],
-                                'findings' => ['type' => 'string'],
-                            ],
-                            'required' => ['report_information', 'organization_information', 'systems', 'equipment', 'components', 'control_items', 'results', 'findings'],
-                        ],
-                        'table_hints' => [
-                            'type' => 'array',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'role' => ['type' => 'string'],
-                                    'page_hints' => $integerArray,
-                                    'title_patterns' => $stringArray,
-                                    'header_patterns' => $stringArray,
-                                    'structure_type' => ['type' => 'string'],
-                                    'orientation' => ['type' => 'string'],
-                                    'equipment_axis' => ['type' => 'string'],
-                                    'control_axis' => ['type' => 'string'],
-                                    'result_binding' => ['type' => 'string'],
-                                    'repeat_block' => $dynamicObject,
-                                    'continuation' => ['type' => 'string'],
-                                    'camelot' => $dynamicObject,
-                                ],
-                                'required' => ['role', 'page_hints', 'title_patterns', 'header_patterns', 'structure_type', 'orientation', 'equipment_axis', 'control_axis', 'result_binding', 'repeat_block', 'continuation', 'camelot'],
-                            ],
-                        ],
-                        'evidence' => [
-                            'type' => 'array',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'decision' => ['type' => 'string'],
-                                    'reason' => ['type' => 'string'],
-                                    'source_pages' => $integerArray,
-                                ],
-                                'required' => ['decision', 'reason', 'source_pages'],
-                            ],
+                            'required' => ['system_assignment', 'deduplication', 'finding_fields'],
                         ],
                     ],
-                    'required' => [
-                        'template_type', 'template_version', 'report_structure', 'report_information',
-                        'organization_information', 'systems_structure', 'equipment_structure', 'table_structure',
-                        'control_item_structure', 'findings_structure', 'extraction_rules', 'table_hints', 'evidence',
-                    ],
+                    'required' => ['template_type', 'template_version', 'report_information', 'facility_or_project_information', 'fire_systems', 'overall_result', 'findings_structure'],
                 ],
                 'extracted_data' => [
                     'type' => 'object',
@@ -249,7 +363,7 @@ class GeminiTemplateDiscoveryClient
                             'items' => [
                                 'type' => 'object',
                                 'properties' => [
-                                    'id' => $nullableString,
+                                    'id' => ['type' => 'string'],
                                     'system_name' => $nullableString,
                                     'description' => ['type' => 'string'],
                                     'source_pages' => $integerArray,
@@ -268,7 +382,10 @@ class GeminiTemplateDiscoveryClient
     private function extractOutputText(array $response): string
     {
         foreach ((array) ($response['steps'] ?? []) as $step) {
-            if (!is_array($step) || ($step['type'] ?? null) !== 'model_output') continue;
+            if (!is_array($step) || ($step['type'] ?? null) !== 'model_output') {
+                continue;
+            }
+
             foreach ((array) ($step['content'] ?? []) as $content) {
                 if (is_array($content) && isset($content['text'])) {
                     return (string) $content['text'];
