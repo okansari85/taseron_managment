@@ -73,6 +73,7 @@ class GeminiTemplateDiscoveryClient
     {
         $nullableString = ['type' => ['string', 'null']];
         $stringArray = ['type' => 'array', 'items' => ['type' => 'string']];
+        $integerArray = ['type' => 'array', 'items' => ['type' => 'integer']];
 
         return [
             'type' => 'object',
@@ -82,83 +83,46 @@ class GeminiTemplateDiscoveryClient
                     'properties' => [
                         'template_type' => ['type' => 'string'],
                         'template_version' => ['type' => 'string'],
+                        'report_structure' => ['type' => 'object'],
                         'report_information' => ['type' => 'object'],
                         'organization_information' => ['type' => 'object'],
-                        'systems' => ['type' => 'array', 'items' => ['type' => 'object']],
+                        'systems_structure' => ['type' => 'object'],
+                        'equipment_structure' => ['type' => 'object'],
+                        'table_structure' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'orientation' => ['type' => 'string'],
+                                'row_structure' => ['type' => 'object'],
+                                'column_structure' => ['type' => 'object'],
+                                'binding' => ['type' => 'object'],
+                            ],
+                            'required' => ['orientation', 'row_structure', 'column_structure', 'binding'],
+                        ],
+                        'control_item_structure' => ['type' => 'object'],
                         'findings_structure' => ['type' => 'object'],
                         'extraction_rules' => ['type' => 'object'],
+                        'table_hints' => ['type' => 'array', 'items' => ['type' => 'object']],
+                        'evidence' => ['type' => 'array', 'items' => ['type' => 'object']],
                     ],
                     'required' => [
                         'template_type',
                         'template_version',
+                        'report_structure',
                         'report_information',
                         'organization_information',
-                        'systems',
+                        'systems_structure',
+                        'equipment_structure',
+                        'table_structure',
+                        'control_item_structure',
                         'findings_structure',
                         'extraction_rules',
+                        'table_hints',
+                        'evidence',
                     ],
                 ],
                 'extracted_data' => [
                     'type' => 'object',
                     'properties' => [
-                        'report' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'report_no' => $nullableString,
-                                'company_name' => $nullableString,
-                                'control_date' => $nullableString,
-                                'next_control_date' => $nullableString,
-                                'overall_result' => $nullableString,
-                            ],
-                            'required' => ['report_no', 'company_name', 'control_date', 'next_control_date', 'overall_result'],
-                        ],
-                        'covered_categories' => $stringArray,
-                        'systems' => [
-                            'type' => 'array',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'name' => ['type' => 'string'],
-                                    'category' => ['type' => 'string'],
-                                    'equipment_count' => ['type' => 'integer'],
-                                    'equipment_count_known' => ['type' => 'boolean'],
-                                    'control_count' => ['type' => 'integer'],
-                                    'components' => [
-                                        'type' => 'array',
-                                        'items' => [
-                                            'type' => 'object',
-                                            'properties' => [
-                                                'code' => $nullableString,
-                                                'name' => $nullableString,
-                                                'location' => $nullableString,
-                                                'brand' => $nullableString,
-                                                'model' => $nullableString,
-                                                'serial_no' => $nullableString,
-                                                'properties' => ['type' => 'object'],
-                                                'source_pages' => ['type' => 'array', 'items' => ['type' => 'integer']],
-                                            ],
-                                            'required' => ['code', 'name', 'location', 'brand', 'model', 'serial_no', 'properties', 'source_pages'],
-                                        ],
-                                    ],
-                                    'control_items' => [
-                                        'type' => 'array',
-                                        'items' => [
-                                            'type' => 'object',
-                                            'properties' => [
-                                                'code' => ['type' => 'string'],
-                                                'description' => $nullableString,
-                                                'scope' => ['type' => 'string'],
-                                                'equipment' => ['type' => 'string'],
-                                                'results' => ['type' => 'object'],
-                                                'source_pages' => ['type' => 'array', 'items' => ['type' => 'integer']],
-                                            ],
-                                            'required' => ['code', 'description', 'scope', 'equipment', 'results', 'source_pages'],
-                                        ],
-                                    ],
-                                ],
-                                'required' => ['name', 'category', 'equipment_count', 'equipment_count_known', 'control_count', 'components', 'control_items'],
-                            ],
-                        ],
                         'findings' => [
                             'type' => 'array',
                             'items' => [
@@ -167,29 +131,13 @@ class GeminiTemplateDiscoveryClient
                                     'id' => $nullableString,
                                     'system_name' => $nullableString,
                                     'description' => ['type' => 'string'],
-                                    'affected_equipment' => ['type' => 'array', 'items' => ['type' => 'string']],
-                                    'source_pages' => ['type' => 'array', 'items' => ['type' => 'integer']],
+                                    'source_pages' => $integerArray,
                                 ],
-                                'required' => ['id', 'system_name', 'description', 'affected_equipment', 'source_pages'],
+                                'required' => ['id', 'system_name', 'description', 'source_pages'],
                             ],
                         ],
-                        'matched_inventory_items' => ['type' => 'array'],
-                        'candidate_inventory_items' => ['type' => 'array'],
-                        'unmatched_codes' => $stringArray,
-                        'analyzer' => ['type' => 'object'],
-                        'fixture_id' => $nullableString,
                     ],
-                    'required' => [
-                        'report',
-                        'covered_categories',
-                        'systems',
-                        'findings',
-                        'matched_inventory_items',
-                        'candidate_inventory_items',
-                        'unmatched_codes',
-                        'analyzer',
-                        'fixture_id',
-                    ],
+                    'required' => ['findings'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],
