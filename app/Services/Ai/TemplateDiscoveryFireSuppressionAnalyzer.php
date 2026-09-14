@@ -6,9 +6,7 @@ use RuntimeException;
 
 /**
  * Discovers report structure and produces the stable target JSON in one AI pass.
- *
- * This intentionally lives beside the existing analyzer so the old extraction
- * path can remain available while the new template-driven path is tested.
+ * Findings are intentionally semantic/AI-owned and are not delegated to Camelot.
  */
 class TemplateDiscoveryFireSuppressionAnalyzer
 {
@@ -33,7 +31,9 @@ class TemplateDiscoveryFireSuppressionAnalyzer
 
         foreach (array_values($pages) as $index => $page) {
             $page = trim((string) $page);
-            if ($page === '') continue;
+            if ($page === '') {
+                continue;
+            }
             $parts[] = '--- SAYFA ' . ($index + 1) . " ---\n" . $page;
         }
 
@@ -56,7 +56,7 @@ KRİTİK AYRIM:
 - template gerçek veriyi tekrar eden bir rapor özeti değildir.
 - template; bölüm, tablo, alan anlamı, tablo yönelimi, ekipman yerleşimi, kontrol kapsamı, sonuç hücreleri ve Camelot'un hangi tabloyu seçmesi gerektiğine dair kanıtları tarif eder.
 - extracted_data gerçek rapordan çıkarılan değerleri taşır.
-- Template'te YD1 gibi gerçek kodlar kanıt olarak kullanılabilir; ancak template'in kendisini rapora özel veri deposuna dönüştürme. Yapısal pattern'i tarif et.
+- Template'te gerçek ekipman kodları yalnızca yapısal kanıt olarak kullanılabilir; template'i rapora özel veri deposuna dönüştürme.
 
 1) RAPOR BİLGİLERİ DISCOVERY
 Raporun üst bilgi bölümünü bul.
@@ -67,7 +67,7 @@ Aşağıdaki normalize alanların raporda hangi label/anlam ile bulunduğunu ke�
 - next_control_date
 - overall_result
 
-Başlık isimleri değişebilir. Örn. "Muayene Tarihi ve Saati" ve "Kontrol Tarihi" aynı normalize anlama gelebilir. Bunu template'e yaz.
+Başlık isimleri değişebilir. Örneğin "Muayene Tarihi ve Saati" ve "Kontrol Tarihi" aynı normalize anlama gelebilir. Bunu template'e yaz.
 
 2) KURULUŞ BİLGİLERİ DISCOVERY
 Varsa:
@@ -101,7 +101,7 @@ Ekipmanın tabloda nasıl temsil edildiğini belirle:
 - ekipmanlar kolon mu satır mı?
 - ekipman listesi ayrı tablo mu?
 - aynı tablo içinde ekipman özellikleri dikey satırlarda mı?
-- 5'li/10'lu tekrar eden yatay bloklar var mı?
+- tekrar eden yatay bloklar var mı?
 - equipment code pattern nedir?
 
 5) KONTROL KAPSAMI DISCOVERY — ÇOK ÖNEMLİ
@@ -125,8 +125,8 @@ Her kayıt:
 - code
 - description
 - scope = system | equipment
-- equipment = ekipman bazlıysa ekipman kodlarını virgülle ayırılmış string; sistem bazlıysa ""
-- results = system bazlıysa örn. {"status":"U"}; equipment bazlıysa örn. {"YD1":"UD","YD2":"U"}
+- equipment = ekipman bazlıysa bu kontrol maddesine bağlı ekipman kodlarını virgülle ayrılmış string; sistem bazlıysa ""
+- results = sistem bazlıysa örn. {"status":"U"}; ekipman bazlıysa örn. {"YD1":"UD","YD2":"U"}
 - source_pages
 
 Ekipman bazlı kontrol sonucunu sistem geneline yayma.
@@ -147,18 +147,41 @@ alanlarını çıkar.
 Raporda olmayan ekipmanı uydurma.
 Yangın dolabı kodları raporda gerçek fiziksel ekipman olarak listeleniyorsa components altında tut.
 
-8) FINDINGS DISCOVERY
-Bulguları ayrı çıkar.
-Her bulgu:
+8) FINDINGS DISCOVERY — TAMAMEN AI SEMANTİK KATMANI
+Findings bölümü tablo extraction işi değildir. Bulguları PDF'nin anlamsal içeriğinden sen çıkaracaksın.
+
+Her bulgu için yalnızca:
 - id
 - system_name
 - description
 - affected_equipment
 - source_pages
+alanlarını üret.
 
-Bulgu metninde belirli ekipman kodu açıkça geçiyorsa affected_equipment'e koy.
-Kod geçmiyorsa ekipman tahmin etme.
-Aynı bulguyu ekipman başına çoğaltma.
+ANA KURAL:
+Her bulguyu ait olduğu sisteme kendin bağla.
+Örneğin rapor bir uygunsuzluğu açıkça Yangın Dolapları bölümünde veriyorsa system_name = "Yangın Dolapları" olarak ata.
+
+Bulgu belirli bir fiziksel ekipmana açıkça aitse affected_equipment içine ekipman kodunu koy.
+Örneğin bulgu metninde "YD3" açıkça geçiyorsa affected_equipment = ["YD3"] olabilir.
+
+Ekipman kodu bulgu metninde veya açık ve doğrudan bulgu bağlamında belirtilmiyorsa ekipman tahmin etme; affected_equipment = [].
+
+Bir sistemde birden fazla bulgu varsa ayrı findings kayıtları oluştur.
+Aynı bulguyu ekipman sayısı kadar kopyalama.
+
+Bulgu sistem bazlıysa affected_equipment boş kalabilir.
+
+Kontrol tablosundaki U / UD / N değerlerinden otomatik olarak yeni bir finding uydurma. Finding yalnızca raporda gerçek bir uygunsuzluk/bulgu/not/açıklama olarak ifade edilmişse çıkar.
+
+Aynı metnin hem kontrol tablosunda hem bulgular bölümünde tekrar edilmesi durumunda tek bir anlamlı finding oluştur; mümkünse gerçek bulgu/açıklama bölümünü source_pages olarak tercih et.
+
+Sistem adı açıkça yazmıyorsa yakın bölüm başlığı, tablo başlığı ve metinsel bağlamdan sistem ilişkisini çözmeye çalış. Yine de güvenilir biçimde belirlenemiyorsa system_name = null kullan.
+
+Bulgu açıklamasını anlamını bozmadan koru. Ekipman kodu, kontrol kodu veya önemli teknik ifade bulgu metninde geçiyorsa silme.
+
+BELGE / PROJE / KAYIT:
+Fiziksel ekipman olmayan proje, belge veya kayıt uygunsuzluklarını fiziksel ekipman olarak üretme. Bunları ait oldukları sistem altında finding olarak belirt.
 
 9) CAMELOT TEMPLATE DISCOVERY
 Her önemli tablo için template içinde şu bilgileri üret:
@@ -254,6 +277,9 @@ extracted_data şu yapıya uymalı:
 }
 
 HEDEF JSON KURALLARI:
+- findings tamamen AI tarafından çıkarılır; Camelot findings üretmez.
+- findings.system_name bulgunun ait olduğu sistemi göstermelidir.
+- findings.affected_equipment yalnızca açıkça desteklenen ekipmanları içermelidir.
 - equipment_count_known=false yalnızca rapor ekipman sayısını gerçekten belirlemeye izin vermiyorsa kullan.
 - equipment_count, components içindeki gerçek ekipman sayısı biliniyorsa ondan hesaplanabilir.
 - control_count, sistemin control_items sayısından hesaplanabilir.
