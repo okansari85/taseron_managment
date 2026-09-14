@@ -2,7 +2,17 @@
 
 namespace App\Services\Ai;
 
-class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionTableAnalyzerV11
+/**
+ * Final fire-suppression report normalizer.
+ *
+ * Control items and findings are intentionally independent datasets.
+ * - control_items: control criterion + observed status/equipment from the matrix
+ * - findings: semantic findings + affected equipment
+ * - no finding -> control binding
+ * - no equipment status calculation
+ * - no nonconforming counts
+ */
+class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionTableAnalyzerV10
 {
     private CoordinateTableAnalyzer $coordinateAnalyzer;
 
@@ -13,360 +23,343 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
     public function analyze(array $pages, array $semantic = []): array
     {
-        $result = parent::analyze($pages, $semantic);
-        $result = $this->removeFindingRowsFromControls($result);
-        $result = $this->normalizeFindings($result);
+        $base = parent::analyze($pages, $semantic);
 
-        $coordinatePages = [];
-        foreach ($pages as $page) {
-            if (isset($page['data'])) {
-                $coordinatePages[] = $page;
-            }
+        $systems = [];
+        foreach ((array)($base['systems'] ?? []) as $system) {
+            if (!is_array($system)) continue;
+
+            $name = trim((string)($system['name'] ?? ''));
+            if ($name === '') continue;
+
+            $category = trim((string)($system['category'] ?? '')) ?: 'diger';
+            $components = $this->cleanComponents((array)($system['components'] ?? []));
+            $controls = $this->cleanControls((array)($system['control_items'] ?? []));
+
+            $systems[] = [
+                'name' => $name,
+                'category' => $category,
+                'equipment_count' => count($components),
+                'equipment_count_known' => count($components) > 0,
+                'control_count' => count($controls),
+                'components' => $components,
+                'control_items' => $controls,
+            ];
         }
+
+        $coordinatePages = array_values(array_filter(
+            $pages,
+            fn($page) => is_array($page) && isset($page['data'])
+        ));
 
         if ($coordinatePages) {
             $coordinateControls = $this->coordinateAnalyzer->analyze(
                 $coordinatePages,
-                $this->equipmentFromSystems($result['systems'] ?? [])
+                $this->equipmentFromSystems($systems)
             );
-            $result = $this->applyCoordinateControls($result, $coordinateControls);
+            $systems = $this->applyCoordinateControls($systems, $coordinateControls);
+            $systems = $this->groupControlsByCode($systems);
         }
 
-        $result = $this->groupControlsByCode($result);
-        $result = $this->bindControlEquipmentFromFindings($result);
-        $result = $this->recalculateSystemSummaries($result);
+        $findings = $this->normalizeFindings(
+            (array)($base['findings'] ?? []),
+            $systems
+        );
 
-        foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
-            unset($result['systems'][$systemIndex]['findings']);
-        }
+        $report = (array)($semantic['report'] ?? []);
 
-        $result['analyzer']['version'] = '12.9.0';
-        $result['analyzer']['fixture_mode'] = true;
-
-        return $result;
+        return [
+            'report' => [
+                'report_no' => $report['report_no'] ?? null,
+                'company_name' => $report['company_name'] ?? null,
+                'control_date' => $report['control_date'] ?? null,
+                'next_control_date' => $report['next_control_date'] ?? null,
+                'overall_result' => $report['overall_result'] ?? null,
+            ],
+            'covered_categories' => array_values(array_unique(array_filter(
+                array_map(fn(array $system) => $system['category'] ?? null, $systems)
+            ))),
+            'systems' => $systems,
+            'findings' => $findings,
+            'matched_inventory_items' => (array)($base['matched_inventory_items'] ?? []),
+            'candidate_inventory_items' => (array)($base['candidate_inventory_items'] ?? []),
+            'unmatched_codes' => (array)($base['unmatched_codes'] ?? []),
+            'analyzer' => [
+                'version' => '12.10.0',
+                'table_count' => (int)($base['analyzer']['table_count'] ?? 0),
+                'equipment_count' => array_sum(array_map(
+                    fn(array $system) => (int)($system['equipment_count'] ?? 0),
+                    $systems
+                )),
+                'control_count' => array_sum(array_map(
+                    fn(array $system) => (int)($system['control_count'] ?? 0),
+                    $systems
+                )),
+                'finding_count' => count($findings),
+            ],
+        ];
     }
 
-    private function removeFindingRowsFromControls(array $result): array
+    private function cleanComponents(array $components): array
     {
-        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-            $controls = [];
-            foreach ($system['control_items'] ?? [] as $control) {
-                $description = mb_strtolower((string)($control['description'] ?? ''), 'UTF-8');
-                if (str_contains($description, 'bulgu') && !preg_match('/^\s*\d+(?:\.\d+)?\s*\)/u', $description)) {
-                    continue;
-                }
-                $controls[] = $control;
-            }
-            $result['systems'][$systemIndex]['control_items'] = $controls;
-        }
+        $out = [];
 
-        return $result;
-    }
+        foreach ($components as $component) {
+            if (!is_array($component)) continue;
 
-    private function normalizeFindings(array $result): array
-    {
-        $systemEquipment = [];
-        foreach ($result['systems'] ?? [] as $system) {
-            if (!is_array($system)) continue;
-            $name = $this->normalizeKey((string)($system['name'] ?? ''));
-            if ($name === '') continue;
-            $systemEquipment[$name] = array_values(array_filter(array_map(
-                fn ($component) => trim((string)($component['code'] ?? '')),
-                (array)($system['components'] ?? [])
-            )));
-        }
+            $code = trim((string)($component['code'] ?? ''));
+            if ($code === '') continue;
 
-        $projectionRefs = [];
-        foreach ($result['systems'] ?? [] as $system) {
-            foreach ((array)($system['findings'] ?? []) as $projection) {
-                $id = trim((string)($projection['id'] ?? ''));
-                if ($id === '') continue;
-                $projectionRefs[$id] = array_values(array_unique(array_filter(array_map(
-                    'strval',
-                    (array)($projection['equipment_refs'] ?? [])
-                ))));
-            }
-        }
-
-        foreach ($result['findings'] ?? [] as $index => $finding) {
-            if (!is_array($finding)) continue;
-
-            $id = trim((string)($finding['id'] ?? '')) ?: 'finding-' . ($index + 1);
-            $description = trim((string)($finding['description'] ?? ''));
-            $systemNameRaw = trim((string)($finding['system_name'] ?? ''));
-            $systemName = $this->normalizeKey($systemNameRaw);
-
-            $refs = array_merge(
-                (array)($finding['affected_equipment'] ?? []),
-                (array)($finding['equipment_refs'] ?? []),
-                (array)($finding['_equipment_refs'] ?? []),
-                $projectionRefs[$id] ?? []
-            );
-            $refs = $this->resolveEquipmentRefsFromTextAndExisting($description, $refs, $systemEquipment);
-
-            if (!$refs && $systemName !== '' && $this->isSystemWideFinding($description)) {
-                foreach ($systemEquipment as $knownSystem => $equipment) {
-                    if ($knownSystem === $systemName || str_contains($knownSystem, $systemName) || str_contains($systemName, $knownSystem)) {
-                        $refs = $equipment;
-                        break;
-                    }
-                }
-            }
-
-            $result['findings'][$index] = [
-                'id' => $id,
-                'system_name' => $systemNameRaw !== '' ? $systemNameRaw : null,
-                'description' => $description,
-                'affected_equipment' => array_values(array_unique($refs)),
-                'source_pages' => array_values($finding['source_pages'] ?? []),
+            $key = $this->normalizeEquipmentCode($code);
+            $out[$key] = [
+                'code' => $code,
+                'name' => $component['name'] ?? null,
+                'location' => $component['location'] ?? $component['location_note'] ?? null,
+                'brand' => $component['brand'] ?? null,
+                'model' => $component['model'] ?? null,
+                'serial_no' => $component['serial_no'] ?? $component['serial'] ?? null,
+                'properties' => (array)($component['properties'] ?? []),
+                'source_pages' => array_values(array_unique(array_map(
+                    'intval',
+                    (array)($component['source_pages'] ?? [])
+                ))),
             ];
         }
 
-        foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
-            unset($result['systems'][$systemIndex]['findings']);
-        }
-
-        return $result;
+        return array_values($out);
     }
 
-    private function isSystemWideFinding(string $description): bool
+    private function cleanControls(array $controls): array
     {
-        $text = mb_strtolower(trim($description), 'UTF-8');
-        if ($text === '') return false;
+        $out = [];
 
-        foreach ([
-            'olmalıdır',
-            'bulunmalıdır',
-            'mevcut olmalıdır',
-            'bulundurulmalıdır',
-            'olması gerekmektedir',
-        ] as $pattern) {
-            if (str_contains($text, $pattern)) return true;
+        foreach ($controls as $control) {
+            if (!is_array($control)) continue;
+
+            $description = trim((string)($control['description'] ?? ''));
+            if ($this->looksLikeFindingRow($description)) continue;
+
+            $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
+            if ($code === '') continue;
+
+            $status = $this->normalizeControlStatus($control['status'] ?? null);
+            $refs = $this->normalizeEquipmentRefs((array)($control['equipment_refs'] ?? []));
+
+            $out[] = [
+                'code' => $code,
+                'description' => $description !== '' ? $description : null,
+                'status' => $status,
+                'equipment_refs' => $refs,
+                'source_pages' => array_values(array_unique(array_map(
+                    'intval',
+                    (array)($control['source_pages'] ?? [])
+                ))),
+            ];
         }
 
-        return false;
+        return $out;
     }
 
-    private function groupControlsByCode(array $result): array
+    private function groupControlsByCode(array $systems): array
     {
-        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
+        foreach ($systems as $systemIndex => $system) {
             $grouped = [];
 
             foreach ((array)($system['control_items'] ?? []) as $control) {
                 if (!is_array($control)) continue;
 
                 $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
-                $key = $code !== '' ? $code : '__NO_CODE__';
+                if ($code === '') continue;
 
-                if (!isset($grouped[$key])) {
-                    $grouped[$key] = [
-                        'code' => $code !== '' ? $code : null,
+                if (!isset($grouped[$code])) {
+                    $grouped[$code] = [
+                        'code' => $code,
                         'description' => $control['description'] ?? null,
                         'results' => [],
                         'source_pages' => [],
                     ];
                 }
 
-                $description = trim((string)($control['description'] ?? ''));
-                if (($grouped[$key]['description'] ?? null) === null && $description !== '') {
-                    $grouped[$key]['description'] = $description;
+                if (($grouped[$code]['description'] ?? null) === null && !empty($control['description'])) {
+                    $grouped[$code]['description'] = $control['description'];
                 }
 
                 $status = $this->normalizeControlStatus($control['status'] ?? null);
-                $refs = array_values(array_unique(array_filter(array_map(
-                    'strval',
-                    (array)($control['equipment_refs'] ?? [])
-                ))));
-
                 if ($status !== null) {
-                    if (!isset($grouped[$key]['results'][$status])) {
-                        $grouped[$key]['results'][$status] = [];
+                    $refs = $this->normalizeEquipmentRefs((array)($control['equipment_refs'] ?? []));
+                    if (!isset($grouped[$code]['results'][$status])) {
+                        $grouped[$code]['results'][$status] = [];
                     }
-                    $grouped[$key]['results'][$status] = array_values(array_unique(array_merge(
-                        $grouped[$key]['results'][$status],
+                    $grouped[$code]['results'][$status] = array_values(array_unique(array_merge(
+                        $grouped[$code]['results'][$status],
                         $refs
                     )));
                 }
 
-                $grouped[$key]['source_pages'] = array_values(array_unique(array_merge(
-                    $grouped[$key]['source_pages'],
-                    array_values($control['source_pages'] ?? [])
+                $grouped[$code]['source_pages'] = array_values(array_unique(array_merge(
+                    $grouped[$code]['source_pages'],
+                    array_map('intval', (array)($control['source_pages'] ?? []))
                 )));
             }
 
-            $result['systems'][$systemIndex]['control_items'] = array_values($grouped);
+            $systems[$systemIndex]['control_items'] = array_values($grouped);
+            $systems[$systemIndex]['control_count'] = count($systems[$systemIndex]['control_items']);
         }
 
-        return $result;
+        return $systems;
     }
 
-    private function bindControlEquipmentFromFindings(array $result): array
+    private function applyCoordinateControls(array $systems, array $coordinateControls): array
     {
-        $findingsBySystemAndCode = [];
+        foreach ($coordinateControls as $control) {
+            if (!is_array($control)) continue;
 
-        foreach ((array)($result['findings'] ?? []) as $finding) {
-            if (!is_array($finding)) continue;
+            $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
+            $status = $this->normalizeControlStatus($control['status'] ?? null);
+            $refs = $this->normalizeEquipmentRefs((array)($control['equipment_refs'] ?? []));
 
-            $code = $this->extractCriterionCode((string)($finding['description'] ?? ''));
-            if ($code === '') continue;
+            if ($code === '' || $status === null || !$refs) continue;
 
-            $systemKey = $this->normalizeKey((string)($finding['system_name'] ?? ''));
-            $refs = array_values(array_unique(array_filter(array_map(
-                'strval',
-                (array)($finding['affected_equipment'] ?? [])
-            ))));
-            if (!$refs) continue;
+            foreach ($systems as $systemIndex => $system) {
+                $systemCodes = [];
+                foreach ((array)($system['components'] ?? []) as $component) {
+                    $raw = trim((string)($component['code'] ?? ''));
+                    if ($raw !== '') $systemCodes[$this->normalizeEquipmentCode($raw)] = $raw;
+                }
 
-            $key = $systemKey . '|' . $code;
-            $findingsBySystemAndCode[$key] = array_values(array_unique(array_merge(
-                $findingsBySystemAndCode[$key] ?? [],
-                $refs
+                $matched = [];
+                foreach ($refs as $ref) {
+                    $key = $this->normalizeEquipmentCode($ref);
+                    if (isset($systemCodes[$key])) $matched[$key] = $systemCodes[$key];
+                }
+                if (!$matched) continue;
+
+                foreach ($systems[$systemIndex]['control_items'] ?? [] as $controlIndex => $item) {
+                    if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
+
+                    if (!isset($systems[$systemIndex]['control_items'][$controlIndex]['results'][$status])) {
+                        $systems[$systemIndex]['control_items'][$controlIndex]['results'][$status] = [];
+                    }
+
+                    $systems[$systemIndex]['control_items'][$controlIndex]['results'][$status] = array_values(array_unique(array_merge(
+                        $systems[$systemIndex]['control_items'][$controlIndex]['results'][$status],
+                        array_values($matched)
+                    )));
+                }
+            }
+        }
+
+        return $systems;
+    }
+
+    private function normalizeFindings(array $findings, array $systems): array
+    {
+        $equipmentBySystem = [];
+        foreach ($systems as $system) {
+            $systemKey = $this->normalizeKey((string)($system['name'] ?? ''));
+            if ($systemKey === '') continue;
+            $equipmentBySystem[$systemKey] = array_values(array_filter(array_map(
+                fn(array $component) => trim((string)($component['code'] ?? '')),
+                (array)($system['components'] ?? [])
             )));
         }
 
-        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-            $systemKey = $this->normalizeKey((string)($system['name'] ?? ''));
-            $systemCodes = [];
-            foreach ((array)($system['components'] ?? []) as $component) {
-                $code = trim((string)($component['code'] ?? ''));
-                if ($code !== '') {
-                    $systemCodes[$this->normalizeEquipmentCode($code)] = $code;
+        $out = [];
+        foreach ($findings as $index => $finding) {
+            if (!is_array($finding)) continue;
+
+            $description = trim((string)($finding['description'] ?? ''));
+            if ($description === '') continue;
+
+            $id = trim((string)($finding['id'] ?? '')) ?: 'finding-' . ($index + 1);
+            $systemName = trim((string)($finding['system_name'] ?? ''));
+            $systemKey = $this->normalizeKey($systemName);
+
+            $existingRefs = array_merge(
+                (array)($finding['affected_equipment'] ?? []),
+                (array)($finding['equipment_refs'] ?? []),
+                (array)($finding['_equipment_refs'] ?? [])
+            );
+
+            $knownEquipment = [];
+            foreach ($equipmentBySystem as $equipment) {
+                foreach ($equipment as $code) {
+                    $knownEquipment[$this->normalizeEquipmentCode($code)] = $code;
                 }
             }
 
-            foreach ((array)($system['control_items'] ?? []) as $controlIndex => $control) {
-                $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
-                if ($code === '') continue;
+            $refs = [];
+            foreach ($existingRefs as $ref) {
+                $key = $this->normalizeEquipmentCode((string)$ref);
+                if ($key !== '' && isset($knownEquipment[$key])) {
+                    $refs[$key] = $knownEquipment[$key];
+                }
+            }
 
-                $results = (array)($control['results'] ?? []);
-                $hasMatrixRefs = false;
-                foreach ($results as $refs) {
-                    if (!empty($refs)) {
-                        $hasMatrixRefs = true;
+            $normalizedText = strtoupper(str_replace(['–', '—', '‑', '−'], '-', $description));
+            foreach ($knownEquipment as $key => $code) {
+                if (preg_match('/(?<![A-Z0-9])' . preg_quote($key, '/') . '(?![A-Z0-9])/u', $normalizedText)) {
+                    $refs[$key] = $code;
+                }
+            }
+
+            if (!$refs && $systemKey !== '' && $this->isSystemWideFinding($description)) {
+                foreach ($equipmentBySystem as $knownSystem => $equipment) {
+                    if ($knownSystem === $systemKey || str_contains($knownSystem, $systemKey) || str_contains($systemKey, $knownSystem)) {
+                        $refs = array_fill_keys(
+                            array_map(fn($code) => $this->normalizeEquipmentCode($code), $equipment),
+                            null
+                        );
+                        foreach ($equipment as $code) {
+                            $refs[$this->normalizeEquipmentCode($code)] = $code;
+                        }
                         break;
                     }
                 }
-
-                if ($hasMatrixRefs) {
-                    continue;
-                }
-
-                $findingRefs = [];
-                foreach ([$systemKey . '|' . $code, '|' . $code] as $key) {
-                    foreach ((array)($findingsBySystemAndCode[$key] ?? []) as $ref) {
-                        $normalized = $this->normalizeEquipmentCode((string)$ref);
-                        if (isset($systemCodes[$normalized])) {
-                            $findingRefs[$normalized] = $systemCodes[$normalized];
-                        }
-                    }
-                }
-
-                if (!$findingRefs || !array_key_exists('UD', $results)) {
-                    continue;
-                }
-
-                $results['UD'] = array_values(array_unique(array_merge(
-                    (array)$results['UD'],
-                    array_values($findingRefs)
-                ));
-
-                $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'] = $results;
             }
+
+            $out[] = [
+                'id' => $id,
+                'system_name' => $systemName !== '' ? $systemName : null,
+                'description' => $description,
+                'affected_equipment' => array_values($refs),
+                'source_pages' => array_values(array_unique(array_map(
+                    'intval',
+                    (array)($finding['source_pages'] ?? [])
+                ))),
+            ];
         }
 
-        return $result;
+        return $out;
     }
 
-    private function extractCriterionCode(string $text): string
+    private function isSystemWideFinding(string $description): bool
     {
-        if (preg_match('/^\s*(\d+(?:\.\d+)?)\s*\)/u', $text, $m)) {
-            return $this->normalizeControlCode($m[1]);
+        $text = mb_strtolower($description, 'UTF-8');
+        foreach ([
+            'olmalıdır',
+            'bulunmalıdır',
+            'mevcut olmalıdır',
+            'bulundurulmalıdır',
+            'olması gerekmektedir',
+        ] as $phrase) {
+            if (str_contains($text, $phrase)) return true;
         }
-        return '';
+        return false;
     }
 
-    private function applyCoordinateControls(array $result, array $coordinateControls): array
+    private function looksLikeFindingRow(string $description): bool
     {
-        foreach ($coordinateControls as $control) {
-            $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
-            $status = $this->normalizeControlStatus($control['status'] ?? null);
-            $equipmentRefs = array_values(array_unique(array_filter(array_map(
-                'strval',
-                (array)($control['equipment_refs'] ?? [])
-            ))));
-
-            if ($code === '' || $status === null || !$equipmentRefs) continue;
-
-            foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-                $systemCodes = array_map(
-                    fn ($component) => trim((string)($component['code'] ?? '')),
-                    $system['components'] ?? []
-                );
-                $matched = array_values(array_intersect($equipmentRefs, $systemCodes));
-                if (!$matched) continue;
-
-                foreach ($system['control_items'] ?? [] as $controlIndex => $item) {
-                    if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
-
-                    if (!isset($result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status])) {
-                        $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] = [];
-                    }
-
-                    $existing = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] ?? []);
-                    $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] = array_values(array_unique(array_merge($existing, $matched)));
-                }
-            }
-        }
-
-        return $result;
-    }
-
-    private function recalculateSystemSummaries(array $result): array
-    {
-        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-            $nonconforming = [];
-            $udControlCount = 0;
-
-            foreach ((array)($system['control_items'] ?? []) as $control) {
-                $results = (array)($control['results'] ?? []);
-                foreach ((array)($results['UD'] ?? []) as $ref) {
-                    $key = $this->normalizeEquipmentCode((string)$ref);
-                    if ($key !== '') $nonconforming[$key] = $ref;
-                }
-                if (!empty($results['UD'])) $udControlCount++;
-            }
-
-            foreach ((array)($result['findings'] ?? []) as $finding) {
-                $findingSystem = $this->normalizeKey((string)($finding['system_name'] ?? ''));
-                $systemName = $this->normalizeKey((string)($system['name'] ?? ''));
-                if ($findingSystem === '' || $systemName === '') continue;
-                if ($findingSystem !== $systemName && !str_contains($findingSystem, $systemName) && !str_contains($systemName, $findingSystem)) continue;
-
-                foreach ((array)($finding['affected_equipment'] ?? []) as $ref) {
-                    $key = $this->normalizeEquipmentCode((string)$ref);
-                    if ($key !== '') $nonconforming[$key] = $ref;
-                }
-            }
-
-            $equipmentCount = count((array)($system['components'] ?? []));
-            $result['systems'][$systemIndex]['equipment_count'] = $equipmentCount;
-            $result['systems'][$systemIndex]['equipment_count_known'] = $equipmentCount > 0;
-            $result['systems'][$systemIndex]['nonconforming_equipment_count'] = count($nonconforming);
-            $result['systems'][$systemIndex]['control_count'] = count((array)($system['control_items'] ?? []));
-            $result['systems'][$systemIndex]['nonconforming_count'] = $udControlCount;
-            $result['systems'][$systemIndex]['status'] = $udControlCount > 0
-                ? 'uygun_degil'
-                : (!empty($system['control_items']) ? 'uygun' : 'belirtilmemis');
-        }
-
-        return $result;
+        $text = mb_strtolower(trim($description), 'UTF-8');
+        return str_contains($text, 'bulgu')
+            && !preg_match('/^\s*\d+(?:\.\d+)?\s*\)/u', $text);
     }
 
     private function equipmentFromSystems(array $systems): array
     {
         $equipment = [];
         foreach ($systems as $system) {
-            foreach ($system['components'] ?? [] as $component) {
+            foreach ((array)($system['components'] ?? []) as $component) {
                 $code = trim((string)($component['code'] ?? ''));
                 if ($code !== '') $equipment[] = ['code' => $code];
             }
@@ -374,60 +367,23 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return $equipment;
     }
 
-    private function resolveEquipmentRefsFromTextAndExisting(string $text, array $existing, array $systemEquipment): array
+    private function normalizeEquipmentRefs(array $refs): array
     {
-        $allCodes = [];
-        foreach ($systemEquipment as $equipment) {
-            foreach ($equipment as $code) {
-                $key = $this->normalizeEquipmentCode($code);
-                if ($key !== '') $allCodes[$key] = $code;
-            }
+        $out = [];
+        foreach ($refs as $ref) {
+            $ref = trim((string)$ref);
+            if ($ref === '') continue;
+            $key = $this->normalizeEquipmentCode($ref);
+            if ($key !== '') $out[$key] = $ref;
         }
-
-        $refs = [];
-        foreach ($existing as $ref) {
-            $key = $this->normalizeEquipmentCode((string)$ref);
-            if ($key !== '' && isset($allCodes[$key])) $refs[$key] = $allCodes[$key];
-        }
-
-        $normalizedText = strtoupper(str_replace(['–', '—', '‑', '−'], '-', $text));
-
-        foreach (array_keys($allCodes) as $key) {
-            if (preg_match('/(?<![A-Z0-9])' . preg_quote($key, '/') . '(?![A-Z0-9])/u', $normalizedText)) {
-                $refs[$key] = $allCodes[$key];
-            }
-        }
-
-        preg_match_all(
-            '/\b(YD|HD|H|P)\s*[-_]?\s*(\d+)\s*(?:-|TO|ILE|İLE|ARASI)\s*(?:\1\s*[-_]?\s*)?(\d+)\b/iu',
-            $normalizedText,
-            $ranges,
-            PREG_SET_ORDER
-        );
-
-        foreach ($ranges as $range) {
-            $prefix = strtoupper($range[1]);
-            $from = (int)$range[2];
-            $to = (int)$range[3];
-            if ($from > $to) [$from, $to] = [$to, $from];
-
-            for ($number = $from; $number <= $to; $number++) {
-                foreach ([$prefix . $number, $prefix . '-' . $number] as $candidate) {
-                    $key = $this->normalizeEquipmentCode($candidate);
-                    if (isset($allCodes[$key])) $refs[$key] = $allCodes[$key];
-                }
-            }
-        }
-
-        return array_values($refs);
+        return array_values($out);
     }
 
     private function normalizeControlStatus(mixed $status): ?string
     {
-        $status = strtoupper(trim((string)$status));
-        $status = preg_replace('/\s+/u', '', $status);
-        $status = str_replace(['.', '_', '-'], '', $status);
-        return $status !== '' ? $status : null;
+        $value = strtoupper(trim((string)$status));
+        $value = str_replace(['.', ' ', '_', '-'], '', $value);
+        return $value !== '' ? $value : null;
     }
 
     private function normalizeControlCode(string $code): string
