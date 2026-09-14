@@ -40,7 +40,7 @@ class TemplateDrivenFireSuppressionExtractor
             ];
         }
 
-        $result = [
+        return [
             'template' => $template,
             'extracted_data' => [
                 'report_information' => $this->extractReportInformation($camelot),
@@ -49,20 +49,7 @@ class TemplateDrivenFireSuppressionExtractor
                 'overall_result' => $this->extractOverallResult($camelot),
                 'findings' => (array) ($semantic['extracted_data']['findings'] ?? []),
             ],
-            'camelot' => [
-                'version' => $camelot['version'] ?? null,
-                'table_count' => count($tables),
-                'warnings' => (array) ($camelot['warnings'] ?? []),
-                'tables' => $tables,
-            ],
         ];
-
-        $diagnostic = $this->findInvalidUtf8Path($result);
-        if ($diagnostic !== null) {
-            throw new RuntimeException('Camelot çıktısında geçersiz UTF-8 bulundu: ' . $diagnostic);
-        }
-
-        return $result;
     }
 
     private function findInvalidUtf8Path(mixed $value, string $path = '$'): ?string
@@ -74,9 +61,7 @@ class TemplateDrivenFireSuppressionExtractor
         if (!is_array($value)) return null;
 
         foreach ($value as $key => $item) {
-            if (is_string($key) && !mb_check_encoding($key, 'UTF-8')) {
-                return $path . '[key]';
-            }
+            if (is_string($key) && !mb_check_encoding($key, 'UTF-8')) return $path . '[key]';
             $childPath = is_int($key) ? $path . '[' . $key . ']' : $path . '[' . json_encode($key, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ']';
             $invalidPath = $this->findInvalidUtf8Path($item, $childPath);
             if ($invalidPath !== null) return $invalidPath;
@@ -171,8 +156,7 @@ class TemplateDrivenFireSuppressionExtractor
                 continue;
             }
             if (preg_match('/^(\d+)-(\d+)$/u', $compact, $m)) {
-                $start = (int) $m[1];
-                $end = (int) $m[2];
+                $start = (int) $m[1]; $end = (int) $m[2];
                 if ($end >= $start && ($end - $start) <= 500) {
                     for ($i = $start; $i <= $end; $i++) $tokens[] = (string) $i;
                     continue;
@@ -320,32 +304,32 @@ class TemplateDrivenFireSuppressionExtractor
         $value = mb_strtoupper(trim((string) $value), 'UTF-8');
         $value = preg_replace('/[.\s_\-]+/u', '', $value) ?? $value;
         if ($value === '' || mb_strlen($value, 'UTF-8') > 20) return null;
-        return preg_match('/^[A-ZÇĞİÖŞÜ]+$/u', $value) ? $value : null;
-    }
-
-    private function cleanValue(string $value): string
-    {
-        return trim(preg_replace('/\s+/u', ' ', str_replace(["\n", "\r"], ' ', $value)) ?? $value);
+        return in_array($value, ['U', 'UD', 'N'], true) ? $value : null;
     }
 
     private function nextNonEmpty(array $row, int $start): ?string
     {
-        for ($i = $start; $i < count($row); $i++) {
+        for ($i = $start, $count = count($row); $i < $count; $i++) {
             $value = trim((string) ($row[$i] ?? ''));
-            if ($value !== '') return $value;
+            if ($value !== '' && $value !== '-') return $value;
         }
         return null;
     }
 
-    private function itemKey(array $template, string $code): string
+    private function cleanValue(string $value): string
     {
-        return $this->normalizeLabel((string) ($template['equipment_name'] ?? 'equipment')) . '|' . $code;
+        return trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
     }
 
     private function string(mixed $value): ?string
     {
-        if ($value === null) return null;
-        $value = trim((string) $value);
+        $value = is_string($value) ? trim($value) : null;
         return $value === '' ? null : $value;
+    }
+
+    private function itemKey(array $template, string $code): string
+    {
+        $name = $this->string($template['equipment_name'] ?? null) ?? 'equipment';
+        return $name . ':' . $code;
     }
 }
