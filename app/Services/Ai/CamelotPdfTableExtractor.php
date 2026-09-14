@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class CamelotPdfTableExtractor
@@ -26,8 +27,10 @@ class CamelotPdfTableExtractor
             2 => ['pipe', 'w'],
         ];
 
+        Log::info('Camelot debug: process starting');
         $process = proc_open($escaped, $descriptor, $pipes, base_path());
         if (!is_resource($process)) {
+            Log::error('Camelot debug: process could not start');
             throw new RuntimeException('Camelot Python process başlatılamadı.');
         }
 
@@ -38,17 +41,44 @@ class CamelotPdfTableExtractor
         fclose($pipes[2]);
         $exitCode = proc_close($process);
 
+        Log::info('Camelot debug: process finished', [
+            'exit_code' => $exitCode,
+            'stdout_bytes' => strlen($stdout),
+            'stderr_bytes' => strlen($stderr),
+            'stdout_utf8' => mb_check_encoding($stdout, 'UTF-8'),
+            'stderr_utf8' => mb_check_encoding($stderr, 'UTF-8'),
+        ]);
+
         if ($exitCode !== 0) {
+            Log::error('Camelot debug: process failed', [
+                'stderr_preview' => substr($stderr, 0, 1000),
+                'stdout_preview' => substr($stdout, 0, 1000),
+            ]);
             throw new RuntimeException('Camelot başarısız: ' . trim($stderr ?: $stdout));
         }
 
         $decoded = json_decode($stdout, true);
+        Log::info('Camelot debug: json decode', [
+            'json_error' => json_last_error_msg(),
+            'decoded_array' => is_array($decoded),
+        ]);
+
         if (!is_array($decoded)) {
+            Log::error('Camelot debug: invalid JSON', [
+                'stdout_preview' => substr($stdout, 0, 1000),
+            ]);
             throw new RuntimeException('Camelot geçerli JSON döndürmedi: ' . substr(trim($stdout), 0, 500));
         }
         if (!empty($decoded['error'])) {
+            Log::error('Camelot debug: python returned error', [
+                'error' => (string) $decoded['error'],
+            ]);
             throw new RuntimeException('Camelot: ' . $decoded['error']);
         }
+
+        Log::info('Camelot debug: extraction decoded successfully', [
+            'table_count' => count((array) ($decoded['tables'] ?? [])),
+        ]);
 
         return $decoded;
     }
