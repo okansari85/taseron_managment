@@ -15,7 +15,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         $result = parent::analyze($pages, $semantic);
         $result = $this->removeFindingRowsFromControls($result);
-        $result = $this->bindFindingEquipmentToControls($result);
+        $result = $this->moveFindingEquipmentToRoot($result);
 
         $coordinatePages = [];
         foreach ($pages as $page) {
@@ -32,7 +32,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result = $this->applyCoordinateControls($result, $coordinateControls);
         }
 
-        $result['analyzer']['version'] = '12.4.1';
+        $result['analyzer']['version'] = '12.5.0';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -55,160 +55,95 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return $result;
     }
 
-    private function bindFindingEquipmentToControls(array $result): array
+    /**
+     * Findings are independent of controls. The finding itself owns the
+     * equipment affected by that finding.
+     *
+     * Explicit equipment references are resolved against extracted equipment.
+     * If a finding is clearly system-wide and names a system, all equipment
+     * belonging to that physical system is attached. Report-level findings
+     * without a system remain unbound.
+     */
+    private function moveFindingEquipmentToRoot(array $result): array
     {
-        $rootFindings = [];
-        foreach ($result['findings'] ?? [] as $finding) {
-            if (isset($finding['id'])) {
-                $rootFindings[(string)$finding['id']] = $finding;
+        $systems = (array)($result['systems'] ?? []);
+        $systemEquipment = [];
+        foreach ($systems as $system) {
+            if (!is_array($system)) continue;
+            $name = $this->normalizeKey((string)($system['name'] ?? ''));
+            if ($name === '') continue;
+            $systemEquipment[$name] = array_values(array_filter(array_map(
+                fn ($component) => trim((string)($component['code'] ?? '')),
+                (array)($system['components'] ?? [])
+            )));
+        }
+
+        $projectionRefs = [];
+        foreach ($systems as $system) {
+            foreach ((array)($system['findings'] ?? []) as $projection) {
+                $id = trim((string)($projection['id'] ?? ''));
+                if ($id === '') continue;
+                $projectionRefs[$id] = array_values(array_unique(array_filter(array_map(
+                    'strval',
+                    (array)($projection['equipment_refs'] ?? [])
+                ))));
             }
         }
 
+        foreach ($result['findings'] ?? [] as $index => $finding) {
+            if (!is_array($finding)) continue;
+            $id = trim((string)($finding['id'] ?? ''));
+            $description = trim((string)($finding['description'] ?? ''));
+            $refs = $projectionRefs[$id] ?? [];
+
+            $systemName = $this->normalizeKey((string)($finding['system_name'] ?? ''));
+            if (!$refs && $systemName !== '') {
+                foreach ($systemEquipment as $knownSystem => $equipment) {
+                    if ($knownSystem === $systemName || str_contains($knownSystem, $systemName) || str_contains($systemName, $knownSystem)) {
+                        if ($this->isSystemWideFinding($description)) {
+                            $refs = $equipment;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            $result['findings'][$index]['affected_equipment'] = array_values(array_unique($refs));
+            unset($result['findings'][$index]['equipment_refs']);
+            unset($result['findings'][$index]['_equipment_refs']);
+        }
+
+        // System finding projections are no longer a second relationship layer.
         foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-            $equipmentCodes = $this->equipmentCodeMap((array)($system['components'] ?? []));
-            if (!$equipmentCodes) {
-                continue;
-            }
-
-            $controlIndexes = [];
-            foreach ($system['control_items'] ?? [] as $controlIndex => $control) {
-                $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
-                if ($code !== '') {
-                    $controlIndexes[$code] = $controlIndex;
-                }
-            }
-
-            foreach ($system['findings'] ?? [] as $projection) {
-                $findingId = (string)($projection['id'] ?? '');
-                if ($findingId === '' || !isset($rootFindings[$findingId])) {
-                    continue;
-                }
-
-                $finding = $rootFindings[$findingId];
-                $description = (string)($finding['description'] ?? '');
-                $refs = $this->resolveFindingEquipmentRefs(
-                    $description,
-                    (array)($projection['equipment_refs'] ?? []),
-                    $equipmentCodes
-                );
-
-                if (!$refs) {
-                    continue;
-                }
-
-                $criterionCode = $this->extractCriterionCode($description);
-                if ($criterionCode === null || !isset($controlIndexes[$criterionCode])) {
-                    continue;
-                }
-
-                $controlIndex = $controlIndexes[$criterionCode];
-                $existingRefs = $this->resolveFindingEquipmentRefs(
-                    '',
-                    (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] ?? []),
-                    $equipmentCodes
-                );
-
-                $result['systems'][$systemIndex]['control_items'][$controlIndex]['scope'] = 'equipment';
-                $result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] = array_values(array_unique(array_merge($existingRefs, $refs)));
-            }
+            $result['systems'][$systemIndex]['findings'] = [];
         }
 
         return $result;
     }
 
-    private function equipmentCodeMap(array $components): array
+    private function isSystemWideFinding(string $description): bool
     {
-        $map = [];
-        foreach ($components as $component) {
-            if (!is_array($component)) continue;
-            $code = trim((string)($component['code'] ?? ''));
-            $key = $this->normalizeEquipmentCode($code);
-            if ($key !== '') {
-                $map[$key] = $code;
-            }
-        }
-        return $map;
-    }
+        $text = mb_strtolower(trim($description), 'UTF-8');
+        if ($text === '') return false;
 
-    private function resolveFindingEquipmentRefs(string $text, array $existing, array $equipmentCodes): array
-    {
-        $refs = [];
+        // Criteria describing the presence/availability of something on the
+        // system are treated as applying to every equipment item in that system.
+        $patterns = [
+            'olmalıdır',
+            'olmalıdır.',
+            'bulunmalıdır',
+            'bulunmalıdır.',
+            'mevcut olmalıdır',
+            'bulundurulmalıdır',
+            'bulundurulmalıdır.',
+            'olması gerekmektedir',
+        ];
 
-        foreach ($existing as $ref) {
-            $key = $this->normalizeEquipmentCode((string)$ref);
-            if ($key !== '' && isset($equipmentCodes[$key])) {
-                $refs[$key] = $equipmentCodes[$key];
-            }
+        foreach ($patterns as $pattern) {
+            if (str_contains($text, $pattern)) return true;
         }
 
-        if (trim($text) === '' || !$equipmentCodes) {
-            return array_values($refs);
-        }
-
-        $normalizedText = strtoupper($text);
-        $normalizedText = str_replace(['–', '—', '‑', '−'], '-', $normalizedText);
-
-        // First resolve exact equipment codes. This covers YD14, YD-14,
-        // YD_14 and equivalent report formatting.
-        foreach (array_keys($equipmentCodes) as $normalizedCode) {
-            $pattern = preg_quote($normalizedCode, '/');
-            if (preg_match('/(?<![A-Z0-9])' . $pattern . '(?![A-Z0-9])/u', $normalizedText)) {
-                $refs[$normalizedCode] = $equipmentCodes[$normalizedCode];
-            }
-        }
-
-        // Then resolve common numeric ranges such as YD1-YD4, YD1-YD4,
-        // YD 1 ile YD 4 and YD1-YD4. Only real extracted equipment codes
-        // are emitted; no equipment is invented from the range.
-        preg_match_all(
-            '/\b(YD|HD|H|P)\s*[-_]?\s*(\d+)\s*(?:-|TO|ILE|İLE|ARASI)\s*(?:\1\s*[-_]?\s*)?(\d+)\b/iu',
-            $normalizedText,
-            $ranges,
-            PREG_SET_ORDER
-        );
-
-        foreach ($ranges as $range) {
-            $prefix = strtoupper($range[1]);
-            $from = (int)$range[2];
-            $to = (int)$range[3];
-            if ($from > $to) [$from, $to] = [$to, $from];
-
-            for ($number = $from; $number <= $to; $number++) {
-                foreach ([$prefix . $number, $prefix . '-' . $number] as $candidate) {
-                    $key = $this->normalizeEquipmentCode($candidate);
-                    if (isset($equipmentCodes[$key])) {
-                        $refs[$key] = $equipmentCodes[$key];
-                    }
-                }
-            }
-        }
-
-        return array_values($refs);
-    }
-
-    private function extractCriterionCode(string $description): ?string
-    {
-        if (preg_match('/^\s*(\d+(?:\.\d+)?)\s*\)/u', $description, $match)) {
-            return $this->normalizeControlCode($match[1]);
-        }
-
-        if (preg_match('/\b(\d+(?:\.\d+)?)\s*\)/u', $description, $match)) {
-            return $this->normalizeControlCode($match[1]);
-        }
-
-        return null;
-    }
-
-    private function normalizeControlCode(string $code): string
-    {
-        return preg_replace('/\s+/u', '', trim($code));
-    }
-
-    private function normalizeEquipmentCode(string $code): string
-    {
-        $code = strtoupper(trim($code));
-        $code = preg_replace('/\s+/u', '', $code);
-        return str_replace(['–', '—', '‑', '−', '_'], '-', $code);
+        return false;
     }
 
     private function equipmentFromSystems(array $systems): array
@@ -229,6 +164,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         foreach ($coordinateControls as $control) {
             $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
+            $status = $this->normalizeControlStatus($control['status'] ?? null);
             $equipmentRefs = array_values(array_unique(array_filter(array_map('strval', (array)($control['equipment_refs'] ?? [])))));
             if ($code === '' || !$equipmentRefs) {
                 continue;
@@ -240,14 +176,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     $system['components'] ?? []
                 );
                 $matched = array_values(array_intersect($equipmentRefs, $systemCodes));
-                if (!$matched) {
-                    continue;
-                }
+                if (!$matched) continue;
 
                 foreach ($system['control_items'] ?? [] as $controlIndex => $item) {
-                    if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) {
-                        continue;
-                    }
+                    if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
+                    if ($status !== null && $this->normalizeControlStatus($item['status'] ?? null) !== $status) continue;
 
                     $existingRefs = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] ?? []);
                     $result['systems'][$systemIndex]['control_items'][$controlIndex]['scope'] = 'equipment';
@@ -257,5 +190,27 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         }
 
         return $result;
+    }
+
+    private function normalizeControlStatus(mixed $status): ?string
+    {
+        $status = strtoupper(trim((string)$status));
+        $status = str_replace(['.', ' ', '_', '-'], '', $status);
+        if ($status === 'UD') return 'UD';
+        if ($status === 'U') return 'U';
+        if ($status === 'N') return 'N';
+        if ($status === 'GD') return 'GD';
+        return $status !== '' ? $status : null;
+    }
+
+    private function normalizeControlCode(string $code): string
+    {
+        return preg_replace('/\s+/u', '', trim($code));
+    }
+
+    private function normalizeKey(string $value): string
+    {
+        $value = mb_strtolower(trim($value), 'UTF-8');
+        return preg_replace('/\s+/u', ' ', $value);
     }
 }
