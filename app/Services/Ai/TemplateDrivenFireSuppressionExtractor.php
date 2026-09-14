@@ -40,7 +40,7 @@ class TemplateDrivenFireSuppressionExtractor
             ];
         }
 
-        return [
+        return $this->sanitizeUtf8([
             'template' => $template,
             'extracted_data' => [
                 'report_information' => $this->extractReportInformation($camelot),
@@ -55,7 +55,24 @@ class TemplateDrivenFireSuppressionExtractor
                 'warnings' => (array) ($camelot['warnings'] ?? []),
                 'tables' => $tables,
             ],
-        ];
+        ]);
+    }
+
+    private function sanitizeUtf8(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return mb_check_encoding($value, 'UTF-8')
+                ? $value
+                : mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $key => $item) {
+                $value[$key] = $this->sanitizeUtf8($item);
+            }
+        }
+
+        return $value;
     }
 
     private function extractHorizontalEquipment(array $tables, array $template): array
