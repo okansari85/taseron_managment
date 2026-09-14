@@ -12,7 +12,7 @@ use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\Ai\TemplateDiscoveryReportNormalizer;
-use App\Services\Ai\TemplateDrivenFireSuppressionMatrixExtractor;
+use App\Services\Ai\TemplateDrivenFireSuppressionCriterionExtractor;
 use App\Services\FireSuppressionReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,7 +31,7 @@ class FireSuppressionReportController extends Controller
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
         TemplateDiscoveryReportNormalizer $normalizer,
-        TemplateDrivenFireSuppressionMatrixExtractor $templateExtractor
+        TemplateDrivenFireSuppressionCriterionExtractor $templateExtractor
     ): JsonResponse {
         if ($request->boolean('gemini_fixture_list')) {
             $items = collect(Storage::disk('local')->files('fire-suppression-gemini-fixtures'))
