@@ -6,12 +6,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
-/**
- * Google Gemini Interactions API client for structured report extraction.
- *
- * Keeps provider transport separate from the report analysis flow while the
- * temporary fire-suppression extraction contract is intentionally compact.
- */
+/** Google Gemini Interactions API client for structured report extraction. */
 class GeminiClient
 {
     public function isConfigured(): bool
@@ -28,9 +23,6 @@ class GeminiClient
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $startedAt = microtime(true);
 
-        // Geçici kompakt analiz sözleşmesi:
-        // Tablo/ekipman ve kontrol matrisi detaylarını Gemini üretmez. Bunlar
-        // daha sonra universal table analyzer tarafından deterministik olarak çıkarılacaktır.
         $compactSystemPrompt = <<<'PROMPT'
 Sen yangın tesisatı periyodik kontrol raporlarını anlayan bir veri çıkarma motorusun.
 
@@ -51,6 +43,27 @@ Raporda gerçekten kontrol edilen sistemleri/grupları belirle.
 Her sistem için:
 - name: rapordaki sistem adı
 - category: mümkünse yangin_dolabi, yangin_pompasi, hidrant, sprinkler, su_alma_verme, su_deposu, sabit_boru_tesisati, gazli_sondurme veya diger
+- control_items: yalnızca o sisteme ait kontrol maddeleri
+
+Her system.control_items kaydı:
+- code: kontrol/madde kodu
+- description: kontrol maddesinin metni
+- status: raporda o sistem için görülen durum; U, UD, N veya PDF'de açıkça kullanılan başka kısa durum değeri
+
+ÇOK ÖNEMLİ:
+- Kontrol maddelerini doğru sisteme bağla. PDF'de aynı sayfada yan yana iki veya daha fazla sistem tablosu varsa her kontrol maddesini bulunduğu sistem sütununa/başlığına göre ilgili sisteme koy.
+- Bir kontrol maddesini başka bir sistemin altına kopyalama.
+- Fiziksel ekipman listesi oluşturma.
+- Ekipman kodlarını sistem.control_items içine equipment_refs olarak ekleme.
+- Yangın dolabı ekipman matrisi oluşturma.
+- components oluşturma.
+- Marka, model, seri no, basınç, hortum uzunluğu, ölçüler veya diğer teknik tablo kolonlarını çıkarma.
+- Ekipman bazlı U / UD / N ilişkisini JSON'a çıkarma.
+- Ekipman sayısı hesaplama.
+- control_count veya nonconforming_count hesaplama.
+- Tabloyu yeniden yapılandırma.
+
+Kontrol maddeleri sistem seviyesinde anlamsal bağlam içindir. Fiziksel ekipman kodu ile U/UD/N arasındaki matris ilişkisi daha sonra ayrı deterministic coordinate/table analyzer tarafından çıkarılacaktır.
 
 3. BULGULAR
 Uygunsuzlukları sistem bazında çıkar.
@@ -62,25 +75,8 @@ Bulguda ekipman kodu açıkça geçiyorsa description içinde koru.
 Kodu kendin uydurma.
 Aynı bulguyu bileşen bazında tekrar etme.
 
-ÇOK ÖNEMLİ:
-- Ekipman listesi oluşturma.
-- Yangın dolabı kodlarını veya lokasyonlarını JSON'a çıkarma.
-- Yangın dolabı equipment_matrix oluşturma.
-- components oluşturma.
-- Marka, model, seri no, basınç, hortum uzunluğu, ölçüler veya diğer teknik tablo kolonlarını çıkarma.
-- U / UD / N değerlerini tek tek JSON'a aktarma.
-- Kontrol kriterlerini JSON'a aktarma.
-- control_count veya nonconforming_count hesaplama.
-- Tabloyu yeniden yapılandırma.
-- Tablo satırlarını özetleme.
-- Ekipman sayısını bulgu olarak üretme.
-- Raporda olmayan bilgi üretme.
-
-Ekipman, kod, lokasyon, teknik değerler ve U/UD/N ilişkileri daha sonra ayrı bir universal table analyzer tarafından PDF metninden çıkarılacaktır.
-Kontrol sayıları ve uygunsuz kontrol sayıları da aynı analiz katmanında, rapordaki kontrol matrisinden deterministik olarak hesaplanacaktır.
-
 BELGE / PROJE / KAYIT:
-Fiziksel ekipman olmayan proje, belge veya kayıt kontrollerini fiziksel sistem/equipment olarak üretme. Bunlara ilişkin önemli uygunsuzlukları findings içinde belirt.
+Fiziksel ekipman olmayan proje, belge veya kayıt kontrollerini fiziksel ekipman olarak üretme. Bunlara ilişkin önemli uygunsuzlukları findings içinde belirt.
 
 Rapor adını veya firma adını değiştirme/normalize etme.
 
@@ -118,26 +114,14 @@ PROMPT;
             $response = Http::withHeaders([
                 'x-goog-api-key' => config('services.gemini.api_key'),
                 'Content-Type' => 'application/json',
-            ])
-                ->connectTimeout(10)
-                ->timeout(180)
-                ->post($url, $payload);
+            ])->connectTimeout(10)->timeout(180)->post($url, $payload);
         } catch (\Throwable $exception) {
-            Log::error('Gemini: bağlantı hatası', [
-                'duration_s' => round(microtime(true) - $startedAt, 1),
-                'message' => $exception->getMessage(),
-            ]);
-
+            Log::error('Gemini: bağlantı hatası', ['duration_s' => round(microtime(true) - $startedAt, 1), 'message' => $exception->getMessage()]);
             throw new RuntimeException('Gemini isteği başarısız oldu: ' . $exception->getMessage(), 0, $exception);
         }
 
         if ($response->failed()) {
-            Log::error('Gemini: HTTP hatası', [
-                'status' => $response->status(),
-                'duration_s' => round(microtime(true) - $startedAt, 1),
-                'body' => mb_substr($response->body(), -2000),
-            ]);
-
+            Log::error('Gemini: HTTP hatası', ['status' => $response->status(), 'duration_s' => round(microtime(true) - $startedAt, 1), 'body' => mb_substr($response->body(), -2000)]);
             throw new RuntimeException('Gemini isteği başarısız oldu (HTTP ' . $response->status() . '): ' . $response->body());
         }
 
@@ -145,20 +129,10 @@ PROMPT;
         $decoded = json_decode($content, true);
         $status = $response->json('status');
 
-        Log::info('Gemini: Interactions çağrısı bitti', [
-            'duration_s' => round(microtime(true) - $startedAt, 1),
-            'model' => config('services.gemini.text_model'),
-            'output_length' => mb_strlen($content),
-            'status' => $status,
-            'compact_extraction' => true,
-        ]);
+        Log::info('Gemini: Interactions çağrısı bitti', ['duration_s' => round(microtime(true) - $startedAt, 1), 'model' => config('services.gemini.text_model'), 'output_length' => mb_strlen($content), 'status' => $status, 'compact_extraction' => true]);
 
         if (! is_array($decoded)) {
-            throw new RuntimeException(
-                'Gemini çıktısı geçerli JSON olarak ayrıştırılamadı (status: '
-                . ($status ?? 'bilinmiyor')
-                . ', içerik uzunluğu: ' . mb_strlen($content) . ' karakter).'
-            );
+            throw new RuntimeException('Gemini çıktısı geçerli JSON olarak ayrıştırılamadı (status: ' . ($status ?? 'bilinmiyor') . ', içerik uzunluğu: ' . mb_strlen($content) . ' karakter).');
         }
 
         return $decoded;
@@ -187,8 +161,20 @@ PROMPT;
                         'properties' => [
                             'name' => ['type' => 'string'],
                             'category' => ['type' => 'string'],
+                            'control_items' => [
+                                'type' => 'array',
+                                'items' => [
+                                    'type' => 'object',
+                                    'properties' => [
+                                        'code' => ['type' => 'string'],
+                                        'description' => ['type' => 'string'],
+                                        'status' => ['type' => ['string', 'null']],
+                                    ],
+                                    'required' => ['code', 'description', 'status'],
+                                ],
+                            ],
                         ],
-                        'required' => ['name', 'category'],
+                        'required' => ['name', 'category', 'control_items'],
                     ],
                 ],
                 'findings' => [
@@ -210,20 +196,11 @@ PROMPT;
     private function extractOutputText(array $response): string
     {
         foreach ((array) ($response['steps'] ?? []) as $step) {
-            if (! is_array($step) || ($step['type'] ?? null) !== 'model_output') {
-                continue;
-            }
-
+            if (! is_array($step) || ($step['type'] ?? null) !== 'model_output') continue;
             foreach ((array) ($step['content'] ?? []) as $content) {
-                if (is_array($content) && isset($content['text'])) {
-                    return (string) $content['text'];
-                }
+                if (is_array($content) && isset($content['text'])) return (string) $content['text'];
             }
         }
-
-        throw new RuntimeException(
-            'Gemini Interactions yanıtında model çıktısı bulunamadı (status: '
-            . ($response['status'] ?? 'bilinmiyor') . ').'
-        );
+        throw new RuntimeException('Gemini Interactions yanıtında model çıktısı bulunamadı (status: ' . ($response['status'] ?? 'bilinmiyor') . ').');
     }
 }
