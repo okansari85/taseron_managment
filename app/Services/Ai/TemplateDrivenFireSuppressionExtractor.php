@@ -40,7 +40,7 @@ class TemplateDrivenFireSuppressionExtractor
             ];
         }
 
-        return $this->sanitizeUtf8([
+        $result = [
             'template' => $template,
             'extracted_data' => [
                 'report_information' => $this->extractReportInformation($camelot),
@@ -55,7 +55,34 @@ class TemplateDrivenFireSuppressionExtractor
                 'warnings' => (array) ($camelot['warnings'] ?? []),
                 'tables' => $tables,
             ],
-        ]);
+        ];
+
+        $diagnostic = $this->findInvalidUtf8Path($result);
+        if ($diagnostic !== null) {
+            throw new RuntimeException('Camelot çıktısında geçersiz UTF-8 bulundu: ' . $diagnostic);
+        }
+
+        return $result;
+    }
+
+    private function findInvalidUtf8Path(mixed $value, string $path = '$'): ?string
+    {
+        if (is_string($value)) {
+            return mb_check_encoding($value, 'UTF-8') ? null : $path;
+        }
+
+        if (!is_array($value)) return null;
+
+        foreach ($value as $key => $item) {
+            if (is_string($key) && !mb_check_encoding($key, 'UTF-8')) {
+                return $path . '[key]';
+            }
+            $childPath = is_int($key) ? $path . '[' . $key . ']' : $path . '[' . json_encode($key, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ']';
+            $invalidPath = $this->findInvalidUtf8Path($item, $childPath);
+            if ($invalidPath !== null) return $invalidPath;
+        }
+
+        return null;
     }
 
     private function sanitizeUtf8(mixed $value): mixed
