@@ -34,14 +34,18 @@ class FireSuppressionReportController extends Controller
         PdfTextExtractor $extractor,
         FireSuppressionAiReportAnalyzer $analyzer
     ): JsonResponse {
-        // Test ekranı için yalnızca Gemini semantic çıktısını üretir.
-        // V12/job/matching çalışmaz. Böylece aynı PDF Gemini'ye tekrar
-        // gönderilmeden semantic fixture olarak kaydedilip V12 üzerinde
-        // sınırsız test edilebilir.
+        // Test ekranı: yalnızca Gemini semantic JSON üretir.
+        // Job, V12, coordinate analyzer ve matching çalışmaz.
+        // Bu sayede aynı PDF Gemini'ye tekrar gönderilmeden fixture olarak
+        // saklanır ve V12 daha sonra bu JSON üzerinden sınırsız test edilebilir.
         if ($request->boolean('gemini_fixture')) {
             $file = $request->file('file');
             $pages = $extractor->extractPages($file);
+
+            // Bu özel test modu .env'deki provider seçiminden bağımsız olarak Gemini kullanır.
+            config(['services.fire_suppression.ai_provider' => 'gemini']);
             $semantic = $analyzer->analyze($pages);
+
             $fixtureId = (string) Str::uuid();
             $fixture = [
                 'fixture_id' => $fixtureId,
