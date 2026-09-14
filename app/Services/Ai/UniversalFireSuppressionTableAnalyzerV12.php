@@ -21,6 +21,8 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $name = trim((string) ($system['name'] ?? ''));
             if ($name === '') continue;
             $components = $this->cleanComponents((array) ($system['components'] ?? []));
+            $semanticControls = $this->semanticControlsForSystem($semantic, $name, (string) ($system['category'] ?? ''));
+            $baseControls = (array) ($system['control_items'] ?? []);
             $systems[] = [
                 'name' => $name,
                 'category' => trim((string) ($system['category'] ?? '')) ?: 'diger',
@@ -28,9 +30,10 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 'equipment_count_known' => count($components) > 0,
                 'control_count' => 0,
                 'components' => $components,
-                'control_items' => $this->cleanControls((array) ($system['control_items'] ?? [])),
+                'control_items' => $this->cleanControls($semanticControls ?: $baseControls),
             ];
         }
+
         if ($coordinatePages) {
             $coordinatePages = array_values(array_filter($coordinatePages, fn($page) => is_array($page) && (isset($page['words']) || isset($page['tokens']) || isset($page['data']))));
             $coordinatePages = array_map(function (array $page): array {
@@ -46,9 +49,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 $systems = $this->applyCoordinateControls($systems, $coordinateControls);
             }
         }
+
         $systems = $this->groupControlsByCode($systems);
         $findings = $this->normalizeFindings((array) ($base['findings'] ?? []), $systems);
         $report = (array) ($semantic['report'] ?? []);
+
         return [
             'report' => [
                 'report_no' => $report['report_no'] ?? null,
@@ -64,13 +69,42 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             'candidate_inventory_items' => (array) ($base['candidate_inventory_items'] ?? []),
             'unmatched_codes' => (array) ($base['unmatched_codes'] ?? []),
             'analyzer' => [
-                'version' => '12.14.0',
+                'version' => '12.15.0',
                 'table_count' => (int) ($base['analyzer']['table_count'] ?? 0),
                 'equipment_count' => array_sum(array_map(fn(array $s) => (int) $s['equipment_count'], $systems)),
                 'control_count' => array_sum(array_map(fn(array $s) => (int) $s['control_count'], $systems)),
                 'finding_count' => count($findings),
             ],
         ];
+    }
+
+    private function semanticControlsForSystem(array $semantic, string $systemName, string $category): array
+    {
+        $target = $this->normalizeKey($systemName);
+        foreach ((array) ($semantic['systems'] ?? []) as $semanticSystem) {
+            if (!is_array($semanticSystem)) continue;
+            $name = trim((string) ($semanticSystem['name'] ?? ''));
+            $semanticCategory = trim((string) ($semanticSystem['category'] ?? ''));
+            if ($name === '') continue;
+            if ($this->normalizeKey($name) !== $target && ($semanticCategory === '' || $semanticCategory !== $category)) continue;
+            $controls = [];
+            foreach ((array) ($semanticSystem['control_items'] ?? []) as $item) {
+                if (!is_array($item)) continue;
+                $code = $this->normalizeControlCode((string) ($item['code'] ?? ''));
+                if ($code === '') continue;
+                $description = trim((string) ($item['description'] ?? ''));
+                $status = $this->normalizeControlStatus($item['status'] ?? null);
+                $controls[] = [
+                    'code' => $code,
+                    'description' => $description !== '' ? $description : null,
+                    'status' => $status,
+                    'equipment_refs' => [],
+                    'source_pages' => [],
+                ];
+            }
+            return $controls;
+        }
+        return [];
     }
 
     private function cleanComponents(array $components): array
@@ -212,7 +246,13 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     }
                 }
             }
-            $out[] = ['id' => trim((string) ($f['id'] ?? '')) ?: 'finding-' . ($i + 1), 'system_name' => $sn !== '' ? $sn : null, 'description' => $d, 'affected_equipment' => array_values($refs), 'source_pages' => array_values(array_unique(array_map('intval', (array) ($f['source_pages'] ?? []))))];
+            $out[] = [
+                'id' => trim((string) ($f['id'] ?? '')) ?: 'finding-' . ($i + 1),
+                'system_name' => $sn !== '' ? $sn : null,
+                'description' => $d,
+                'affected_equipment' => array_values($refs),
+                'source_pages' => array_values(array_unique(array_map('intval', (array) ($f['source_pages'] ?? [])))),
+            ];
         }
         return $out;
     }
