@@ -61,15 +61,18 @@ class TemplateDrivenFireSuppressionExtractor
     private function sanitizeUtf8(mixed $value): mixed
     {
         if (is_string($value)) {
-            return mb_check_encoding($value, 'UTF-8')
-                ? $value
-                : mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+            if (mb_check_encoding($value, 'UTF-8')) return $value;
+            $clean = iconv('UTF-8', 'UTF-8//IGNORE', $value);
+            return $clean === false ? '' : $clean;
         }
 
         if (is_array($value)) {
+            $sanitized = [];
             foreach ($value as $key => $item) {
-                $value[$key] = $this->sanitizeUtf8($item);
+                $safeKey = is_string($key) ? $this->sanitizeUtf8($key) : $key;
+                $sanitized[$safeKey] = $this->sanitizeUtf8($item);
             }
+            return $sanitized;
         }
 
         return $value;
@@ -136,14 +139,10 @@ class TemplateDrivenFireSuppressionExtractor
             $token = trim($token, " ,;");
             if ($token === '') continue;
             $compact = preg_replace('/\s+/u', '', $token) ?? $token;
-
-            // 48-49-...-61: one cell describing a continuous equipment run.
             if (preg_match('/^\d+(?:-\d+)+$/u', $compact)) {
                 foreach (explode('-', $compact) as $number) $tokens[] = $number;
                 continue;
             }
-
-            // 48-61: expand the inclusive range.
             if (preg_match('/^(\d+)-(\d+)$/u', $compact, $m)) {
                 $start = (int) $m[1];
                 $end = (int) $m[2];
@@ -152,7 +151,6 @@ class TemplateDrivenFireSuppressionExtractor
                     continue;
                 }
             }
-
             if (preg_match_all('/\b\d+\b/u', $compact, $matches) && count($matches[0]) > 1) {
                 foreach ($matches[0] as $number) $tokens[] = $number;
                 continue;
