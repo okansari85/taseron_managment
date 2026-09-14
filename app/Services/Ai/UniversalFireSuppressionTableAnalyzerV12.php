@@ -35,12 +35,12 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $result = $this->groupControlsByCode($result);
         $result = $this->recalculateSystemSummaries($result);
 
-        // V12 owns the canonical finding relationship at root level only.
-        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
+        // Findings have one canonical home: root findings[].
+        foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
             unset($result['systems'][$systemIndex]['findings']);
         }
 
-        $result['analyzer']['version'] = '12.6.0';
+        $result['analyzer']['version'] = '12.6.1';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -66,7 +66,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     /**
      * Findings are canonical root-level records.
      * Their equipment relation is affected_equipment only.
-     * There is deliberately no finding -> control-code binding.
+     * Findings are never matched to controls by control code.
      */
     private function normalizeFindings(array $result): array
     {
@@ -81,8 +81,8 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             )));
         }
 
-        // V11 may already have produced the canonical equipment refs internally,
-        // while semantic projections may still carry the same relation under systems.
+        // Read the legacy V11 projection only as an input to the final canonical
+        // finding record. It is removed from the output afterwards.
         $projectionRefs = [];
         foreach ($result['systems'] ?? [] as $system) {
             foreach ((array)($system['findings'] ?? []) as $projection) {
@@ -103,16 +103,17 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $systemNameRaw = trim((string)($finding['system_name'] ?? ''));
             $systemName = $this->normalizeKey($systemNameRaw);
 
-            $refs = (array)($finding['affected_equipment'] ?? []);
-            $refs = array_merge($refs, (array)($finding['equipment_refs'] ?? []));
-            $refs = array_merge($refs, (array)($finding['_equipment_refs'] ?? []));
-            $refs = array_merge($refs, $projectionRefs[$id] ?? []);
-
+            $refs = array_merge(
+                (array)($finding['affected_equipment'] ?? []),
+                (array)($finding['equipment_refs'] ?? []),
+                (array)($finding['_equipment_refs'] ?? []),
+                $projectionRefs[$id] ?? []
+            );
             $refs = $this->resolveEquipmentRefsFromTextAndExisting($description, $refs, $systemEquipment);
 
-            // A system-wide requirement such as "Yangın dolaplarının kullanma
-            // talimatları olmalıdır" legitimately applies to all equipment of that
-            // system. This is semantic finding scope, not control-code matching.
+            // A finding that explicitly states a system-wide requirement can affect
+            // every extracted equipment in that system. This is independent of any
+            // control code such as 5.41.
             if (!$refs && $systemName !== '' && $this->isSystemWideFinding($description)) {
                 foreach ($systemEquipment as $knownSystem => $equipment) {
                     if ($knownSystem === $systemName || str_contains($knownSystem, $systemName) || str_contains($systemName, $knownSystem)) {
@@ -131,8 +132,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             ];
         }
 
-        // The relation must exist only once: findings[].affected_equipment.
-        foreach ($result['systems'] ?? $systemIndex => $system) {
+        foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
             unset($result['systems'][$systemIndex]['findings']);
         }
 
@@ -159,9 +159,8 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
     /**
      * One control record per code.
-     * Results always expose the four canonical statuses.
-     * Equipment is added only when the source table/coordinate analyzer
-     * actually identifies equipment for that status.
+     * Results always expose U / UD / N / GD.
+     * Equipment is added only when the source data actually identifies it.
      */
     private function groupControlsByCode(array $result): array
     {
@@ -172,16 +171,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 if (!is_array($control)) continue;
 
                 $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
-                if ($code === '') {
-                    // Uncoded system checks cannot safely be merged into a coded
-                    // control. Keep them as a single deterministic record.
-                    $code = null;
-                }
+                $key = $code !== '' ? $code : '__NO_CODE__';
 
-                $key = $code ?? '__NO_CODE__';
                 if (!isset($grouped[$key])) {
                     $grouped[$key] = [
-                        'code' => $code,
+                        'code' => $code !== '' ? $code : null,
                         'description' => $control['description'] ?? null,
                         'results' => [
                             'U' => [],
@@ -246,8 +240,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 foreach ($system['control_items'] ?? [] as $controlIndex => $item) {
                     if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
 
-                    // Coordinate data is the authoritative equipment/status matrix
-                    // source. It is merged into the canonical result bucket.
                     $existing = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] ?? []);
                     $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] = array_values(array_unique(array_merge($existing, $matched)));
                 }
@@ -290,21 +282,12 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result['systems'][$systemIndex]['nonconforming_equipment_count'] = count($nonconforming);
             $result['systems'][$systemIndex]['control_count'] = count((array)($system['control_items'] ?? []));
             $result['systems'][$systemIndex]['nonconforming_count'] = $udControlCount;
-            $result['systems'][$systemIndex]['status'] = $this->deriveV12SystemStatus($system, $udControlCount);
+            $result['systems'][$systemIndex]['status'] = $udControlCount > 0
+                ? 'uygun_degil'
+                : (!empty($system['control_items']) ? 'uygun' : 'belirtilmemis');
         }
 
         return $result;
-    }
-
-    private function deriveV12SystemStatus(array $system, int $udControlCount): string
-    {
-        if ($udControlCount > 0) return 'uygun_degil';
-
-        foreach ((array)($GLOBALS['__v12_unused'] ?? []) as $_) {
-            // no-op; keeps this method independent from finding/control projection data
-        }
-
-        return !empty($system['control_items']) ? 'uygun' : 'belirtilmemis';
     }
 
     private function equipmentFromSystems(array $systems): array
@@ -338,14 +321,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $normalizedText = strtoupper(str_replace(['–', '—', '‑', '−'], '-', $text));
 
         foreach (array_keys($allCodes) as $key) {
-            $pattern = preg_quote($key, '/');
-            if (preg_match('/(?<![A-Z0-9])' . $pattern . '(?![A-Z0-9])/u', $normalizedText)) {
+            if (preg_match('/(?<![A-Z0-9])' . preg_quote($key, '/') . '(?![A-Z0-9])/u', $normalizedText)) {
                 $refs[$key] = $allCodes[$key];
             }
         }
 
-        // Resolve explicit numeric ranges, but only to equipment that really exists
-        // in the extracted components.
         preg_match_all(
             '/\b(YD|HD|H|P)\s*[-_]?\s*(\d+)\s*(?:-|TO|ILE|İLE|ARASI)\s*(?:\1\s*[-_]?\s*)?(\d+)\b/iu',
             $normalizedText,
@@ -374,11 +354,13 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     {
         $status = strtoupper(trim((string)$status));
         $status = str_replace(['.', ' ', '_', '-'], '', $status);
-        if ($status === 'UD') return 'UD';
-        if ($status === 'U') return 'U';
-        if ($status === 'N') return 'N';
-        if ($status === 'GD') return 'GD';
-        return null;
+        return match ($status) {
+            'U' => 'U',
+            'UD' => 'UD',
+            'N' => 'N',
+            'GD' => 'GD',
+            default => null,
+        };
     }
 
     private function normalizeControlCode(string $code): string
