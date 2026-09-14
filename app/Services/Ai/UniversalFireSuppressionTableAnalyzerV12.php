@@ -16,6 +16,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $result = parent::analyze($pages, $semantic);
         $result = $this->removeFindingRowsFromControls($result);
         $result = $this->moveFindingEquipmentToRoot($result);
+        $result = $this->groupControlsByCodeAndStatus($result);
 
         $coordinatePages = [];
         foreach ($pages as $page) {
@@ -32,7 +33,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result = $this->applyCoordinateControls($result, $coordinateControls);
         }
 
-        $result['analyzer']['version'] = '12.5.0';
+        $result['analyzer']['version'] = '12.5.1';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -56,18 +57,14 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     }
 
     /**
-     * Findings are independent of controls. The finding itself owns the
-     * equipment affected by that finding.
-     *
-     * Explicit equipment references are resolved against extracted equipment.
-     * If a finding is clearly system-wide and names a system, all equipment
-     * belonging to that physical system is attached. Report-level findings
-     * without a system remain unbound.
+     * A finding owns its affected equipment directly.
+     * Findings are deliberately not matched to control_items by control code.
      */
     private function moveFindingEquipmentToRoot(array $result): array
     {
         $systems = (array)($result['systems'] ?? []);
         $systemEquipment = [];
+
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
             $name = $this->normalizeKey((string)($system['name'] ?? ''));
@@ -92,17 +89,16 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
         foreach ($result['findings'] ?? [] as $index => $finding) {
             if (!is_array($finding)) continue;
+
             $id = trim((string)($finding['id'] ?? ''));
             $description = trim((string)($finding['description'] ?? ''));
             $refs = $projectionRefs[$id] ?? [];
-
             $systemName = $this->normalizeKey((string)($finding['system_name'] ?? ''));
-            if (!$refs && $systemName !== '') {
+
+            if (!$refs && $systemName !== '' && $this->isSystemWideFinding($description)) {
                 foreach ($systemEquipment as $knownSystem => $equipment) {
                     if ($knownSystem === $systemName || str_contains($knownSystem, $systemName) || str_contains($systemName, $knownSystem)) {
-                        if ($this->isSystemWideFinding($description)) {
-                            $refs = $equipment;
-                        }
+                        $refs = $equipment;
                         break;
                     }
                 }
@@ -113,7 +109,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             unset($result['findings'][$index]['_equipment_refs']);
         }
 
-        // System finding projections are no longer a second relationship layer.
+        // Do not maintain a second finding -> equipment relationship under systems.
         foreach ($result['systems'] ?? [] as $systemIndex => $system) {
             $result['systems'][$systemIndex]['findings'] = [];
         }
@@ -126,24 +122,72 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $text = mb_strtolower(trim($description), 'UTF-8');
         if ($text === '') return false;
 
-        // Criteria describing the presence/availability of something on the
-        // system are treated as applying to every equipment item in that system.
-        $patterns = [
+        foreach ([
             'olmalıdır',
-            'olmalıdır.',
             'bulunmalıdır',
-            'bulunmalıdır.',
             'mevcut olmalıdır',
             'bulundurulmalıdır',
-            'bulundurulmalıdır.',
             'olması gerekmektedir',
-        ];
-
-        foreach ($patterns as $pattern) {
+        ] as $pattern) {
             if (str_contains($text, $pattern)) return true;
         }
 
         return false;
+    }
+
+    /**
+     * Same control code + same status = one record.
+     * Equipment belonging to that status is collected under equipment_refs.
+     * Different statuses remain separate records (U / UD / N / GD).
+     */
+    private function groupControlsByCodeAndStatus(array $result): array
+    {
+        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
+            $grouped = [];
+            $indexes = [];
+
+            foreach ((array)($system['control_items'] ?? []) as $control) {
+                if (!is_array($control)) continue;
+
+                $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
+                $status = $this->normalizeControlStatus($control['status'] ?? null);
+                if ($code === '') $code = '__NO_CODE__';
+                if ($status === null) $status = '__NO_STATUS__';
+
+                $key = $code . '|' . $status;
+
+                if (!isset($grouped[$key])) {
+                    $grouped[$key] = [
+                        'code' => $code === '__NO_CODE__' ? null : $code,
+                        'description' => $control['description'] ?? null,
+                        'status' => $status === '__NO_STATUS__' ? null : $status,
+                        'equipment_refs' => [],
+                        'source_pages' => array_values($control['source_pages'] ?? []),
+                    ];
+                    $indexes[$key] = count($grouped) - 1;
+                }
+
+                $refs = (array)($control['equipment_refs'] ?? []);
+                foreach ($refs as $ref) {
+                    $ref = trim((string)$ref);
+                    if ($ref !== '') $grouped[$key]['equipment_refs'][] = $ref;
+                }
+
+                $grouped[$key]['source_pages'] = array_values(array_unique(array_merge(
+                    $grouped[$key]['source_pages'],
+                    array_values($control['source_pages'] ?? [])
+                )));
+            }
+
+            foreach ($grouped as &$control) {
+                $control['equipment_refs'] = array_values(array_unique($control['equipment_refs']));
+            }
+            unset($control);
+
+            $result['systems'][$systemIndex]['control_items'] = array_values($grouped);
+        }
+
+        return $result;
     }
 
     private function equipmentFromSystems(array $systems): array
@@ -152,9 +196,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         foreach ($systems as $system) {
             foreach ($system['components'] ?? [] as $component) {
                 $code = trim((string)($component['code'] ?? ''));
-                if ($code !== '') {
-                    $equipment[] = ['code' => $code];
-                }
+                if ($code !== '') $equipment[] = ['code' => $code];
             }
         }
         return $equipment;
@@ -166,9 +208,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
             $status = $this->normalizeControlStatus($control['status'] ?? null);
             $equipmentRefs = array_values(array_unique(array_filter(array_map('strval', (array)($control['equipment_refs'] ?? [])))));
-            if ($code === '' || !$equipmentRefs) {
-                continue;
-            }
+            if ($code === '' || !$equipmentRefs) continue;
 
             foreach ($result['systems'] ?? [] as $systemIndex => $system) {
                 $systemCodes = array_map(
@@ -183,7 +223,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     if ($status !== null && $this->normalizeControlStatus($item['status'] ?? null) !== $status) continue;
 
                     $existingRefs = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] ?? []);
-                    $result['systems'][$systemIndex]['control_items'][$controlIndex]['scope'] = 'equipment';
                     $result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] = array_values(array_unique(array_merge($existingRefs, $matched)));
                 }
             }
