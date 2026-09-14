@@ -8,10 +8,13 @@ use App\Http\Requests\StoreFireSuppressionReportRequest;
 use App\Jobs\AnalyzeFireSuppressionReportJob;
 use App\Models\FireSuppressionReport;
 use App\Models\LocationBusinessEntity;
+use App\Services\Ai\FireSuppressionAiReportAnalyzer;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
+use App\Services\Ai\PdfTextExtractor;
 use App\Services\FireSuppressionReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class FireSuppressionReportController extends Controller
@@ -22,31 +25,43 @@ class FireSuppressionReportController extends Controller
     }
 
     // AI destekli ön-analiz — hiçbir şey kaydetmez, sadece taslak döner.
-    // Kullanıcı taslağı gözden geçirip düzenledikten sonra store()'a
-    // (değişmemiş) gönderir (section 12: Kullanıcı Onayı).
-    //
-    // ÖNEMLİ MİMARİ NOKTA: bu iş artık İSTEK İÇİNDE ÇALIŞMIYOR — dosyayı
-    // saklayıp AnalyzeFireSuppressionReportJob'ı KUYRUĞA atıp HEMEN
-    // dönüyor. Sebep: NVIDIA NIM çağrıları birkaç dakika sürebiliyor; bu
-    // süre boyunca senkron çalışsaydı, yerel tek iş parçacıklı dev
-    // sunucusu (php -S) o TEK isteğe kilitlenip DİĞER HER İSTEĞİ (login
-    // dahil) bloklardı — gerçekten yaşanan bir sorundu. Ayrıca progress
-    // polling'in de bir anlamı kalmazdı (sunucu zaten aynı isteğe
-    // kilitliyken ilerleme sorgusu cevap bulamıyordu). Gerçek iş artık
-    // ayrı bir worker sürecinde (php artisan queue:work) yürütülüyor.
-    //
-    // Pipeline: PdfTextExtractor → FireSuppressionOptimizedReportParser
-    // (sayfa yönlendirme + mevcut parser) → MatchingEngine +
-    // FireSuppressionMatchingProfile — hepsi artık Job::handle() içinde.
+    // Normal üretim akışı kuyruğa AnalyzeFireSuppressionReportJob atar.
     public function analyze(
         AnalyzeReportFileRequest $request,
         LocationBusinessEntity $locationBusinessEntity,
         TenantContext $tenantContext,
-        FireSuppressionAnalysisProgress $progress
+        FireSuppressionAnalysisProgress $progress,
+        PdfTextExtractor $extractor,
+        FireSuppressionAiReportAnalyzer $analyzer
     ): JsonResponse {
+        // Test ekranı için yalnızca Gemini semantic çıktısını üretir.
+        // V12/job/matching çalışmaz. Böylece aynı PDF Gemini'ye tekrar
+        // gönderilmeden semantic fixture olarak kaydedilip V12 üzerinde
+        // sınırsız test edilebilir.
+        if ($request->boolean('gemini_fixture')) {
+            $file = $request->file('file');
+            $pages = $extractor->extractPages($file);
+            $semantic = $analyzer->analyze($pages);
+            $fixtureId = (string) Str::uuid();
+            $fixture = [
+                'fixture_id' => $fixtureId,
+                'provider' => 'gemini',
+                'model' => config('services.gemini.text_model'),
+                'original_file_name' => $file->getClientOriginalName(),
+                'created_at' => now()->toIso8601String(),
+                'semantic' => $semantic,
+            ];
+
+            Storage::disk('local')->put(
+                "fire-suppression-gemini-fixtures/{$fixtureId}.json",
+                json_encode($fixture, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)
+            );
+
+            return response()->json(['data' => $fixture]);
+        }
+
         $analysisId = (string) ($request->header('X-Analysis-Id') ?: Str::uuid());
         $file = $request->file('file');
-
         $storedPath = $file->store('fire-suppression-analysis-tmp', 'local');
 
         $progress->start($analysisId, 0);
@@ -114,8 +129,6 @@ class FireSuppressionReportController extends Controller
         ], 201);
     }
 
-    // Rapor yükleme sihirbazının "Kontrol ve Onay" adımında kullanılacak
-    // standart checklist — kullanıcı seçtiği kategorilere göre filtrelenir.
     public function controlItemTemplates(Request $request): JsonResponse
     {
         $categories = array_filter((array) $request->query('categories', []));
