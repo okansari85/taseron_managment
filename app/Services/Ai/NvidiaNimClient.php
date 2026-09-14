@@ -125,7 +125,7 @@ NVIDIA NIM EK KURALI — SİSTEM KEŞFİ:
 - Aynı fiziksel sistemi farklı adlarla tekrar etme; rapordaki en anlamlı sistem adını koru.
 - systems dizisini oluşturmadan önce rapordaki tüm ayrı kontrol gruplarını çıkar ve hiçbir ayrı grubun atlanmadığını kontrol et.
 - systems dizisi raporun kapsamını eksik bırakmamalıdır. Özellikle ekipmanı olmayan ancak kontrol maddeleri bulunan sistemleri de dahil et.
-NVIDIA;
+NVIDIA
 
         return [
             'model' => config('services.nvidia_nim.text_model'),
