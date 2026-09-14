@@ -18,7 +18,7 @@ class TemplateDiscoveryFireSuppressionAnalyzer
             throw new RuntimeException('PDF metni boş olduğu için Template Discovery yapılamadı.');
         }
 
-        return $this->gemini->extract($this->systemPrompt(), $text, 50000);
+        return $this->gemini->extract($this->systemPrompt() . "\n\n" . $this->systemHierarchyRules(), $text, 50000);
     }
 
     private function buildDocumentText(array $pages): string
@@ -269,6 +269,50 @@ AI semantic'in gerçek veri kısmı yalnızca findings'tir.
 }
 
 SADECE geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
+PROMPT;
+    }
+
+    private function systemHierarchyRules(): string
+    {
+        return <<<'PROMPT'
+KRİTİK SİSTEM GRUPLAMA KURALI — BU KURAL ÖNCELİKLİDİR
+
+PDF'de "TESPİT VE DEĞERLENDİRMELER" gibi bir ana başlık altında A, B, C, D, E, F veya benzeri ayrı kontrol grupları bulunuyorsa HER BİR AYRI KONTROL GRUBU AYRI BİR SİSTEMDİR.
+
+Bir kontrol grubunun başlığı ile onu izleyen kontrol maddeleri arasında bağ kur. Başlık değiştiğinde sistem değişir. O başlığın altındaki kontrol kodları yalnızca o sisteme aittir; sonraki kontrol grubu başlığına kadar devam eder.
+
+ÖRNEK MANTIK:
+A başlığı → sistem A → A'nın altındaki control_items
+B başlığı → sistem B → B'nin altındaki control_items
+C başlığı → sistem C → C'nin altındaki control_items
+D başlığı → sistem D → D'nin altındaki control_items
+E başlığı → sistem E → E'nin altındaki control_items
+F başlığı → sistem F → F'nin altındaki control_items
+
+Ana rapor/tesisat başlığı, örneğin "SULU YANGIN SÖNDÜRME TESİSATI", altında ayrı kontrol grupları varsa bu 6 veya daha fazla sistemin yerine tek sistem olarak kullanılamaz. Bu tür ana başlık yalnızca raporun/tesisatın genel başlığıdır.
+
+fire_systems.systems[] içinde her bağımsız kontrol grubu için ayrı nesne oluştur. Birden fazla kontrol grubu başlığını tek bir system_name altında birleştirme.
+
+Her sistemin control_items listesine yalnızca kendi kontrol grubundaki maddeleri koy. Örneğin bir grupta 5.1-5.3, sonraki grupta 5.4-5.23 varsa bunlar iki ayrı sistem ve iki ayrı control_items grubudur.
+
+EKİPMAN SİSTEM EŞLEŞTİRMESİ:
+Bir ekipman tablosu belirli bir kontrol grubunun altında bulunuyorsa equipment.system_name o kontrol grubunun sistem adı olmalıdır. Ana tesisat başlığını equipment.system_name olarak kullanma.
+
+FINDING SİSTEM EŞLEŞTİRMESİ:
+Bir finding metni "5.40", "5.24" gibi kontrol koduyla başlıyor veya kontrol kodunu içeriyorsa önce bu kontrol kodunun hangi kontrol grubuna ait olduğunu bul. Finding.system_name olarak o grubun gerçek sistem adını kullan.
+
+Finding yalnızca genel tesisat başlığını referans almamalıdır. Kontrol kodu ve kontrol grubu belirlenebiliyorsa ana tesisat adını fallback olarak kullanma.
+
+Örneğin PDF'de:
+- 5.1-5.3 → Belge ve Kayıt Kontrolleri
+- 5.4-5.23 → Yangın Pompa Bölmesi
+- 5.24-5.25 → Su Deposu Kontrolü
+- 5.26-5.37 → Yağmurlama Sistemi Kontrolü
+- 5.38-5.52 → Yangın Dolapları ve Hortum Sistemlerinin Kontrolü
+- 5.53-5.55 → Hidrant ve İtfaiye Bağlantısı Kontrolü
+ise tam olarak bu altı sistem ayrı ayrı oluşturulmalı ve findings aynı eşleşmeye göre atanmalıdır.
+
+Bu örnekteki isimleri başka raporlara hardcode etme; kural yapıdır: HER AYRI KONTROL ITEM GRUBU = AYRI SİSTEM.
 PROMPT;
     }
 }
