@@ -110,22 +110,19 @@ class NvidiaNimClient
         // NVIDIA tarafında sistem keşfini özellikle güçlendiriyoruz. Bu ek
         // talimat Gemini promptunu değiştirmez; yalnızca NIM'e gönderilen
         // sistem mesajına eklenir.
-        $nvidiaSystemDiscovery = <<<'NVIDIA'
-
-NVIDIA NIM EK KURALI — SİSTEM KEŞFİ:
-- PDF'nin tamamını baştan sona değerlendir ve RAPORDA GERÇEKTEN KONTROL EDİLEN TÜM AYRI SİSTEMLERİ systems dizisine koy.
-- Özellikle 5. TESPİT VE DEĞERLENDİRMELER bölümündeki kontrol matrisi/tablosunun bölüm başlıklarını sistem keşfi için birincil yapısal sinyal kabul et.
-- Kontrol matrisi birden fazla harfli veya isimlendirilmiş grup içeriyorsa, her ayrı grup kendi başına bir sistemdir. O grubun altında en az bir kontrol maddesi bulunması, ekipman listesi bulunmasa bile sistemi systems içine almak için yeterlidir.
-- Bir sistemin ekipmanı olmaması, o sistemi systems dizisinden çıkarma nedeni değildir. Sistem yalnızca kontrol maddelerinden oluşabilir.
-- Kontrol kodlarının farklı aralıklara ayrılması da ayrı sistemleri gösterebilir; kodları sadece başka bir sistemin alt maddeleriymiş gibi birleştirme. Önce ilgili kontrol grubunun başlığını ve kapsamını değerlendir.
-- Örneğin bir raporda "Su Deposu Kontrolü", "Yağmurlama Sistemi Kontrolü", "Yangın Dolapları ... Kontrolü" ve "Hidrant ... Kontrolü" ayrı başlıklarsa bunların her biri ayrı systems kaydıdır; ekipman tablosu yalnızca bazı sistemlerde bulunuyor olsa bile diğer sistemler atlanmaz.
-- Bir sistem yalnızca bulgular içinde geçiyorsa onu otomatik olarak sistem sayma; fakat aynı sistem kontrol matrisi içinde ayrı bir başlıkla veya o sisteme ait ayrı kontrol grubuyla tanımlanmışsa mutlaka systems içine ekle.
-- "Yangın Tesisatı" gibi üst başlıkları, altında ayrı kontrol grupları varsa tek sistem olarak kullanıp alt sistemleri birleştirme.
-- Yangın Pompa Dairesi; pompa ekipmanlarının bulunduğu sistemdir. Sprinkler, Su Deposu, Hidrant, İtfaiye Su Alma/Verme gibi raporda ayrı kontrol edilen veya ayrı fiziksel sistem olarak tanımlanan grupları otomatik olarak Yangın Pompa Dairesi içine katma.
-- Aynı fiziksel sistemi farklı adlarla tekrar etme; rapordaki en anlamlı sistem adını koru.
-- systems dizisini oluşturmadan önce rapordaki tüm ayrı kontrol gruplarını çıkar ve hiçbir ayrı grubun atlanmadığını kontrol et.
-- systems dizisi raporun kapsamını eksik bırakmamalıdır. Özellikle ekipmanı olmayan ancak kontrol maddeleri bulunan sistemleri de dahil et.
-NVIDIA
+        $nvidiaSystemDiscovery = "\nNVIDIA NIM EK KURALI - SİSTEM KEŞFİ:\n"
+            . "- PDF'nin tamamını baştan sona değerlendir ve RAPORDA GERÇEKTEN KONTROL EDİLEN TÜM AYRI SİSTEMLERİ systems dizisine koy.\n"
+            . "- Özellikle 5. TESPİT VE DEĞERLENDİRMELER bölümündeki kontrol matrisi/tablosunun bölüm başlıklarını sistem keşfi için birincil yapısal sinyal kabul et.\n"
+            . "- Kontrol matrisi birden fazla harfli veya isimlendirilmiş grup içeriyorsa, her ayrı grup kendi başına bir sistemdir. O grubun altında en az bir kontrol maddesi bulunması, ekipman listesi bulunmasa bile sistemi systems içine almak için yeterlidir.\n"
+            . "- Bir sistemin ekipmanı olmaması, o sistemi systems dizisinden çıkarma nedeni değildir. Sistem yalnızca kontrol maddelerinden oluşabilir.\n"
+            . "- Kontrol kodlarının farklı aralıklara ayrılması da ayrı sistemleri gösterebilir; kodları sadece başka bir sistemin alt maddeleriymiş gibi birleştirme. Önce ilgili kontrol grubunun başlığını ve kapsamını değerlendir.\n"
+            . "- Örneğin bir raporda \"Su Deposu Kontrolü\", \"Yağmurlama Sistemi Kontrolü\", \"Yangın Dolapları ... Kontrolü\" ve \"Hidrant ... Kontrolü\" ayrı başlıklarsa bunların her biri ayrı systems kaydıdır; ekipman tablosu yalnızca bazı sistemlerde bulunuyor olsa bile diğer sistemler atlanmaz.\n"
+            . "- Bir sistem yalnızca bulgular içinde geçiyorsa onu otomatik olarak sistem sayma; fakat aynı sistem kontrol matrisi içinde ayrı bir başlıkla veya o sisteme ait ayrı kontrol grubuyla tanımlanmışsa mutlaka systems içine ekle.\n"
+            . "- \"Yangın Tesisatı\" gibi üst başlıkları, altında ayrı kontrol grupları varsa tek sistem olarak kullanıp alt sistemleri birleştirme.\n"
+            . "- Yangın Pompa Dairesi; pompa ekipmanlarının bulunduğu sistemdir. Sprinkler, Su Deposu, Hidrant, İtfaiye Su Alma/Verme gibi raporda ayrı kontrol edilen veya ayrı fiziksel sistem olarak tanımlanan grupları otomatik olarak Yangın Pompa Dairesi içine katma.\n"
+            . "- Aynı fiziksel sistemi farklı adlarla tekrar etme; rapordaki en anlamlı sistem adını koru.\n"
+            . "- systems dizisini oluşturmadan önce rapordaki tüm ayrı kontrol gruplarını çıkar ve hiçbir ayrı grubun atlanmadığını kontrol et.\n"
+            . "- systems dizisi raporun kapsamını eksik bırakmamalıdır. Özellikle ekipmanı olmayan ancak kontrol maddeleri bulunan sistemleri de dahil et.\n";
 
         return [
             'model' => config('services.nvidia_nim.text_model'),
