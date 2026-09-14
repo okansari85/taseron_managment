@@ -40,7 +40,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             unset($result['systems'][$systemIndex]['findings']);
         }
 
-        $result['analyzer']['version'] = '12.8.0';
+        $result['analyzer']['version'] = '12.9.0';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -200,12 +200,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return $result;
     }
 
-    /**
-     * Final deterministic relation pass.
-     * A finding such as "5.41) YD1, YD2 ..." is the equipment relation for
-     * control 5.41. The finding supplies the exact equipment set; the control
-     * supplies the actual observed status. Nothing is invented.
-     */
     private function bindControlEquipmentFromFindings(array $result): array
     {
         $findingsBySystemAndCode = [];
@@ -235,34 +229,46 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $systemCodes = [];
             foreach ((array)($system['components'] ?? []) as $component) {
                 $code = trim((string)($component['code'] ?? ''));
-                if ($code !== '') $systemCodes[$this->normalizeEquipmentCode($code)] = $code;
+                if ($code !== '') {
+                    $systemCodes[$this->normalizeEquipmentCode($code)] = $code;
+                }
             }
 
             foreach ((array)($system['control_items'] ?? []) as $controlIndex => $control) {
                 $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
                 if ($code === '') continue;
 
-                $refs = [];
+                $results = (array)($control['results'] ?? []);
+                $hasMatrixRefs = false;
+                foreach ($results as $refs) {
+                    if (!empty($refs)) {
+                        $hasMatrixRefs = true;
+                        break;
+                    }
+                }
+
+                if ($hasMatrixRefs) {
+                    continue;
+                }
+
+                $findingRefs = [];
                 foreach ([$systemKey . '|' . $code, '|' . $code] as $key) {
                     foreach ((array)($findingsBySystemAndCode[$key] ?? []) as $ref) {
                         $normalized = $this->normalizeEquipmentCode((string)$ref);
                         if (isset($systemCodes[$normalized])) {
-                            $refs[$normalized] = $systemCodes[$normalized];
+                            $findingRefs[$normalized] = $systemCodes[$normalized];
                         }
                     }
                 }
-                if (!$refs) continue;
 
-                $results = (array)($control['results'] ?? []);
-                $statusKeys = array_keys($results);
-
-                // If the source control has an observed status, attach the
-                // finding's exact equipment to that status. If there is no
-                // status, do not manufacture one.
-                foreach ($statusKeys as $status) {
-                    $existing = (array)($results[$status] ?? []);
-                    $results[$status] = array_values(array_unique(array_merge($existing, array_values($refs))));
+                if (!$findingRefs || !array_key_exists('UD', $results)) {
+                    continue;
                 }
+
+                $results['UD'] = array_values(array_unique(array_merge(
+                    (array)$results['UD'],
+                    array_values($findingRefs)
+                ));
 
                 $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'] = $results;
             }
