@@ -64,7 +64,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             'candidate_inventory_items' => (array) ($base['candidate_inventory_items'] ?? []),
             'unmatched_codes' => (array) ($base['unmatched_codes'] ?? []),
             'analyzer' => [
-                'version' => '12.13.3',
+                'version' => '12.14.0',
                 'table_count' => (int) ($base['analyzer']['table_count'] ?? 0),
                 'equipment_count' => array_sum(array_map(fn(array $s) => (int) $s['equipment_count'], $systems)),
                 'control_count' => array_sum(array_map(fn(array $s) => (int) $s['control_count'], $systems)),
@@ -80,18 +80,18 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             if (!is_array($c)) continue;
             $code = trim((string) ($c['code'] ?? ''));
             if ($code === '') continue;
-            $out[$this->normalizeEquipmentCode($code)] = [
+            $out[] = [
                 'code' => $code,
-                'name' => $c['name'] ?? null,
-                'location' => $c['location'] ?? $c['location_note'] ?? null,
-                'brand' => $c['brand'] ?? null,
-                'model' => $c['model'] ?? null,
-                'serial_no' => $c['serial_no'] ?? $c['serial'] ?? null,
-                'properties' => (array) ($c['properties'] ?? []),
+                'name' => trim((string) ($c['name'] ?? '')) ?: null,
+                'location' => trim((string) ($c['location'] ?? '')) ?: null,
+                'brand' => trim((string) ($c['brand'] ?? '')) ?: null,
+                'model' => trim((string) ($c['model'] ?? '')) ?: null,
+                'serial_no' => trim((string) ($c['serial_no'] ?? '')) ?: null,
+                'properties' => is_array($c['properties'] ?? null) ? $c['properties'] : [],
                 'source_pages' => array_values(array_unique(array_map('intval', (array) ($c['source_pages'] ?? [])))),
             ];
         }
-        return array_values($out);
+        return $out;
     }
 
     private function cleanControls(array $controls): array
