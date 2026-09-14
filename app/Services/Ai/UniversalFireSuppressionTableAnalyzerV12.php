@@ -35,12 +35,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $result = $this->groupControlsByCode($result);
         $result = $this->recalculateSystemSummaries($result);
 
-        // Findings have one canonical home: root findings[].
         foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
             unset($result['systems'][$systemIndex]['findings']);
         }
 
-        $result['analyzer']['version'] = '12.6.1';
+        $result['analyzer']['version'] = '12.7.0';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -63,11 +62,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return $result;
     }
 
-    /**
-     * Findings are canonical root-level records.
-     * Their equipment relation is affected_equipment only.
-     * Findings are never matched to controls by control code.
-     */
     private function normalizeFindings(array $result): array
     {
         $systemEquipment = [];
@@ -81,8 +75,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             )));
         }
 
-        // Read the legacy V11 projection only as an input to the final canonical
-        // finding record. It is removed from the output afterwards.
         $projectionRefs = [];
         foreach ($result['systems'] ?? [] as $system) {
             foreach ((array)($system['findings'] ?? []) as $projection) {
@@ -111,9 +103,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             );
             $refs = $this->resolveEquipmentRefsFromTextAndExisting($description, $refs, $systemEquipment);
 
-            // A finding that explicitly states a system-wide requirement can affect
-            // every extracted equipment in that system. This is independent of any
-            // control code such as 5.41.
             if (!$refs && $systemName !== '' && $this->isSystemWideFinding($description)) {
                 foreach ($systemEquipment as $knownSystem => $equipment) {
                     if ($knownSystem === $systemName || str_contains($knownSystem, $systemName) || str_contains($systemName, $knownSystem)) {
@@ -159,8 +148,8 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
     /**
      * One control record per code.
-     * Results always expose U / UD / N / GD.
-     * Equipment is added only when the source data actually identifies it.
+     * The result keys are created only from statuses actually present in the source.
+     * No fixed U/UD/N/GD schema is injected into controls.
      */
     private function groupControlsByCode(array $result): array
     {
@@ -177,12 +166,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     $grouped[$key] = [
                         'code' => $code !== '' ? $code : null,
                         'description' => $control['description'] ?? null,
-                        'results' => [
-                            'U' => [],
-                            'UD' => [],
-                            'N' => [],
-                            'GD' => [],
-                        ],
+                        'results' => [],
                         'source_pages' => [],
                     ];
                 }
@@ -198,7 +182,14 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     (array)($control['equipment_refs'] ?? [])
                 ))));
 
-                if ($status !== null && isset($grouped[$key]['results'][$status])) {
+                // Only a status observed in the actual source is emitted.
+                // A status with no equipment is still represented when the source
+                // explicitly contains that status; system-level controls simply have []
+                // for their observed status.
+                if ($status !== null) {
+                    if (!isset($grouped[$key]['results'][$status])) {
+                        $grouped[$key]['results'][$status] = [];
+                    }
                     $grouped[$key]['results'][$status] = array_values(array_unique(array_merge(
                         $grouped[$key]['results'][$status],
                         $refs
@@ -239,6 +230,10 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
                 foreach ($system['control_items'] ?? [] as $controlIndex => $item) {
                     if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
+
+                    if (!isset($result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status])) {
+                        $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] = [];
+                    }
 
                     $existing = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] ?? []);
                     $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'][$status] = array_values(array_unique(array_merge($existing, $matched)));
@@ -350,17 +345,16 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return array_values($refs);
     }
 
+    /**
+     * Normalize formatting but preserve any status actually supplied by the source.
+     * Only punctuation/whitespace is normalized; the vocabulary is not invented here.
+     */
     private function normalizeControlStatus(mixed $status): ?string
     {
         $status = strtoupper(trim((string)$status));
-        $status = str_replace(['.', ' ', '_', '-'], '', $status);
-        return match ($status) {
-            'U' => 'U',
-            'UD' => 'UD',
-            'N' => 'N',
-            'GD' => 'GD',
-            default => null,
-        };
+        $status = preg_replace('/\s+/u', '', $status);
+        $status = str_replace(['.', '_', '-'], '', $status);
+        return $status !== '' ? $status : null;
     }
 
     private function normalizeControlCode(string $code): string
