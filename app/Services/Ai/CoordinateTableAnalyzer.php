@@ -1,10 +1,13 @@
 <?php
+
 namespace App\Services\Ai;
 
 /**
  * Deterministic coordinate-based matrix analyzer.
- * Maps every observed U/UD/N cell to the real equipment column that contains it.
- * No status or equipment relationship is invented.
+ *
+ * The report matrix is simple: equipment codes define the X columns and
+ * control codes define the Y rows. The U/UD/N value at their intersection
+ * is the status for that equipment/control pair.
  */
 class CoordinateTableAnalyzer
 {
@@ -23,10 +26,8 @@ class CoordinateTableAnalyzer
             if (!$columns) continue;
 
             foreach ($this->findControlRows($words) as $row) {
-                $mapping = $this->mapStatusCells($this->cellsNearY($words, $row['y']), $columns);
-                if (!$mapping['has_status']) continue;
-
-                foreach ($mapping['refs_by_status'] as $status => $refs) {
+                $mapped = $this->mapRow($words, $row['y'], $columns);
+                foreach ($mapped as $status => $refs) {
                     if (!$refs) continue;
                     $results[] = [
                         'code' => $row['code'],
@@ -34,7 +35,7 @@ class CoordinateTableAnalyzer
                         'status' => $status,
                         'scope' => 'equipment',
                         'equipment_refs' => $refs,
-                        'source_pages' => [(int)($page['page'] ?? $page['page_number'] ?? 0)],
+                        'source_pages' => [(int) ($page['page'] ?? $page['page_number'] ?? 0)],
                         'system_name' => null,
                     ];
                 }
@@ -48,6 +49,7 @@ class CoordinateTableAnalyzer
     {
         $words = $page['words'] ?? $page['tokens'] ?? [];
         if (!is_array($words)) return [];
+
         return array_values(array_filter(
             $words,
             fn($w) => is_array($w) && isset($w['text'], $w['x'], $w['y'])
@@ -59,7 +61,7 @@ class CoordinateTableAnalyzer
         $out = [];
         foreach ($equipment as $item) {
             if (!is_array($item)) continue;
-            $raw = trim((string)($item['code'] ?? ''));
+            $raw = trim((string) ($item['code'] ?? ''));
             if ($raw !== '') $out[$this->normalizeCode($raw)] = $raw;
         }
         return $out;
@@ -68,20 +70,25 @@ class CoordinateTableAnalyzer
     private function findEquipmentColumns(array $words, array $equipmentCodes): array
     {
         $hits = [];
+
         foreach ($words as $word) {
-            $key = $this->normalizeCode((string)$word['text']);
+            $key = $this->normalizeCode((string) $word['text']);
             if ($key === '' || !isset($equipmentCodes[$key])) continue;
+
             $hits[] = [
                 'code' => $equipmentCodes[$key],
-                'x' => (float)$word['x'],
-                'y' => (float)$word['y'],
-                'width' => max(1.0, (float)($word['width'] ?? 1)),
-                'height' => max(1.0, (float)($word['height'] ?? 1)),
+                'x' => (float) $word['x'],
+                'y' => (float) $word['y'],
+                'width' => max(1.0, (float) ($word['width'] ?? 1)),
+                'height' => max(1.0, (float) ($word['height'] ?? 1)),
             ];
         }
 
         if (!$hits) return [];
 
+        // Equipment codes are the column headers. Pick the densest horizontal
+        // band of equipment codes so unrelated mentions elsewhere in the PDF
+        // cannot become columns.
         $bands = [];
         foreach ($hits as $hit) {
             $placed = false;
@@ -106,36 +113,83 @@ class CoordinateTableAnalyzer
             $key = $this->normalizeCode($column['code']);
             if (!isset($unique[$key])) $unique[$key] = $column;
         }
+
         return array_values($unique);
     }
 
+    /**
+     * Find every control code by Y position. Do NOT require U/UD/N here.
+     * The status is read later at the intersection of this Y row and each
+     * equipment X column.
+     */
     private function findControlRows(array $words): array
     {
         $rows = [];
         $seen = [];
+
         foreach ($words as $word) {
-            $code = trim((string)$word['text']);
+            $code = trim((string) $word['text']);
             if (!preg_match('/^\d+(?:\.\d+)+$/u', $code)) continue;
 
-            $y = (float)$word['y'];
-            $cells = $this->cellsNearY($words, $y);
-            $statuses = array_values(array_filter(array_map(
-                fn($w) => $this->normalizeStatus((string)$w['text']),
-                $cells
-            )));
-            if (!$statuses) continue;
-
+            $y = (float) $word['y'];
             $key = $code . '|' . round($y, 2);
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
 
+            $cells = $this->cellsNearY($words, $y);
             $rows[] = [
                 'code' => $code,
                 'description' => $this->descriptionForRow($cells, $code),
                 'y' => $y,
             ];
         }
+
         return $rows;
+    }
+
+    /**
+     * For one control Y row, inspect each equipment X column and read the
+     * status word located at that intersection. This is intentionally much
+     * simpler than trying to discover status rows first.
+     */
+    private function mapRow(array $words, float $rowY, array $columns): array
+    {
+        $result = ['U' => [], 'UD' => [], 'N' => []];
+        $rowWords = $this->cellsNearY($words, $rowY);
+        if (!$rowWords) return $result;
+
+        usort($columns, fn($a, $b) => (float) $a['x'] <=> (float) $b['x']);
+        $gap = $this->medianColumnGap($columns);
+        $maxDistance = max(8.0, $gap * 0.45);
+
+        foreach ($columns as $index => $column) {
+            $columnCenter = (float) $column['x'] + ((float) ($column['width'] ?? 1.0) / 2.0);
+            $best = null;
+            $bestDistance = PHP_FLOAT_MAX;
+
+            foreach ($rowWords as $word) {
+                $status = $this->normalizeStatus((string) $word['text']);
+                if ($status === null) continue;
+
+                $wordCenter = (float) $word['x'] + ((float) ($word['width'] ?? 1.0) / 2.0);
+                $distance = abs($wordCenter - $columnCenter);
+
+                if ($distance < $bestDistance) {
+                    $bestDistance = $distance;
+                    $best = $status;
+                }
+            }
+
+            if ($best === null || $bestDistance > $maxDistance) continue;
+
+            $result[$best][] = $column['code'];
+        }
+
+        foreach ($result as $status => $refs) {
+            $result[$status] = array_values(array_unique($refs));
+        }
+
+        return $result;
     }
 
     private function cellsNearY(array $words, float $y): array
@@ -143,89 +197,19 @@ class CoordinateTableAnalyzer
         $tol = $this->yTolerance($words);
         return array_values(array_filter(
             $words,
-            fn($w) => abs((float)$w['y'] - $y) <= $tol
+            fn($w) => abs((float) $w['y'] - $y) <= $tol
         ));
-    }
-
-    private function mapStatusCells(array $cells, array $columns): array
-    {
-        $refsByStatus = [
-            'U' => [],
-            'UD' => [],
-            'N' => [],
-        ];
-        $hasStatus = false;
-
-        usort($columns, fn($a, $b) => (float)$a['x'] <=> (float)$b['x']);
-        $tolerance = $this->xTolerance($columns);
-
-        foreach ($cells as $cell) {
-            $status = $this->normalizeStatus((string)$cell['text']);
-            if ($status === null) continue;
-            $hasStatus = true;
-
-            $left = (float)$cell['x'];
-            $width = max(1.0, (float)($cell['width'] ?? 1));
-            $center = $left + ($width / 2.0);
-
-            // Compare centers to centers. Using the header's left edge here
-            // shifts every status toward the previous/next equipment column.
-            $nearest = null;
-            $nearestDistance = PHP_FLOAT_MAX;
-            foreach ($columns as $column) {
-                $columnCenter = (float)$column['x'] + ((float)($column['width'] ?? 1.0) / 2.0);
-                $distance = abs($center - $columnCenter);
-                if ($distance < $nearestDistance) {
-                    $nearestDistance = $distance;
-                    $nearest = $column;
-                }
-            }
-
-            if ($nearest === null) continue;
-
-            // Do not attach a status from the description area to a distant column.
-            if ($nearestDistance > max($tolerance * 3.0, $this->medianColumnGap($columns) * 0.60)) {
-                continue;
-            }
-
-            // Wide status cells can represent a merged cell spanning several columns.
-            $covered = [];
-            if ($width > max(2.0, $tolerance * 1.5)) {
-                $right = $left + $width;
-                foreach ($columns as $column) {
-                    $columnCenter = (float)$column['x'] + ((float)($column['width'] ?? 1.0) / 2.0);
-                    if ($columnCenter >= $left - $tolerance && $columnCenter <= $right + $tolerance) {
-                        $covered[] = $column;
-                    }
-                }
-            }
-
-            if (!$covered) $covered = [$nearest];
-
-            foreach ($covered as $column) {
-                $key = $this->normalizeCode($column['code']);
-                $refsByStatus[$status][$key] = $column['code'];
-            }
-        }
-
-        foreach ($refsByStatus as $status => $refs) {
-            $refsByStatus[$status] = array_values($refs);
-        }
-
-        return [
-            'has_status' => $hasStatus,
-            'refs_by_status' => $refsByStatus,
-        ];
     }
 
     private function descriptionForRow(array $cells, string $code): ?string
     {
         $parts = [];
         foreach ($cells as $word) {
-            $text = trim((string)$word['text']);
+            $text = trim((string) $word['text']);
             if ($text === '' || $text === $code || $this->normalizeStatus($text) !== null) continue;
-            $parts[] = ['x' => (float)$word['x'], 'text' => $text];
+            $parts[] = ['x' => (float) $word['x'], 'text' => $text];
         }
+
         usort($parts, fn($a, $b) => $a['x'] <=> $b['x']);
         return $parts ? trim(implode(' ', array_column($parts, 'text'))) : null;
     }
@@ -246,31 +230,29 @@ class CoordinateTableAnalyzer
 
     private function medianColumnGap(array $columns): float
     {
-        $xs = array_map(fn($c) => (float)$c['x'], $columns);
+        $xs = array_map(fn($c) => (float) $c['x'], $columns);
         sort($xs);
         $gaps = [];
+
         for ($i = 1; $i < count($xs); $i++) {
             if ($xs[$i] > $xs[$i - 1]) $gaps[] = $xs[$i] - $xs[$i - 1];
         }
+
         if (!$gaps) return 10.0;
         sort($gaps);
-        return $gaps[(int)floor(count($gaps) / 2)];
-    }
-
-    private function xTolerance(array $columns): float
-    {
-        return max(3.0, min(12.0, $this->medianColumnGap($columns) * 0.30));
+        return $gaps[(int) floor(count($gaps) / 2)];
     }
 
     private function yTolerance(array $words): float
     {
         $heights = array_values(array_filter(
-            array_map(fn($w) => (float)($w['height'] ?? 0), $words),
+            array_map(fn($w) => (float) ($w['height'] ?? 0), $words),
             fn($h) => $h > 0
         ));
+
         if (!$heights) return 4.0;
         sort($heights);
-        return max(3.0, min(8.0, $heights[(int)floor(count($heights) / 2)] * 0.55));
+        return max(3.0, min(8.0, $heights[(int) floor(count($heights) / 2)] * 0.55));
     }
 
     private function dedupeControls(array $controls): array
@@ -283,6 +265,7 @@ class CoordinateTableAnalyzer
             $control['equipment_refs'] = $refs;
             $out[$key] = $control;
         }
+
         return array_values($out);
     }
 }
