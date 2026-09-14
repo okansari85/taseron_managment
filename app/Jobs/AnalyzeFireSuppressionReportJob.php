@@ -18,6 +18,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
@@ -56,6 +57,18 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $pages=$extractor->extractPages($file);
             $progress->stage($this->analysisId,'ai','Rapor tek AI isteğiyle analiz ediliyor');
             $semantic=$analyzer->analyze($pages);
+
+            // Temporary diagnostic: preserve the exact NVIDIA semantic JSON in
+            // Laravel logs so we can compare AI output with deterministic V12.
+            // This does not alter the final API JSON and must not be used for
+            // production persistence.
+            if (in_array(mb_strtolower(trim((string) config('services.fire_suppression.ai_provider','nvidia')),'UTF-8'), ['nvidia','nvidia_nim','nim'], true)) {
+                Log::info('FIRE_SUPPRESSION_NVIDIA_SEMANTIC_RAW', [
+                    'analysis_id' => $this->analysisId,
+                    'semantic' => $semantic,
+                ]);
+            }
+
             $progress->stage($this->analysisId,'tables','Rapor tabloları dinamik olarak analiz ediliyor');
 
             // Coordinate extraction is kept separate from normal text extraction.
