@@ -17,21 +17,33 @@ class TemplateDrivenFireSuppressionExtractor
 
         $template = is_array($semantic['template'] ?? null) ? $semantic['template'] : [];
         $systems = (array) ($template['fire_systems']['systems'] ?? []);
+        $allSystemSectionPatterns = $this->collectSystemSectionPatterns($systems);
         $extractedSystems = [];
 
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
             $systemName = $this->string($system['system_name'] ?? null);
             if ($systemName === null) continue;
+
+            $controlTemplates = (array) ($system['control_items'] ?? []);
             $equipment = [];
             foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
                 if (!is_array($equipmentTemplate)) continue;
-                foreach ($this->extractHorizontalEquipment($latticeTables, $equipmentTemplate) as $item) $equipment[] = $item;
+                foreach ($this->extractHorizontalEquipment(
+                    $latticeTables,
+                    $equipmentTemplate,
+                    $controlTemplates,
+                    $system['section_heading_patterns'] ?? [],
+                    $allSystemSectionPatterns
+                ) as $item) {
+                    $equipment[] = $item;
+                }
             }
+
             $extractedSystems[] = [
                 'system_name' => $systemName,
                 'equipment' => $equipment,
-                'control_items' => $this->extractControls($latticeTables, (array) ($system['control_items'] ?? [])),
+                'control_items' => $this->extractControls($latticeTables, $controlTemplates),
             ];
         }
 
@@ -51,23 +63,55 @@ class TemplateDrivenFireSuppressionExtractor
         return $result;
     }
 
-    private function extractHorizontalEquipment(array $tables, array $template): array
-    {
+    private function extractHorizontalEquipment(
+        array $tables,
+        array $template,
+        array $controlTemplates = [],
+        array $currentSectionPatterns = [],
+        array $allSystemSectionPatterns = []
+    ): array {
         $headerPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? []))));
         $labelPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['left_column_patterns'] ?? $template['table_structure']['left_column']['label_patterns'] ?? []))));
         if (!$headerPatterns || !$labelPatterns) return [];
+
+        $controlCodePatterns = [];
+        foreach ($controlTemplates as $control) {
+            foreach ((array) ($control['control_code_patterns'] ?? []) as $pattern) {
+                $pattern = trim((string) $pattern);
+                if ($pattern !== '') $controlCodePatterns[] = $pattern;
+            }
+        }
+        $currentSectionPatterns = array_values(array_filter(array_map('strval', (array) $currentSectionPatterns)));
+        $allSystemSectionPatterns = array_values(array_filter(array_map('strval', (array) $allSystemSectionPatterns)));
 
         $items = [];
         $currentHeader = [];
         foreach ($tables as $table) {
             foreach ($this->matrix($table) as $row) {
                 if (!$row) continue;
+                $rowText = $this->rowText($row);
+
+                if ($allSystemSectionPatterns && $this->matchesAny($rowText, $allSystemSectionPatterns)) {
+                    $isCurrentSection = !$currentSectionPatterns || $this->matchesAny($rowText, $currentSectionPatterns);
+                    if (!$isCurrentSection) {
+                        $currentHeader = [];
+                        continue;
+                    }
+                }
+
+                if ($controlCodePatterns && $this->rowContainsControlCode($row, $controlCodePatterns)) {
+                    $currentHeader = [];
+                    continue;
+                }
+
                 $headerColumn = $this->findPatternColumn($row, $headerPatterns);
                 if ($headerColumn !== null) {
-                    $currentHeader = $this->headerFromRow($row, $headerColumn, $template);
+                    $header = $this->headerFromRow($row, $headerColumn, $template);
+                    if ($header) $currentHeader = $header;
                     continue;
                 }
                 if (!$currentHeader) continue;
+
                 $labelColumn = $this->findPatternColumn($row, $labelPatterns);
                 if ($labelColumn === null) continue;
                 $label = $this->cleanValue((string) $row[$labelColumn]);
@@ -128,12 +172,12 @@ class TemplateDrivenFireSuppressionExtractor
             foreach ($tables as $table) {
                 foreach ($this->matrix($table) as $row) {
                     foreach ($row as $index => $value) {
-                        $code = $this->matchPatternValue((string) $value, $codePatterns);
+                        $code = $this->matchControlCode((string) $value, $codePatterns);
                         if ($code === null) continue;
                         $result = null;
                         foreach ($row as $resultIndex => $candidate) {
                             if ((int) $resultIndex === (int) $index) continue;
-                            $matched = $this->matchPatternValue((string) $candidate, $resultPatterns);
+                            $matched = $this->matchResultValue((string) $candidate, $resultPatterns);
                             if ($matched !== null) { $result = $matched; break; }
                         }
                         $out[$this->normalizeCode($code)] = [
@@ -148,6 +192,58 @@ class TemplateDrivenFireSuppressionExtractor
         return array_values($out);
     }
 
+    private function matchControlCode(string $value, array $patterns): ?string
+    {
+        $value = trim($value);
+        if ($value === '') return null;
+        $normalizedValue = $this->normalizeCode($value);
+        foreach ($patterns as $pattern) {
+            $pattern = trim($pattern);
+            if ($pattern === '') continue;
+            $normalizedPattern = $this->normalizeCode($pattern);
+            if ($normalizedPattern === $normalizedValue) return $value;
+            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match($pattern, $value) === 1) return $value;
+            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match('~' . $pattern . '~iu', $value) === 1) return $value;
+        }
+        return null;
+    }
+
+    private function matchResultValue(string $value, array $patterns): ?string
+    {
+        $value = trim($value);
+        if ($value === '') return null;
+        $normalizedValue = $this->normalizeLabel($value);
+        foreach ($patterns as $pattern) {
+            $pattern = trim($pattern);
+            if ($pattern === '') continue;
+            if ($normalizedValue === $this->normalizeLabel($pattern)) return $value;
+            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match($pattern, $value) === 1) return $value;
+            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match('~' . $pattern . '~iu', $value) === 1) return $value;
+        }
+        return null;
+    }
+
+    private function rowContainsControlCode(array $row, array $patterns): bool
+    {
+        foreach ($row as $value) {
+            if ($this->matchControlCode((string) $value, $patterns) !== null) return true;
+        }
+        return false;
+    }
+
+    private function collectSystemSectionPatterns(array $systems): array
+    {
+        $patterns = [];
+        foreach ($systems as $system) {
+            if (!is_array($system)) continue;
+            foreach ((array) ($system['section_heading_patterns'] ?? []) as $pattern) {
+                $pattern = trim((string) $pattern);
+                if ($pattern !== '') $patterns[] = $pattern;
+            }
+        }
+        return array_values(array_unique($patterns));
+    }
+
     private function extractReportInformation(array $tables, array $fieldTemplates): array
     {
         $result = [];
@@ -158,8 +254,8 @@ class TemplateDrivenFireSuppressionExtractor
                     if (!is_array($field)) continue;
                     $key = $this->string($field['key'] ?? null);
                     $patterns = array_values(array_filter(array_map('strval', (array) ($field['label_patterns'] ?? []))));
-                    if ($key === null || !$patterns) continue;
-                    $labelColumn = $this->findPatternColumn($row, $patterns);
+                    if ($key === null || !$patterns || array_key_exists($key, $result)) continue;
+                    $labelColumn = $this->findPatternColumn($row, $patterns, true);
                     if ($labelColumn === null) continue;
                     $value = $this->nextNonEmpty($row, $labelColumn + 1);
                     if ($value !== null) $result[$key] = $this->cleanValue($value);
@@ -185,8 +281,8 @@ class TemplateDrivenFireSuppressionExtractor
                     if (!is_array($field)) continue;
                     $key = $this->string($field['key'] ?? null);
                     $patterns = array_values(array_filter(array_map('strval', (array) ($field['label_patterns'] ?? []))));
-                    if ($key === null || !$patterns) continue;
-                    $labelColumn = $this->findPatternColumn($row, $patterns);
+                    if ($key === null || !$patterns || array_key_exists($key, $result)) continue;
+                    $labelColumn = $this->findPatternColumn($row, $patterns, true);
                     if ($labelColumn === null) continue;
                     $value = $this->nextNonEmpty($row, $labelColumn + 1);
                     if ($value !== null) $result[$key] = $this->cleanValue($value);
@@ -201,15 +297,18 @@ class TemplateDrivenFireSuppressionExtractor
         $sectionPatterns = array_values(array_filter(array_map('strval', (array) ($template['section_heading_patterns'] ?? $template['camelot_extraction']['section_patterns'] ?? []))));
         $textPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['text_patterns'] ?? $template['overall_text']['text_boundary_patterns'] ?? []))));
         $statusPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['status_patterns'] ?? $template['overall_status']['status_patterns'] ?? []))));
-        $active = !$sectionPatterns; $textParts = []; $status = null;
+        $active = !$sectionPatterns;
+        $textParts = [];
+        $status = null;
         foreach ($tables as $table) {
             if (($table['flavor'] ?? '') !== 'stream') continue;
             foreach ($this->matrix($table) as $row) {
                 $text = $this->rowText($row);
                 if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $active = true; continue; }
                 if (!$active) continue;
+                if ($this->isOverallEndBoundary($text, $textPatterns)) break 2;
                 if ($text !== '') $textParts[] = $text;
-                $matchedStatus = $this->matchPatternValue($text, $statusPatterns);
+                $matchedStatus = $this->matchResultValue($text, $statusPatterns);
                 if ($matchedStatus !== null) $status = $matchedStatus;
             }
         }
@@ -226,8 +325,25 @@ class TemplateDrivenFireSuppressionExtractor
         return $result;
     }
 
-    private function findPatternColumn(array $row, array $patterns): ?int
+    private function isOverallEndBoundary(string $text, array $patterns): bool
     {
+        foreach ($patterns as $pattern) {
+            if ($this->matchesAny($text, [$pattern])) return true;
+        }
+        if (preg_match('/^\d+\.\s+/u', trim($text)) === 1 && !preg_match('/^8\.\s+/u', trim($text))) return true;
+        return false;
+    }
+
+    private function findPatternColumn(array $row, array $patterns, bool $preferExact = false): ?int
+    {
+        if ($preferExact) {
+            foreach ($row as $index => $value) {
+                $normalizedValue = $this->normalizeLabel((string) $value);
+                foreach ($patterns as $pattern) {
+                    if ($normalizedValue === $this->normalizeLabel((string) $pattern)) return (int) $index;
+                }
+            }
+        }
         foreach ($row as $index => $value) if ($this->matchesAny((string) $value, $patterns)) return (int) $index;
         return null;
     }
@@ -322,8 +438,8 @@ class TemplateDrivenFireSuppressionExtractor
 
     private function string(mixed $value): ?string
     {
-        if ($value === null) return null;
-        $value = trim((string) $value);
+        if (!is_string($value)) return null;
+        $value = trim($value);
         return $value === '' ? null : $value;
     }
 }
