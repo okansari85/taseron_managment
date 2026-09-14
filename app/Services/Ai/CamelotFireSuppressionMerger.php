@@ -32,7 +32,7 @@ class CamelotFireSuppressionMerger
                 if (!$header) continue;
 
                 $this->mergeEquipmentRows($components, $header, $matrix);
-                $this->mergeControlRows($system, $header, $matrix, $controlCodes);
+                $this->mergeControlRows($system, $header, $matrix, $controlCodes, (int) ($table['page'] ?? 0));
             }
 
             $system['components'] = array_values($components);
@@ -57,7 +57,7 @@ class CamelotFireSuppressionMerger
     private function equipmentHeader(array $matrix, array $equipmentCodes): array
     {
         $best = [];
-        foreach ($matrix as $ri => $row) {
+        foreach ($matrix as $row) {
             $hits = [];
             foreach ($row as $ci => $value) {
                 $k = $this->key($value);
@@ -84,7 +84,6 @@ class CamelotFireSuppressionMerger
             'marka' => 'brand',
             'model' => 'model',
             'seri no' => 'serial_no',
-            'seri no.' => 'serial_no',
             'serino' => 'serial_no',
         ];
 
@@ -105,9 +104,9 @@ class CamelotFireSuppressionMerger
         }
     }
 
-    private function mergeControlRows(array &$system, array $header, array $matrix, array $controlCodes): void
+    private function mergeControlRows(array &$system, array $header, array $matrix, array $controlCodes, int $page): void
     {
-        foreach ($matrix as $ri => $row) {
+        foreach ($matrix as $row) {
             if (!$row) continue;
             $code = $this->extractControlCode($row[0] ?? '');
             if ($code === '' || !isset($controlCodes[$this->controlKey($code)])) continue;
@@ -121,30 +120,26 @@ class CamelotFireSuppressionMerger
                 $statusRefs[$status][] = $item['code'];
             }
 
-            if (!$statusRefs) continue;
             foreach ($statusRefs as $status => $refs) {
-                $this->addResult($system, $canonical, $status, $refs, (int) ($system['_camelot_page'] ?? 0));
+                $this->addResult($system, $canonical, $status, $refs, $page);
             }
-            $page = (int) ($this->tablePageForCurrent($matrix, $system) ?? 0);
-            unset($page);
         }
     }
 
-    private function addResult(array &$system, string $code, string $status, array $refs, int $unusedPage): void
+    private function addResult(array &$system, string $code, string $status, array $refs, int $page): void
     {
         foreach ((array) ($system['control_items'] ?? []) as $i => $item) {
             if ($this->controlKey((string) ($item['code'] ?? '')) !== $this->controlKey($code)) continue;
             $system['control_items'][$i]['results'][$status] = array_values(array_unique(array_merge(
-                (array) ($system['control_items'][$i]['results'][$status] ?? []),
-                $refs
+                (array) ($system['control_items'][$i]['results'][$status] ?? []), $refs
             )));
+            if ($page > 0) {
+                $system['control_items'][$i]['source_pages'] = array_values(array_unique(array_merge(
+                    (array) ($system['control_items'][$i]['source_pages'] ?? []), [$page]
+                )));
+            }
             return;
         }
-    }
-
-    private function tablePageForCurrent(array $matrix, array $system): ?int
-    {
-        return null;
     }
 
     private function extractControlCode(string $value): string
@@ -170,7 +165,8 @@ class CamelotFireSuppressionMerger
 
     private function controlKey(string $value): string
     {
-        return strtoupper(str_replace([' ', 'U.D'], ['', 'UD'], trim($value)));
+        $value = strtoupper(trim($value));
+        return str_replace([' ', 'U.D'], ['', 'UD'], $value);
     }
 
     private function key(string $value): string
