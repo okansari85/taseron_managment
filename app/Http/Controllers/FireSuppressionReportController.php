@@ -45,6 +45,16 @@ class FireSuppressionReportController extends Controller
             return response()->json(['data' => $items]);
         }
 
+        if ($request->boolean('gemini_fixture_get')) {
+            $fixtureId = trim((string) $request->input('fixture_id'));
+            $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
+            abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
+
+            return response()->json([
+                'data' => json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR),
+            ]);
+        }
+
         if ($request->boolean('gemini_fixture')) {
             $file = $request->file('file');
             $pages = $extractor->extractPages($file);
