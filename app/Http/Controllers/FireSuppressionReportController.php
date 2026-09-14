@@ -12,12 +12,12 @@ use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\Ai\TemplateDiscoveryReportNormalizer;
+use App\Services\Ai\TemplateDrivenFireSuppressionExtractor;
 use App\Services\FireSuppressionReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Illuminate\Http\UploadedFile;
 
 class FireSuppressionReportController extends Controller
 {
@@ -30,7 +30,8 @@ class FireSuppressionReportController extends Controller
         FireSuppressionAnalysisProgress $progress,
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
-        TemplateDiscoveryReportNormalizer $normalizer
+        TemplateDiscoveryReportNormalizer $normalizer,
+        TemplateDrivenFireSuppressionExtractor $templateExtractor
     ): JsonResponse {
         if ($request->boolean('gemini_fixture_list')) {
             $items = collect(Storage::disk('local')->files('fire-suppression-gemini-fixtures'))
@@ -89,14 +90,38 @@ class FireSuppressionReportController extends Controller
             return response()->json(['data' => $fixture]);
         }
 
+        if ($request->boolean('gemini_fixture_camelot')) {
+            $fixtureId = trim((string) $request->input('fixture_id'));
+            abort_unless($fixtureId !== '' && preg_match('/^[0-9a-f-]{36}$/i', $fixtureId), 422, 'Geçersiz fixture ID.');
+
+            $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
+            abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
+            $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+
+            $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
+            if (!Storage::disk('local')->exists($pdfPath)) {
+                abort_unless($request->hasFile('file'), 422, 'Bu fixture için PDF kayıtlı değil. Aynı rapor PDF\'sini seçmelisin.');
+                $file = $request->file('file');
+                Storage::disk('local')->putFileAs('fire-suppression-gemini-fixtures', $file, "{$fixtureId}.pdf");
+                $pdfPath = "fire-suppression-gemini-fixtures/{$fixtureId}.pdf";
+            }
+
+            $result = $templateExtractor->extract(
+                Storage::disk('local')->path($pdfPath),
+                (array) ($fixture['semantic'] ?? [])
+            );
+            $result['fixture_id'] = $fixtureId;
+            $result['original_file_name'] = $fixture['original_file_name'] ?? null;
+            return response()->json(['data' => $result]);
+        }
+
         if ($request->boolean('gemini_fixture_v12')) {
             $fixtureId = trim((string) $request->input('fixture_id'));
             $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
             abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
             $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
 
-            // V12 test endpoint is kept for the existing frontend flow. The
-            // result is now the stable Template Discovery target JSON.
+            // Legacy V12 test endpoint is intentionally kept for the existing frontend flow.
             $result = $normalizer->normalize((array) ($fixture['semantic'] ?? []), $fixtureId);
             $result['analyzer']['fixture_mode'] = true;
             return response()->json(['data' => $result]);
