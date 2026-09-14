@@ -3,14 +3,16 @@
 namespace App\Services\Ai;
 
 /**
- * Deterministic coordinate-based matrix analyzer.
+ * Deterministic PDF matrix mapper.
  *
- * The matrix orientation is discovered from the PDF itself:
- * - equipment can be the X axis and controls the Y axis
- * - OR equipment can be the Y axis and controls the X axis
+ * The only things that matter are the geometry of the PDF and the known
+ * equipment/control labels:
+ *   - equipment labels form one axis
+ *   - control labels form the other axis
+ *   - the status text at their intersection belongs to that equipment/control
  *
- * No fixed "first column", "first row" or fixed control-code format is
- * assumed when the known control codes are supplied by the caller.
+ * The orientation is discovered from the PDF. Nothing assumes that equipment
+ * is always X or that controls are always Y, and status values are dynamic.
  */
 class CoordinateTableAnalyzer
 {
@@ -33,18 +35,20 @@ class CoordinateTableAnalyzer
             $controlHits = $this->findControlHits($words, $knownControls);
             if (!$controlHits) continue;
 
-            $orientation = $this->detectOrientation($equipmentHits, $controlHits);
+            $orientation = $this->detectOrientation($equipmentHits);
 
             if ($orientation === 'horizontal_equipment') {
-                $equipmentAxis = $this->equipmentAxisHorizontal($equipmentHits);
-                $controlAxis = $this->controlAxisVertical($controlHits);
-                if (!$equipmentAxis || !$controlAxis) continue;
-                $mapped = $this->mapHorizontalEquipment($words, $equipmentAxis, $controlAxis);
+                $equipmentAxis = $this->bestBand($equipmentHits, 'y');
+                $this->sortAxis($equipmentAxis, 'x');
+                $controlAxis = $this->uniqueControlItems($controlHits);
+                $this->sortAxis($controlAxis, 'y');
+                $mapped = $this->mapHorizontal($words, $equipmentAxis, $controlAxis);
             } else {
-                $equipmentAxis = $this->equipmentAxisVertical($equipmentHits);
-                $controlAxis = $this->controlAxisHorizontal($controlHits);
-                if (!$equipmentAxis || !$controlAxis) continue;
-                $mapped = $this->mapVerticalEquipment($words, $equipmentAxis, $controlAxis);
+                $equipmentAxis = $this->bestBand($equipmentHits, 'x');
+                $this->sortAxis($equipmentAxis, 'y');
+                $controlAxis = $this->uniqueControlItems($controlHits);
+                $this->sortAxis($controlAxis, 'x');
+                $mapped = $this->mapVertical($words, $equipmentAxis, $controlAxis);
             }
 
             $pageNo = (int) ($page['page'] ?? $page['page_number'] ?? 0);
@@ -56,7 +60,7 @@ class CoordinateTableAnalyzer
                         'description' => $row['description'],
                         'status' => $status,
                         'scope' => 'equipment',
-                        'equipment_refs' => $refs,
+                        'equipment_refs' => array_values(array_unique($refs)),
                         'source_pages' => [$pageNo],
                         'system_name' => null,
                     ];
@@ -120,7 +124,6 @@ class CoordinateTableAnalyzer
     private function findControlHits(array $words, array $knownControls): array
     {
         $hits = [];
-
         foreach ($words as $word) {
             $raw = trim((string) $word['text']);
             if ($raw === '') continue;
@@ -137,9 +140,6 @@ class CoordinateTableAnalyzer
                 continue;
             }
 
-            // Fallback only when the caller does not know the control codes.
-            // This keeps old numeric reports working, without making numeric
-            // control codes a requirement for the dynamic matrix algorithm.
             if (!$knownControls && preg_match('/^\d+(?:\.\d+)+$/u', $raw)) {
                 $hits[] = [
                     'code' => $raw,
@@ -159,75 +159,12 @@ class CoordinateTableAnalyzer
         return array_values($unique);
     }
 
-    private function detectOrientation(array $equipmentHits, array $controlHits): string
+    /** Equipment geometry alone determines which axis is the equipment axis. */
+    private function detectOrientation(array $equipmentHits): string
     {
-        $equipmentHorizontal = $this->bandConcentration($equipmentHits, 'y');
-        $equipmentVertical = $this->bandConcentration($equipmentHits, 'x');
-        $controlHorizontal = $this->bandConcentration($controlHits, 'y');
-        $controlVertical = $this->bandConcentration($controlHits, 'x');
-
-        $normalScore = $equipmentHorizontal + $controlVertical;
-        $transposeScore = $equipmentVertical + $controlHorizontal;
-
-        if ($transposeScore > $normalScore) return 'vertical_equipment';
-        return 'horizontal_equipment';
-    }
-
-    private function bandConcentration(array $hits, string $axis): float
-    {
-        if (count($hits) <= 1) return 1.0;
-
-        $values = array_map(fn($h) => (float) $h[$axis], $hits);
-        sort($values);
-        $spread = max($values) - min($values);
-        if ($spread <= 0.001) return 1.0;
-
-        $otherAxis = $axis === 'x' ? 'y' : 'x';
-        $otherValues = array_map(fn($h) => (float) $h[$otherAxis], $hits);
-        sort($otherValues);
-        $otherSpread = max($otherValues) - min($otherValues);
-        if ($otherSpread <= 0.001) return 1.0;
-
-        // We want many items sharing the same value on the requested axis.
-        $tolerance = $this->coordinateTolerance($hits);
-        $best = 1;
-        foreach ($values as $value) {
-            $count = 0;
-            foreach ($values as $candidate) {
-                if (abs($candidate - $value) <= $tolerance) $count++;
-            }
-            $best = max($best, $count);
-        }
-
-        return $best / count($hits);
-    }
-
-    private function equipmentAxisHorizontal(array $hits): array
-    {
-        $band = $this->bestBand($hits, 'y');
-        usort($band, fn($a, $b) => $a['x'] <=> $b['x']);
-        return $this->uniqueAxisItems($band);
-    }
-
-    private function equipmentAxisVertical(array $hits): array
-    {
-        $band = $this->bestBand($hits, 'x');
-        usort($band, fn($a, $b) => $a['y'] <=> $b['y']);
-        return $this->uniqueAxisItems($band);
-    }
-
-    private function controlAxisVertical(array $hits): array
-    {
-        $banded = $this->uniqueControlItems($hits);
-        usort($banded, fn($a, $b) => $a['y'] <=> $b['y']);
-        return $banded;
-    }
-
-    private function controlAxisHorizontal(array $hits): array
-    {
-        $banded = $this->uniqueControlItems($hits);
-        usort($banded, fn($a, $b) => $a['x'] <=> $b['x']);
-        return $banded;
+        $horizontal = count($this->bestBand($equipmentHits, 'y'));
+        $vertical = count($this->bestBand($equipmentHits, 'x'));
+        return $horizontal >= $vertical ? 'horizontal_equipment' : 'vertical_equipment';
     }
 
     private function bestBand(array $hits, string $axis): array
@@ -244,17 +181,12 @@ class CoordinateTableAnalyzer
             if (count($band) > count($best)) $best = $band;
         }
 
-        return $best ?: $hits;
-    }
-
-    private function uniqueAxisItems(array $items): array
-    {
-        $out = [];
-        foreach ($items as $item) {
+        $unique = [];
+        foreach ($best ?: $hits as $item) {
             $key = $this->normalizeCode($item['code']);
-            if (!isset($out[$key])) $out[$key] = $item;
+            if (!isset($unique[$key])) $unique[$key] = $item;
         }
-        return array_values($out);
+        return array_values($unique);
     }
 
     private function uniqueControlItems(array $items): array
@@ -267,12 +199,14 @@ class CoordinateTableAnalyzer
         return array_values($out);
     }
 
-    private function mapHorizontalEquipment(array $words, array $equipmentAxis, array $controlAxis): array
+    private function mapHorizontal(array $words, array $equipmentAxis, array $controlAxis): array
     {
+        if (!$equipmentAxis || !$controlAxis) return [];
+
+        $this->sortAxis($equipmentAxis, 'x');
+        $rowTolerance = $this->axisTolerance($controlAxis, 'y');
+        $boundaries = $this->cellBoundaries($equipmentAxis, 'x');
         $results = [];
-        $columnGap = $this->medianGap($equipmentAxis, 'x');
-        $maxXDistance = max(8.0, $columnGap * 0.48);
-        $rowTolerance = $this->axisRowTolerance($controlAxis, 'y');
 
         foreach ($controlAxis as $control) {
             $rowY = (float) $control['y'];
@@ -281,29 +215,47 @@ class CoordinateTableAnalyzer
                 fn($word) => abs((float) $word['y'] - $rowY) <= $rowTolerance
             ));
 
-            $statusByEquipment = ['U' => [], 'UD' => [], 'N' => []];
-            foreach ($equipmentAxis as $column) {
-                $x = (float) $column['x'] + ((float) ($column['width'] ?? 1.0) / 2.0);
-                $status = $this->nearestStatus($rowWords, $x, 'x', $maxXDistance);
-                if ($status !== null) $statusByEquipment[$status][] = $column['code'];
+            $statusWords = $this->matrixStatusWords($rowWords, $equipmentAxis, 'x');
+            $mapped = [];
+
+            foreach ($statusWords as $word) {
+                $center = $this->center($word, 'x');
+                $index = $this->findCellIndex($center, $boundaries);
+                if ($index === null || !isset($equipmentAxis[$index])) continue;
+
+                $status = $this->statusValue((string) $word['text']);
+                if ($status === null) continue;
+                $mapped[$index][$status][] = $equipmentAxis[$index]['code'];
             }
+
+            $mapped = $this->resolveMultipleStatusWords($mapped, $equipmentAxis, 'x');
+            $statusResults = [];
+            foreach ($mapped as $cell) {
+                foreach ($cell as $status => $refs) {
+                    foreach ($refs as $ref) $statusResults[$status][] = $ref;
+                }
+            }
+
+            foreach ($statusResults as $status => $refs) $statusResults[$status] = array_values(array_unique($refs));
 
             $results[] = [
                 'code' => $control['code'],
-                'description' => $this->descriptionForHorizontalControl($words, $control, $rowTolerance),
-                'results' => $this->cleanStatusResults($statusByEquipment),
+                'description' => $this->descriptionHorizontal($rowWords, $control, $equipmentAxis),
+                'results' => $statusResults,
             ];
         }
 
         return $results;
     }
 
-    private function mapVerticalEquipment(array $words, array $equipmentAxis, array $controlAxis): array
+    private function mapVertical(array $words, array $equipmentAxis, array $controlAxis): array
     {
+        if (!$equipmentAxis || !$controlAxis) return [];
+
+        $this->sortAxis($equipmentAxis, 'y');
+        $columnTolerance = $this->axisTolerance($controlAxis, 'x');
+        $boundaries = $this->cellBoundaries($equipmentAxis, 'y');
         $results = [];
-        $rowGap = $this->medianGap($equipmentAxis, 'y');
-        $maxYDistance = max(8.0, $rowGap * 0.48);
-        $columnTolerance = $this->axisRowTolerance($controlAxis, 'x');
 
         foreach ($controlAxis as $control) {
             $controlX = (float) $control['x'];
@@ -312,129 +264,192 @@ class CoordinateTableAnalyzer
                 fn($word) => abs((float) $word['x'] - $controlX) <= $columnTolerance
             ));
 
-            $statusByEquipment = ['U' => [], 'UD' => [], 'N' => []];
-            foreach ($equipmentAxis as $row) {
-                $y = (float) $row['y'] + ((float) ($row['height'] ?? 1.0) / 2.0);
-                $status = $this->nearestStatus($columnWords, $y, 'y', $maxYDistance);
-                if ($status !== null) $statusByEquipment[$status][] = $row['code'];
+            $statusWords = $this->matrixStatusWords($columnWords, $equipmentAxis, 'y');
+            $mapped = [];
+
+            foreach ($statusWords as $word) {
+                $center = $this->center($word, 'y');
+                $index = $this->findCellIndex($center, $boundaries);
+                if ($index === null || !isset($equipmentAxis[$index])) continue;
+
+                $status = $this->statusValue((string) $word['text']);
+                if ($status === null) continue;
+                $mapped[$index][$status][] = $equipmentAxis[$index]['code'];
             }
+
+            $mapped = $this->resolveMultipleStatusWords($mapped, $equipmentAxis, 'y');
+            $statusResults = [];
+            foreach ($mapped as $cell) {
+                foreach ($cell as $status => $refs) {
+                    foreach ($refs as $ref) $statusResults[$status][] = $ref;
+                }
+            }
+
+            foreach ($statusResults as $status => $refs) $statusResults[$status] = array_values(array_unique($refs));
 
             $results[] = [
                 'code' => $control['code'],
-                'description' => $this->descriptionForVerticalControl($words, $control, $columnTolerance),
-                'results' => $this->cleanStatusResults($statusByEquipment),
+                'description' => $this->descriptionVertical($columnWords, $control, $equipmentAxis),
+                'results' => $statusResults,
             ];
         }
 
         return $results;
     }
 
-    private function nearestStatus(array $words, float $target, string $axis, float $maxDistance): ?string
+    /** Find short status-like cell text inside the equipment span; status values are dynamic. */
+    private function matrixStatusWords(array $words, array $equipmentAxis, string $axis): array
     {
-        $best = null;
-        $bestDistance = PHP_FLOAT_MAX;
+        if (!$equipmentAxis) return [];
 
+        $first = $this->center($equipmentAxis[0], $axis);
+        $last = $this->center($equipmentAxis[count($equipmentAxis) - 1], $axis);
+        $min = min($first, $last);
+        $max = max($first, $last);
+
+        $out = [];
         foreach ($words as $word) {
-            $status = $this->normalizeStatus((string) ($word['text'] ?? ''));
-            if ($status === null) continue;
+            $text = trim((string) ($word['text'] ?? ''));
+            if ($text === '') continue;
 
-            $center = (float) $word[$axis] + ((float) ($word[$axis === 'x' ? 'width' : 'height'] ?? 1.0) / 2.0);
-            $distance = abs($center - $target);
-            if ($distance < $bestDistance) {
-                $bestDistance = $distance;
-                $best = $status;
-            }
+            $center = $this->center($word, $axis);
+            if ($center < $min || $center > $max) continue;
+
+            if ($this->statusValue($text) === null) continue;
+            $out[] = $word;
         }
-
-        return $best !== null && $bestDistance <= $maxDistance ? $best : null;
+        return $out;
     }
 
-    private function descriptionForHorizontalControl(array $words, array $control, float $tolerance): ?string
+    /** Any short alphabetic cell value can be a status; no U/UD/N whitelist. */
+    private function statusValue(string $text): ?string
     {
+        $value = strtoupper(trim($text));
+        $value = str_replace(['.', ' ', '_', '-'], '', $value);
+        if ($value === '' || mb_strlen($value, 'UTF-8') > 6) return null;
+        if (!preg_match('/^[A-ZÇĞİÖŞÜ]+$/u', $value)) return null;
+        return $value;
+    }
+
+    private function cellBoundaries(array $axisItems, string $axis): array
+    {
+        $centers = array_map(fn($item) => $this->center($item, $axis), $axisItems);
+        $boundaries = [];
+        for ($i = 0, $n = count($centers); $i < $n; $i++) {
+            $left = $i === 0 ? -INF : (($centers[$i - 1] + $centers[$i]) / 2.0);
+            $right = $i === $n - 1 ? INF : (($centers[$i] + $centers[$i + 1]) / 2.0);
+            $boundaries[] = [$left, $right];
+        }
+        return $boundaries;
+    }
+
+    private function findCellIndex(float $value, array $boundaries): ?int
+    {
+        foreach ($boundaries as $i => [$min, $max]) {
+            if ($value >= $min && $value < $max) return $i;
+        }
+        return null;
+    }
+
+    private function resolveMultipleStatusWords(array $mapped, array $axisItems, string $axis): array
+    {
+        foreach ($mapped as $index => $statuses) {
+            if (count($statuses) <= 1) continue;
+            $bestStatus = null;
+            $bestDistance = PHP_FLOAT_MAX;
+            $target = $this->center($axisItems[$index], $axis);
+            foreach ($statuses as $status => $refs) {
+                foreach ($refs as $ref) {
+                    foreach ($axisItems as $candidate) {
+                        if ($candidate['code'] !== $ref) continue;
+                        $distance = abs($this->center($candidate, $axis) - $target);
+                        if ($distance < $bestDistance) {
+                            $bestDistance = $distance;
+                            $bestStatus = $status;
+                        }
+                    }
+                }
+            }
+            if ($bestStatus !== null) $mapped[$index] = [$bestStatus => [$axisItems[$index]['code']]];
+        }
+        return $mapped;
+    }
+
+    private function descriptionHorizontal(array $rowWords, array $control, array $equipmentAxis): ?string
+    {
+        $first = $this->center($equipmentAxis[0], 'x');
         $parts = [];
-        foreach ($words as $word) {
-            if (abs((float) $word['y'] - (float) $control['y']) > $tolerance) continue;
+        foreach ($rowWords as $word) {
             $text = trim((string) $word['text']);
-            if ($text === '' || $this->normalizeControlCode($text) === $this->normalizeControlCode($control['code']) || $this->normalizeStatus($text) !== null) continue;
+            if ($text === '' || $this->normalizeControlCode($text) === $this->normalizeControlCode($control['code'])) continue;
+            if ($this->statusValue($text) !== null) continue;
+            if ($this->center($word, 'x') >= $first) continue;
             $parts[] = ['x' => (float) $word['x'], 'text' => $text];
         }
         usort($parts, fn($a, $b) => $a['x'] <=> $b['x']);
         return $parts ? trim(implode(' ', array_column($parts, 'text'))) : null;
     }
 
-    private function descriptionForVerticalControl(array $words, array $control, float $tolerance): ?string
+    private function descriptionVertical(array $columnWords, array $control, array $equipmentAxis): ?string
     {
+        $first = $this->center($equipmentAxis[0], 'y');
         $parts = [];
-        foreach ($words as $word) {
-            if (abs((float) $word['x'] - (float) $control['x']) > $tolerance) continue;
+        foreach ($columnWords as $word) {
             $text = trim((string) $word['text']);
-            if ($text === '' || $this->normalizeControlCode($text) === $this->normalizeControlCode($control['code']) || $this->normalizeStatus($text) !== null) continue;
+            if ($text === '' || $this->normalizeControlCode($text) === $this->normalizeControlCode($control['code'])) continue;
+            if ($this->statusValue($text) !== null) continue;
+            if ($this->center($word, 'y') >= $first) continue;
             $parts[] = ['y' => (float) $word['y'], 'text' => $text];
         }
         usort($parts, fn($a, $b) => $a['y'] <=> $b['y']);
         return $parts ? trim(implode(' ', array_column($parts, 'text'))) : null;
     }
 
-    private function cleanStatusResults(array $results): array
+    private function axisTolerance(array $items, string $axis): float
     {
-        foreach ($results as $status => $refs) {
-            $results[$status] = array_values(array_unique($refs));
-        }
-        return $results;
-    }
-
-    private function medianGap(array $items, string $axis): float
-    {
+        if (count($items) <= 1) return 6.0;
         $values = array_map(fn($item) => (float) $item[$axis], $items);
         sort($values);
         $gaps = [];
         for ($i = 1; $i < count($values); $i++) {
             if ($values[$i] > $values[$i - 1]) $gaps[] = $values[$i] - $values[$i - 1];
         }
-        if (!$gaps) return 10.0;
-        sort($gaps);
-        return $gaps[(int) floor(count($gaps) / 2)];
-    }
-
-    private function axisRowTolerance(array $axis, string $coordinate): float
-    {
-        if (count($axis) <= 1) return 6.0;
-        $gaps = [];
-        $values = array_map(fn($item) => (float) $item[$coordinate], $axis);
-        sort($values);
-        for ($i = 1; $i < count($values); $i++) {
-            if ($values[$i] > $values[$i - 1]) $gaps[] = $values[$i] - $values[$i - 1];
-        }
         if (!$gaps) return 6.0;
         sort($gaps);
-        return max(3.0, min(10.0, $gaps[(int) floor(count($gaps) / 2)] * 0.25));
+        return max(3.0, min(10.0, $gaps[(int) floor(count($gaps) / 2)] * 0.35));
     }
 
     private function coordinateTolerance(array $hits): float
     {
-        $heights = array_values(array_filter(array_map(fn($h) => (float) ($h['height'] ?? 0), $hits), fn($v) => $v > 0));
+        $heights = array_values(array_filter(
+            array_map(fn($h) => (float) ($h['height'] ?? 0), $hits),
+            fn($v) => $v > 0
+        ));
         if (!$heights) return 5.0;
         sort($heights);
         return max(3.0, min(10.0, $heights[(int) floor(count($heights) / 2)] * 0.8));
     }
 
-    private function normalizeStatus(string $text): ?string
+    private function center(array $item, string $axis): float
     {
-        $value = strtoupper(trim($text));
-        $value = str_replace(['.', ' ', '_', '-'], '', $value);
-        return in_array($value, ['U', 'UD', 'N'], true) ? $value : null;
+        return (float) $item[$axis] + ((float) ($item[$axis === 'x' ? 'width' : 'height'] ?? 1.0) / 2.0);
+    }
+
+    private function sortAxis(array &$items, string $axis): void
+    {
+        usort($items, fn($a, $b) => (float) $a[$axis] <=> (float) $b[$axis]);
     }
 
     private function normalizeCode(string $code): string
     {
         $code = strtoupper(trim($code));
         $code = preg_replace('/\s+/u', '', $code);
-        return str_replace(['–', '—', '‑', '−'], '-', $code);
+        return str_replace(['–', '—', '‑', '−', '_'], '-', $code);
     }
 
     private function normalizeControlCode(string $code): string
     {
-        return strtoupper(preg_replace('/\s+/u', '', trim($code)));
+        return preg_replace('/\s+/u', '', trim($code));
     }
 
     private function dedupeControls(array $controls): array
