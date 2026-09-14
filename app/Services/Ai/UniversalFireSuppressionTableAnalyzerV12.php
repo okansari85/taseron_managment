@@ -12,7 +12,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         $this->coordinateAnalyzer = $coordinateAnalyzer;
     }
 
-    public function analyze(array $pages, array $semantic = []): array
+    public function analyze(array $pages, array $semantic = [], array $coordinatePages = []): array
     {
         $base = parent::analyze($pages, $semantic);
         $systems = [];
@@ -33,15 +33,15 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             ];
         }
 
-        // CoordinatePdfWordExtractor produces {page, words}. Older callers may
-        // still provide {page, data}; accept both, but never skip coordinate pages.
-        $coordinatePages = array_values(array_filter($pages, function ($page) {
-            return is_array($page)
-                && (isset($page['words']) || isset($page['tokens']) || isset($page['data']));
-        }));
-
+        // IMPORTANT: normal text pages and coordinate pages are two different
+        // representations. The job/controller passes coordinate pages as the
+        // third argument; never try to discover them inside $pages.
         if ($coordinatePages) {
-            // Normalize legacy {data: words} shape to the analyzer's {words} shape.
+            $coordinatePages = array_values(array_filter($coordinatePages, function ($page) {
+                return is_array($page)
+                    && (isset($page['words']) || isset($page['tokens']) || isset($page['data']));
+            }));
+
             $coordinatePages = array_map(function (array $page): array {
                 if (!isset($page['words']) && isset($page['data']) && is_array($page['data'])) {
                     $page['words'] = $page['data'];
@@ -49,11 +49,13 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 return $page;
             }, $coordinatePages);
 
-            $coordinateControls = $this->coordinateAnalyzer->analyze(
-                $coordinatePages,
-                $this->equipmentFromSystems($systems)
-            );
-            $systems = $this->applyCoordinateControls($systems, $coordinateControls);
+            if ($coordinatePages) {
+                $coordinateControls = $this->coordinateAnalyzer->analyze(
+                    $coordinatePages,
+                    $this->equipmentFromSystems($systems)
+                );
+                $systems = $this->applyCoordinateControls($systems, $coordinateControls);
+            }
         }
 
         $systems = $this->groupControlsByCode($systems);
@@ -77,7 +79,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             'candidate_inventory_items' => (array)($base['candidate_inventory_items'] ?? []),
             'unmatched_codes' => (array)($base['unmatched_codes'] ?? []),
             'analyzer' => [
-                'version' => '12.11.0',
+                'version' => '12.12.0',
                 'table_count' => (int)($base['analyzer']['table_count'] ?? 0),
                 'equipment_count' => array_sum(array_map(fn(array $s) => (int)$s['equipment_count'], $systems)),
                 'control_count' => array_sum(array_map(fn(array $s) => (int)$s['control_count'], $systems)),
@@ -185,15 +187,32 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 }
                 if (!$matched) continue;
 
-                // Only write into the same criterion. Never copy a mapping to
-                // another status and never overwrite another observed status.
+                $found = false;
                 foreach ((array)($systems[$si]['control_items'] ?? []) as $ci => $item) {
                     if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) continue;
+                    $found = true;
                     $systems[$si]['control_items'][$ci]['status'] = $status;
                     $systems[$si]['control_items'][$ci]['equipment_refs'] = array_values(array_unique(array_merge(
                         (array)($systems[$si]['control_items'][$ci]['equipment_refs'] ?? []),
                         array_values($matched)
                     )));
+                    $systems[$si]['control_items'][$ci]['source_pages'] = array_values(array_unique(array_merge(
+                        (array)($systems[$si]['control_items'][$ci]['source_pages'] ?? []),
+                        array_map('intval', (array)($mapping['source_pages'] ?? []))
+                    )));
+                }
+
+                // The coordinate matrix is authoritative. If the semantic/text
+                // parser did not create this criterion, do not throw away the
+                // real matrix relationship; create the control item here.
+                if (!$found) {
+                    $systems[$si]['control_items'][] = [
+                        'code' => $code,
+                        'description' => trim((string)($mapping['description'] ?? '')) ?: null,
+                        'status' => $status,
+                        'equipment_refs' => array_values($matched),
+                        'source_pages' => array_values(array_unique(array_map('intval', (array)($mapping['source_pages'] ?? [])))),
+                    ];
                 }
             }
         }
