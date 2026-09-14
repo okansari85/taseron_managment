@@ -38,7 +38,11 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 return $page;
             }, $coordinatePages);
             if ($coordinatePages) {
-                $coordinateControls = $this->coordinateAnalyzer->analyze($coordinatePages, $this->equipmentFromSystems($systems));
+                $coordinateControls = $this->coordinateAnalyzer->analyze(
+                    $coordinatePages,
+                    $this->equipmentFromSystems($systems),
+                    $this->controlCodesFromSystems($systems)
+                );
                 $systems = $this->applyCoordinateControls($systems, $coordinateControls);
             }
         }
@@ -60,7 +64,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             'candidate_inventory_items' => (array) ($base['candidate_inventory_items'] ?? []),
             'unmatched_codes' => (array) ($base['unmatched_codes'] ?? []),
             'analyzer' => [
-                'version' => '12.13.2',
+                'version' => '12.13.3',
                 'table_count' => (int) ($base['analyzer']['table_count'] ?? 0),
                 'equipment_count' => array_sum(array_map(fn(array $s) => (int) $s['equipment_count'], $systems)),
                 'control_count' => array_sum(array_map(fn(array $s) => (int) $s['control_count'], $systems)),
@@ -234,6 +238,18 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             if ($code !== '') $e[] = ['code' => $code];
         }
         return $e;
+    }
+
+    private function controlCodesFromSystems(array $systems): array
+    {
+        $codes = [];
+        foreach ($systems as $s) {
+            foreach ((array) ($s['control_items'] ?? []) as $item) {
+                $code = trim((string) ($item['code'] ?? ''));
+                if ($code !== '') $codes[$this->normalizeControlCode($code)] = $code;
+            }
+        }
+        return array_values($codes);
     }
 
     private function normalizeEquipmentRefs(array $refs): array
