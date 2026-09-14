@@ -26,6 +26,25 @@ class FireSuppressionReportController extends Controller
 
     public function analyze(AnalyzeReportFileRequest $request, LocationBusinessEntity $locationBusinessEntity, TenantContext $tenantContext, FireSuppressionAnalysisProgress $progress, PdfTextExtractor $extractor, FireSuppressionAiReportAnalyzer $analyzer, CoordinatePdfWordExtractor $coordinateExtractor, UniversalFireSuppressionTableAnalyzerV12 $tableAnalyzer): JsonResponse
     {
+        if ($request->boolean('gemini_fixture_list')) {
+            $items = collect(Storage::disk('local')->files('fire-suppression-gemini-fixtures'))
+                ->filter(fn (string $path) => str_ends_with($path, '.json'))
+                ->map(function (string $path) {
+                    $fixture = json_decode(Storage::disk('local')->get($path), true);
+                    return [
+                        'fixture_id' => $fixture['fixture_id'] ?? pathinfo($path, PATHINFO_FILENAME),
+                        'provider' => $fixture['provider'] ?? 'gemini',
+                        'model' => $fixture['model'] ?? null,
+                        'original_file_name' => $fixture['original_file_name'] ?? pathinfo($path, PATHINFO_FILENAME),
+                        'created_at' => $fixture['created_at'] ?? null,
+                    ];
+                })
+                ->sortByDesc('created_at')
+                ->values();
+
+            return response()->json(['data' => $items]);
+        }
+
         if ($request->boolean('gemini_fixture')) {
             $file = $request->file('file');
             $pages = $extractor->extractPages($file);
