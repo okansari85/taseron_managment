@@ -33,13 +33,14 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         }
 
         $result = $this->groupControlsByCode($result);
+        $result = $this->bindControlEquipmentFromFindings($result);
         $result = $this->recalculateSystemSummaries($result);
 
         foreach ($result['systems'] ?? [] as $systemIndex => $_system) {
             unset($result['systems'][$systemIndex]['findings']);
         }
 
-        $result['analyzer']['version'] = '12.7.0';
+        $result['analyzer']['version'] = '12.8.0';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -146,11 +147,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return false;
     }
 
-    /**
-     * One control record per code.
-     * The result keys are created only from statuses actually present in the source.
-     * No fixed U/UD/N/GD schema is injected into controls.
-     */
     private function groupControlsByCode(array $result): array
     {
         foreach ($result['systems'] ?? [] as $systemIndex => $system) {
@@ -182,10 +178,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                     (array)($control['equipment_refs'] ?? [])
                 ))));
 
-                // Only a status observed in the actual source is emitted.
-                // A status with no equipment is still represented when the source
-                // explicitly contains that status; system-level controls simply have []
-                // for their observed status.
                 if ($status !== null) {
                     if (!isset($grouped[$key]['results'][$status])) {
                         $grouped[$key]['results'][$status] = [];
@@ -206,6 +198,85 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         }
 
         return $result;
+    }
+
+    /**
+     * Final deterministic relation pass.
+     * A finding such as "5.41) YD1, YD2 ..." is the equipment relation for
+     * control 5.41. The finding supplies the exact equipment set; the control
+     * supplies the actual observed status. Nothing is invented.
+     */
+    private function bindControlEquipmentFromFindings(array $result): array
+    {
+        $findingsBySystemAndCode = [];
+
+        foreach ((array)($result['findings'] ?? []) as $finding) {
+            if (!is_array($finding)) continue;
+
+            $code = $this->extractCriterionCode((string)($finding['description'] ?? ''));
+            if ($code === '') continue;
+
+            $systemKey = $this->normalizeKey((string)($finding['system_name'] ?? ''));
+            $refs = array_values(array_unique(array_filter(array_map(
+                'strval',
+                (array)($finding['affected_equipment'] ?? [])
+            ))));
+            if (!$refs) continue;
+
+            $key = $systemKey . '|' . $code;
+            $findingsBySystemAndCode[$key] = array_values(array_unique(array_merge(
+                $findingsBySystemAndCode[$key] ?? [],
+                $refs
+            )));
+        }
+
+        foreach ($result['systems'] ?? [] as $systemIndex => $system) {
+            $systemKey = $this->normalizeKey((string)($system['name'] ?? ''));
+            $systemCodes = [];
+            foreach ((array)($system['components'] ?? []) as $component) {
+                $code = trim((string)($component['code'] ?? ''));
+                if ($code !== '') $systemCodes[$this->normalizeEquipmentCode($code)] = $code;
+            }
+
+            foreach ((array)($system['control_items'] ?? []) as $controlIndex => $control) {
+                $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
+                if ($code === '') continue;
+
+                $refs = [];
+                foreach ([$systemKey . '|' . $code, '|' . $code] as $key) {
+                    foreach ((array)($findingsBySystemAndCode[$key] ?? []) as $ref) {
+                        $normalized = $this->normalizeEquipmentCode((string)$ref);
+                        if (isset($systemCodes[$normalized])) {
+                            $refs[$normalized] = $systemCodes[$normalized];
+                        }
+                    }
+                }
+                if (!$refs) continue;
+
+                $results = (array)($control['results'] ?? []);
+                $statusKeys = array_keys($results);
+
+                // If the source control has an observed status, attach the
+                // finding's exact equipment to that status. If there is no
+                // status, do not manufacture one.
+                foreach ($statusKeys as $status) {
+                    $existing = (array)($results[$status] ?? []);
+                    $results[$status] = array_values(array_unique(array_merge($existing, array_values($refs))));
+                }
+
+                $result['systems'][$systemIndex]['control_items'][$controlIndex]['results'] = $results;
+            }
+        }
+
+        return $result;
+    }
+
+    private function extractCriterionCode(string $text): string
+    {
+        if (preg_match('/^\s*(\d+(?:\.\d+)?)\s*\)/u', $text, $m)) {
+            return $this->normalizeControlCode($m[1]);
+        }
+        return '';
     }
 
     private function applyCoordinateControls(array $result, array $coordinateControls): array
@@ -345,10 +416,6 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         return array_values($refs);
     }
 
-    /**
-     * Normalize formatting but preserve any status actually supplied by the source.
-     * Only punctuation/whitespace is normalized; the vocabulary is not invented here.
-     */
     private function normalizeControlStatus(mixed $status): ?string
     {
         $status = strtoupper(trim((string)$status));
