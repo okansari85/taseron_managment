@@ -32,7 +32,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
             $result = $this->applyCoordinateControls($result, $coordinateControls);
         }
 
-        $result['analyzer']['version'] = '12.4.0';
+        $result['analyzer']['version'] = '12.4.1';
         $result['analyzer']['fixture_mode'] = true;
 
         return $result;
@@ -65,21 +65,14 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
         }
 
         foreach ($result['systems'] ?? [] as $systemIndex => $system) {
-            $equipmentCodes = [];
-            foreach ($system['components'] ?? [] as $component) {
-                $code = trim((string)($component['code'] ?? ''));
-                if ($code !== '') {
-                    $equipmentCodes[mb_strtoupper($code, 'UTF-8')] = $code;
-                }
-            }
-
+            $equipmentCodes = $this->equipmentCodeMap((array)($system['components'] ?? []));
             if (!$equipmentCodes) {
                 continue;
             }
 
             $controlIndexes = [];
             foreach ($system['control_items'] ?? [] as $controlIndex => $control) {
-                $code = trim((string)($control['code'] ?? ''));
+                $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
                 if ($code !== '') {
                     $controlIndexes[$code] = $controlIndex;
                 }
@@ -93,45 +86,129 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
 
                 $finding = $rootFindings[$findingId];
                 $description = (string)($finding['description'] ?? '');
-                $refs = [];
+                $refs = $this->resolveFindingEquipmentRefs(
+                    $description,
+                    (array)($projection['equipment_refs'] ?? []),
+                    $equipmentCodes
+                );
 
-                foreach ((array)($projection['equipment_refs'] ?? []) as $ref) {
-                    $key = mb_strtoupper(trim((string)$ref), 'UTF-8');
-                    if (isset($equipmentCodes[$key])) {
-                        $refs[] = $equipmentCodes[$key];
-                    }
-                }
-
-                preg_match_all('/\b[A-Za-zÇĞİÖŞÜçğıöşü0-9]+[-_]?[A-Za-zÇĞİÖŞÜçğıöşü0-9]*\b/u', $description, $matches);
-                foreach ($matches[0] ?? [] as $token) {
-                    $key = mb_strtoupper(trim($token), 'UTF-8');
-                    if (isset($equipmentCodes[$key])) {
-                        $refs[] = $equipmentCodes[$key];
-                    }
-                }
-
-                $refs = array_values(array_unique($refs));
                 if (!$refs) {
                     continue;
                 }
 
-                $criterionCode = null;
-                if (preg_match('/^\s*(\d+(?:\.\d+)?)\s*\)/u', $description, $m)) {
-                    $criterionCode = $m[1];
-                } elseif (preg_match('/\b(\d+(?:\.\d+)?)\s*\)/u', $description, $m)) {
-                    $criterionCode = $m[1];
+                $criterionCode = $this->extractCriterionCode($description);
+                if ($criterionCode === null || !isset($controlIndexes[$criterionCode])) {
+                    continue;
                 }
 
-                if ($criterionCode !== null && isset($controlIndexes[$criterionCode])) {
-                    $controlIndex = $controlIndexes[$criterionCode];
-                    $existingRefs = (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] ?? []);
-                    $result['systems'][$systemIndex]['control_items'][$controlIndex]['scope'] = 'equipment';
-                    $result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] = array_values(array_unique(array_merge($existingRefs, $refs)));
-                }
+                $controlIndex = $controlIndexes[$criterionCode];
+                $existingRefs = $this->resolveFindingEquipmentRefs(
+                    '',
+                    (array)($result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] ?? []),
+                    $equipmentCodes
+                );
+
+                $result['systems'][$systemIndex]['control_items'][$controlIndex]['scope'] = 'equipment';
+                $result['systems'][$systemIndex]['control_items'][$controlIndex]['equipment_refs'] = array_values(array_unique(array_merge($existingRefs, $refs)));
             }
         }
 
         return $result;
+    }
+
+    private function equipmentCodeMap(array $components): array
+    {
+        $map = [];
+        foreach ($components as $component) {
+            if (!is_array($component)) continue;
+            $code = trim((string)($component['code'] ?? ''));
+            $key = $this->normalizeEquipmentCode($code);
+            if ($key !== '') {
+                $map[$key] = $code;
+            }
+        }
+        return $map;
+    }
+
+    private function resolveFindingEquipmentRefs(string $text, array $existing, array $equipmentCodes): array
+    {
+        $refs = [];
+
+        foreach ($existing as $ref) {
+            $key = $this->normalizeEquipmentCode((string)$ref);
+            if ($key !== '' && isset($equipmentCodes[$key])) {
+                $refs[$key] = $equipmentCodes[$key];
+            }
+        }
+
+        if (trim($text) === '' || !$equipmentCodes) {
+            return array_values($refs);
+        }
+
+        $normalizedText = strtoupper($text);
+        $normalizedText = str_replace(['–', '—', '‑', '−'], '-', $normalizedText);
+
+        // First resolve exact equipment codes. This covers YD14, YD-14,
+        // YD_14 and equivalent report formatting.
+        foreach (array_keys($equipmentCodes) as $normalizedCode) {
+            $pattern = preg_quote($normalizedCode, '/');
+            if (preg_match('/(?<![A-Z0-9])' . $pattern . '(?![A-Z0-9])/u', $normalizedText)) {
+                $refs[$normalizedCode] = $equipmentCodes[$normalizedCode];
+            }
+        }
+
+        // Then resolve common numeric ranges such as YD1-YD4, YD1-YD4,
+        // YD 1 ile YD 4 and YD1-YD4. Only real extracted equipment codes
+        // are emitted; no equipment is invented from the range.
+        preg_match_all(
+            '/\b(YD|HD|H|P)\s*[-_]?\s*(\d+)\s*(?:-|TO|ILE|İLE|ARASI)\s*(?:\1\s*[-_]?\s*)?(\d+)\b/iu',
+            $normalizedText,
+            $ranges,
+            PREG_SET_ORDER
+        );
+
+        foreach ($ranges as $range) {
+            $prefix = strtoupper($range[1]);
+            $from = (int)$range[2];
+            $to = (int)$range[3];
+            if ($from > $to) [$from, $to] = [$to, $from];
+
+            for ($number = $from; $number <= $to; $number++) {
+                foreach ([$prefix . $number, $prefix . '-' . $number] as $candidate) {
+                    $key = $this->normalizeEquipmentCode($candidate);
+                    if (isset($equipmentCodes[$key])) {
+                        $refs[$key] = $equipmentCodes[$key];
+                    }
+                }
+            }
+        }
+
+        return array_values($refs);
+    }
+
+    private function extractCriterionCode(string $description): ?string
+    {
+        if (preg_match('/^\s*(\d+(?:\.\d+)?)\s*\)/u', $description, $match)) {
+            return $this->normalizeControlCode($match[1]);
+        }
+
+        if (preg_match('/\b(\d+(?:\.\d+)?)\s*\)/u', $description, $match)) {
+            return $this->normalizeControlCode($match[1]);
+        }
+
+        return null;
+    }
+
+    private function normalizeControlCode(string $code): string
+    {
+        return preg_replace('/\s+/u', '', trim($code));
+    }
+
+    private function normalizeEquipmentCode(string $code): string
+    {
+        $code = strtoupper(trim($code));
+        $code = preg_replace('/\s+/u', '', $code);
+        return str_replace(['–', '—', '‑', '−', '_'], '-', $code);
     }
 
     private function equipmentFromSystems(array $systems): array
@@ -151,7 +228,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
     private function applyCoordinateControls(array $result, array $coordinateControls): array
     {
         foreach ($coordinateControls as $control) {
-            $code = trim((string)($control['code'] ?? ''));
+            $code = $this->normalizeControlCode((string)($control['code'] ?? ''));
             $equipmentRefs = array_values(array_unique(array_filter(array_map('strval', (array)($control['equipment_refs'] ?? [])))));
             if ($code === '' || !$equipmentRefs) {
                 continue;
@@ -168,7 +245,7 @@ class UniversalFireSuppressionTableAnalyzerV12 extends UniversalFireSuppressionT
                 }
 
                 foreach ($system['control_items'] ?? [] as $controlIndex => $item) {
-                    if (trim((string)($item['code'] ?? '')) !== $code) {
+                    if ($this->normalizeControlCode((string)($item['code'] ?? '')) !== $code) {
                         continue;
                     }
 
