@@ -37,15 +37,17 @@ class NvidiaNimClient
             Log::info('NVIDIA NIM: çağrı başladı', [
                 'attempt' => $attempts,
                 'model' => config('services.nvidia_nim.text_model'),
-                'prompt_length' => mb_strlen($systemPrompt),
+                'prompt_length' => mb_strlen($this->semanticSystemPrompt()),
                 'input_length' => mb_strlen($userContent),
                 'max_tokens' => $maxTokens,
+                'compact_extraction' => true,
+                'gemini_contract_compatible' => true,
             ]);
 
             try {
                 $response = Http::withToken(config('services.nvidia_nim.api_key'))
                     ->timeout(0)
-                    ->post($this->endpoint(), $this->payload($systemPrompt, $userContent, $maxTokens));
+                    ->post($this->endpoint(), $this->payload($userContent, $maxTokens));
 
                 if ($response->serverError() && $attempts < $maxAttempts) {
                     sleep($attempts * 3);
@@ -64,6 +66,13 @@ class NvidiaNimClient
                         'duration_s' => round(microtime(true) - $callStart, 1),
                         'attempts' => $attempts,
                         'model' => config('services.nvidia_nim.text_model'),
+                        'compact_extraction' => true,
+                        'gemini_contract_compatible' => true,
+                    ]);
+
+                    Log::info('FIRE_SUPPRESSION_NVIDIA_SEMANTIC_RAW', [
+                        'analysis_id' => request()->attributes->get('analysis_id'),
+                        'semantic' => $decoded,
                     ]);
 
                     return $decoded;
@@ -105,29 +114,12 @@ class NvidiaNimClient
         return rtrim((string) config('services.nvidia_nim.base_url'), '/') . '/chat/completions';
     }
 
-    private function payload(string $systemPrompt, string $userContent, int $maxTokens): array
+    private function payload(string $userContent, int $maxTokens): array
     {
-        // NVIDIA tarafında sistem keşfini özellikle güçlendiriyoruz. Bu ek
-        // talimat Gemini promptunu değiştirmez; yalnızca NIM'e gönderilen
-        // sistem mesajına eklenir.
-        $nvidiaSystemDiscovery = "\nNVIDIA NIM EK KURALI - SİSTEM KEŞFİ:\n"
-            . "- PDF'nin tamamını baştan sona değerlendir ve RAPORDA GERÇEKTEN KONTROL EDİLEN TÜM AYRI SİSTEMLERİ systems dizisine koy.\n"
-            . "- Özellikle 5. TESPİT VE DEĞERLENDİRMELER bölümündeki kontrol matrisi/tablosunun bölüm başlıklarını sistem keşfi için birincil yapısal sinyal kabul et.\n"
-            . "- Kontrol matrisi birden fazla harfli veya isimlendirilmiş grup içeriyorsa, her ayrı grup kendi başına bir sistemdir. O grubun altında en az bir kontrol maddesi bulunması, ekipman listesi bulunmasa bile sistemi systems içine almak için yeterlidir.\n"
-            . "- Bir sistemin ekipmanı olmaması, o sistemi systems dizisinden çıkarma nedeni değildir. Sistem yalnızca kontrol maddelerinden oluşabilir.\n"
-            . "- Kontrol kodlarının farklı aralıklara ayrılması da ayrı sistemleri gösterebilir; kodları sadece başka bir sistemin alt maddeleriymiş gibi birleştirme. Önce ilgili kontrol grubunun başlığını ve kapsamını değerlendir.\n"
-            . "- Örneğin bir raporda \"Su Deposu Kontrolü\", \"Yağmurlama Sistemi Kontrolü\", \"Yangın Dolapları ... Kontrolü\" ve \"Hidrant ... Kontrolü\" ayrı başlıklarsa bunların her biri ayrı systems kaydıdır; ekipman tablosu yalnızca bazı sistemlerde bulunuyor olsa bile diğer sistemler atlanmaz.\n"
-            . "- Bir sistem yalnızca bulgular içinde geçiyorsa onu otomatik olarak sistem sayma; fakat aynı sistem kontrol matrisi içinde ayrı bir başlıkla veya o sisteme ait ayrı kontrol grubuyla tanımlanmışsa mutlaka systems içine ekle.\n"
-            . "- \"Yangın Tesisatı\" gibi üst başlıkları, altında ayrı kontrol grupları varsa tek sistem olarak kullanıp alt sistemleri birleştirme.\n"
-            . "- Yangın Pompa Dairesi; pompa ekipmanlarının bulunduğu sistemdir. Sprinkler, Su Deposu, Hidrant, İtfaiye Su Alma/Verme gibi raporda ayrı kontrol edilen veya ayrı fiziksel sistem olarak tanımlanan grupları otomatik olarak Yangın Pompa Dairesi içine katma.\n"
-            . "- Aynı fiziksel sistemi farklı adlarla tekrar etme; rapordaki en anlamlı sistem adını koru.\n"
-            . "- systems dizisini oluşturmadan önce rapordaki tüm ayrı kontrol gruplarını çıkar ve hiçbir ayrı grubun atlanmadığını kontrol et.\n"
-            . "- systems dizisi raporun kapsamını eksik bırakmamalıdır. Özellikle ekipmanı olmayan ancak kontrol maddeleri bulunan sistemleri de dahil et.\n";
-
         return [
             'model' => config('services.nvidia_nim.text_model'),
             'messages' => [
-                ['role' => 'system', 'content' => $systemPrompt . $nvidiaSystemDiscovery],
+                ['role' => 'system', 'content' => $this->semanticSystemPrompt()],
                 ['role' => 'user', 'content' => $userContent],
             ],
             'temperature' => 0.1,
@@ -135,6 +127,70 @@ class NvidiaNimClient
             'response_format' => ['type' => 'json_object'],
             'chat_template_kwargs' => ['thinking' => false],
         ];
+    }
+
+    /**
+     * NVIDIA must use the same compact semantic contract as Gemini.
+     * Do not add equipment/control-matrix extraction here; those belong to
+     * the deterministic universal table analyzer.
+     */
+    private function semanticSystemPrompt(): string
+    {
+        return <<<'PROMPT'
+Sen yangın tesisatı periyodik kontrol raporlarını anlayan bir veri çıkarma motorusun.
+
+Sana biçimi önceden bilinmeyen bir yangın tesisatı/periyodik kontrol PDF'sinin tamamının metni verilecek.
+Firma şablonuna veya sabit bölüm sırasına güvenme.
+
+Yalnızca anlamsal olarak gerekli bilgileri çıkar:
+
+1. RAPOR
+- control_date
+- next_control_date
+- report_no
+- company_name
+- overall_result
+
+2. SİSTEMLER
+Raporda gerçekten kontrol edilen sistemleri/grupları belirle.
+Her sistem için:
+- name: rapordaki sistem adı
+- category: mümkünse yangin_dolabi, yangin_pompasi, hidrant, sprinkler, su_alma_verme, su_deposu, sabit_boru_tesisati, gazli_sondurme veya diger
+
+3. BULGULAR
+Uygunsuzlukları sistem bazında çıkar.
+Her kayıt yalnızca:
+- system_name
+- description
+
+Bulguda ekipman kodu açıkça geçiyorsa description içinde koru.
+Kodu kendin uydurma.
+Aynı bulguyu bileşen bazında tekrar etme.
+
+ÇOK ÖNEMLİ:
+- Ekipman listesi oluşturma.
+- Yangın dolabı kodlarını veya lokasyonlarını JSON'a çıkarma.
+- Yangın dolabı equipment_matrix oluşturma.
+- components oluşturma.
+- Marka, model, seri no, basınç, hortum uzunluğu, ölçüler veya diğer teknik tablo kolonlarını çıkarma.
+- U / UD / N değerlerini tek tek JSON'a aktarma.
+- Kontrol kriterlerini JSON'a aktarma.
+- control_count veya nonconforming_count hesaplama.
+- Tabloyu yeniden yapılandırma.
+- Tablo satırlarını özetleme.
+- Ekipman sayısını bulgu olarak üretme.
+- Raporda olmayan bilgi üretme.
+
+Ekipman, kod, lokasyon, teknik değerler ve U/UD/N ilişkileri daha sonra ayrı bir universal table analyzer tarafından PDF metninden çıkarılacaktır.
+Kontrol sayıları ve uygunsuz kontrol sayıları da aynı analiz katmanında, rapordaki kontrol matrisinden deterministik olarak hesaplanacaktır.
+
+BELGE / PROJE / KAYIT:
+Fiziksel ekipman olmayan proje, belge veya kayıt kontrollerini fiziksel sistem/equipment olarak üretme. Bunlara ilişkin önemli uygunsuzlukları findings içinde belirt.
+
+Rapor adını veya firma adını değiştirme/normalize etme.
+
+Yalnızca geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
+PROMPT;
     }
 
     private function decodeContent(Response $response): ?array
