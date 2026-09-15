@@ -6,157 +6,155 @@ class TemplateDrivenFireSuppressionCriterionExtractor
 {
     public function __construct(
         private TemplateDrivenFireSuppressionMatrixExtractor $matrixExtractor,
-        private CamelotPdfTableExtractor $camelot,
     ) {}
 
     public function extract(string $pdfPath, array $semantic): array
     {
+        // Camelot remains responsible for matrix/equipment/result extraction.
+        // Gemini result JSON is the single source of truth for control criteria.
         $result = $this->matrixExtractor->extract($pdfPath, $semantic);
-        $template = is_array($semantic['template'] ?? null) ? $semantic['template'] : [];
-        $systems = (array) ($template['fire_systems']['systems'] ?? []);
-        if (!$systems) return $result;
 
-        $tables = array_values(array_filter(
-            (array) ($this->camelot->extract($pdfPath)['tables'] ?? []),
-            fn ($table) => is_array($table) && !empty($table['data']) && ($table['flavor'] ?? '') === 'lattice'
-        ));
+        $geminiSystems = (array) ($semantic['extracted_data']['fire_systems'] ?? []);
+        if ($geminiSystems === []) {
+            return $result;
+        }
 
-        foreach ($systems as $systemIndex => $system) {
+        $criteriaBySystem = [];
+        $uniqueCriteriaByCode = [];
+        $codeCounts = [];
+
+        foreach ($geminiSystems as $system) {
             if (!is_array($system)) continue;
-            $controls = (array) ($result['extracted_data']['fire_systems'][$systemIndex]['control_items'] ?? []);
-            if (!$controls) continue;
 
-            $templates = (array) ($system['control_items'] ?? []);
-            foreach ($controls as $controlIndex => &$control) {
+            $systemKey = $this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? ''));
+            foreach ((array) ($system['control_items'] ?? []) as $control) {
+                if (!is_array($control)) continue;
+
+                $code = $this->normalizeCode((string) ($control['code'] ?? ''));
+                $criterion = $this->clean((string) ($control['criterion'] ?? $control['description'] ?? ''));
+                if ($code === '' || $criterion === null) continue;
+
+                if ($systemKey !== '') {
+                    $criteriaBySystem[$systemKey][$code] = $criterion;
+                }
+
+                $uniqueCriteriaByCode[$code] = $criterion;
+                $codeCounts[$code] = ($codeCounts[$code] ?? 0) + 1;
+            }
+        }
+
+        foreach ((array) ($result['extracted_data']['fire_systems'] ?? []) as $systemIndex => &$system) {
+            if (!is_array($system)) continue;
+
+            $systemKey = $this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? ''));
+            $existingControls = [];
+
+            foreach ((array) ($system['control_items'] ?? []) as $control) {
                 if (!is_array($control)) continue;
                 $code = $this->normalizeCode((string) ($control['code'] ?? ''));
                 if ($code === '') continue;
 
-                $templateControl = $this->findTemplate($code, $templates);
-                if ($templateControl === null) continue;
+                $control['code'] = $this->displayCode((string) ($control['code'] ?? ''), $code);
+                $existingControls[$code] = $control;
+            }
 
-                $pages = (array) ($control['source_pages'] ?? []);
-                $criterion = $this->findCriterion($tables, $pages, $code, $templateControl);
-                if ($criterion !== null) $control['criterion'] = $criterion;
+            // Gemini's control list is canonical: a control must not disappear
+            // merely because Camelot could not locate a result cell for it.
+            $canonicalControls = [];
+            foreach ($this->geminiControlsForSystem($geminiSystems, $systemKey) as $geminiControl) {
+                if (!is_array($geminiControl)) continue;
+                $code = $this->normalizeCode((string) ($geminiControl['code'] ?? ''));
+                if ($code === '') continue;
+
+                $control = $existingControls[$code] ?? [
+                    'code' => (string) ($geminiControl['code'] ?? $code),
+                    'results' => [],
+                    'source_pages' => [],
+                ];
+
+                $criterion = $this->clean((string) ($geminiControl['criterion'] ?? $geminiControl['description'] ?? ''));
+                if ($criterion !== null) {
+                    $control['criterion'] = $criterion;
+                }
+
+                if (!isset($control['results']) || !is_array($control['results'])) {
+                    $control['results'] = [];
+                }
+
+                $canonicalControls[$code] = $control;
+            }
+
+            // Keep any Camelot-only control as well, but prefer Gemini criteria
+            // whenever Gemini has the same code.
+            foreach ($existingControls as $code => $control) {
+                if (!isset($canonicalControls[$code])) {
+                    $canonicalControls[$code] = $control;
+                }
+            }
+
+            // Safe global-code fallback for systems whose names differ slightly
+            // between Gemini and Camelot. Only use it when the Gemini code is unique.
+            foreach ($canonicalControls as $code => &$control) {
+                if (!empty($control['criterion'])) continue;
+                if (($codeCounts[$code] ?? 0) !== 1) continue;
+                if (isset($uniqueCriteriaByCode[$code])) {
+                    $control['criterion'] = $uniqueCriteriaByCode[$code];
+                }
             }
             unset($control);
 
-            $result['extracted_data']['fire_systems'][$systemIndex]['control_items'] = $controls;
+            $system['control_items'] = array_values($canonicalControls);
         }
+        unset($system);
 
         return $result;
     }
 
-    private function findCriterion(array $tables, array $pages, string $code, array $template): ?string
+    private function geminiControlsForSystem(array $systems, string $systemKey): array
     {
-        $patterns = array_values(array_filter(array_map('strval', (array) ($template['control_text_patterns'] ?? [])), fn ($value) => trim($value) !== ''));
-        if (!$patterns) return null;
+        if ($systemKey === '') return [];
 
-        foreach ($tables as $table) {
-            $page = (int) ($table['page'] ?? 0);
-            if ($pages && !in_array($page, array_map('intval', $pages), true)) continue;
-
-            $grid = array_values(array_map(
-                fn ($row) => array_map(fn ($value) => trim((string) $value), (array) $row),
-                (array) ($table['data'] ?? [])
-            ));
-
-            foreach ($grid as $row) {
-                $codeColumn = null;
-                foreach ($row as $column => $value) {
-                    if ($this->matchesControlCode($value, $code, (array) ($template['control_code_patterns'] ?? []))) {
-                        $codeColumn = (int) $column;
-                        break;
-                    }
-                }
-                if ($codeColumn === null) continue;
-
-                $sameCell = $this->criterionFromCell((string) ($row[$codeColumn] ?? ''), $patterns, $code);
-                if ($sameCell !== null) return $sameCell;
-
-                foreach ($row as $column => $value) {
-                    if ((int) $column === $codeColumn || trim((string) $value) === '') continue;
-                    $candidate = $this->criterionFromCell((string) $value, $patterns, '');
-                    if ($candidate !== null) return $candidate;
-                }
-            }
+        foreach ($systems as $system) {
+            if (!is_array($system)) continue;
+            $candidateKey = $this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? ''));
+            if ($candidateKey !== $systemKey) continue;
+            return array_values(array_filter((array) ($system['control_items'] ?? []), 'is_array'));
         }
 
-        return null;
-    }
-
-    private function criterionFromCell(string $value, array $patterns, string $code): ?string
-    {
-        $value = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
-        if ($value === '') return null;
-
-        $candidate = $value;
-        if ($code !== '') {
-            $candidate = trim(preg_replace('/^' . preg_quote($code, '/') . '\s*[:.)-]?\s*/iu', '', $candidate) ?? $candidate);
-        }
-        if ($candidate === '') return null;
-
-        foreach ($patterns as $pattern) {
-            if ($this->matchesPattern($candidate, $pattern)) return $candidate;
-        }
-
-        return null;
-    }
-
-    private function matchesControlCode(string $value, string $code, array $patterns): bool
-    {
-        $value = trim($value);
-        if ($value === '') return false;
-        if ($this->normalizeCode($value) === $code) return true;
-
-        foreach ($patterns as $pattern) {
-            $pattern = trim((string) $pattern);
-            if ($pattern === '') continue;
-            if ($this->matchesPattern($value, $pattern) && $this->normalizeCode($this->extractCode($value)) === $code) return true;
-        }
-
-        return false;
-    }
-
-    private function extractCode(string $value): string
-    {
-        if (preg_match('/\b(\d+(?:\.\d+)+)\b/u', $value, $matches)) return $matches[1];
-        return $value;
-    }
-
-    private function findTemplate(string $code, array $templates): ?array
-    {
-        foreach ($templates as $template) {
-            if (!is_array($template)) continue;
-            foreach ((array) ($template['control_code_patterns'] ?? []) as $pattern) {
-                $pattern = trim((string) $pattern);
-                if ($pattern === '') continue;
-
-                // control_code_patterns are regex patterns (e.g. ^5\.[1-3]$),
-                // so match the actual code against the pattern instead of trying
-                // to extract a literal code from the regex itself.
-                if (@preg_match($pattern, $code) === 1) return $template;
-
-                // Keep literal-pattern compatibility as a fallback.
-                if ($this->normalizeCode($pattern) === $code || $this->normalizeCode($this->extractCode($pattern)) === $code) return $template;
-            }
-        }
-        return null;
-    }
-
-    private function matchesPattern(string $value, string $pattern): bool
-    {
-        $pattern = trim($pattern);
-        if ($pattern === '') return false;
-        $matched = @preg_match($pattern, $value);
-        if ($matched === 1) return true;
-        return mb_stripos($value, $pattern) !== false;
+        return [];
     }
 
     private function normalizeCode(string $value): string
     {
         $value = trim($value);
-        if (preg_match('/\b(\d+(?:\.\d+)+)\b/u', $value, $matches)) return $matches[1];
-        return $value;
+        if ($value === '') return '';
+
+        if (preg_match('/\b(\d+(?:\.\d+)+)\b/u', $value, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return mb_strtoupper(preg_replace('/\s+/u', '', $value) ?? '', 'UTF-8');
+    }
+
+    private function displayCode(string $original, string $normalized): string
+    {
+        $original = trim($original);
+        return $original !== '' ? $original : $normalized;
+    }
+
+    private function normalizeLabel(string $value): string
+    {
+        $value = mb_strtolower(trim($value), 'UTF-8');
+        $value = strtr($value, [
+            'ı' => 'i', 'ğ' => 'g', 'ü' => 'u', 'ş' => 's', 'ö' => 'o', 'ç' => 'c',
+        ]);
+        $value = preg_replace('/[^a-z0-9]+/u', ' ', $value) ?? $value;
+        return trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
+    }
+
+    private function clean(string $value): ?string
+    {
+        $value = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
+        return $value === '' ? null : $value;
     }
 }
