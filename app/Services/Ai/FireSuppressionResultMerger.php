@@ -3,8 +3,14 @@
 namespace App\Services\Ai;
 
 /**
- * Gemini owns system/code/criterion/findings/overall_result.
- * Camelot owns equipment and matrix results.
+ * Final authority split:
+ *
+ * Gemini  -> system_name, code, criterion, findings, overall_result
+ * Camelot -> equipment, matrix results (U/UD/N), value, source_pages
+ *
+ * The final JSON is always built from Gemini's control/system tree.
+ * Camelot can only enrich that tree; it can never create, remove, move,
+ * rename or re-label Gemini controls.
  */
 class FireSuppressionResultMerger
 {
@@ -13,92 +19,211 @@ class FireSuppressionResultMerger
         $geminiData = (array) ($semantic['data']['extracted_data']
             ?? $semantic['extracted_data']
             ?? []);
-        $geminiSystems = (array) ($geminiData['fire_systems'] ?? []);
-        $camelotSystems = (array) ($camelotResult['extracted_data']['fire_systems'] ?? []);
 
-        foreach ($camelotSystems as $index => &$camelotSystem) {
-            if (!is_array($camelotSystem)) continue;
+        $geminiSystems = array_values(array_filter(
+            (array) ($geminiData['fire_systems'] ?? []),
+            'is_array'
+        ));
 
-            $systemKey = $this->normalizeLabel((string) ($camelotSystem['system_name'] ?? $camelotSystem['name'] ?? ''));
-            $geminiSystem = $this->findSystem($geminiSystems, $systemKey, (int) $index);
-            if ($geminiSystem === null) continue;
+        $camelotSystems = array_values(array_filter(
+            (array) ($camelotResult['extracted_data']['fire_systems'] ?? []),
+            'is_array'
+        ));
+
+        $finalSystems = [];
+
+        // Gemini defines the complete system/control tree.
+        foreach ($geminiSystems as $geminiSystem) {
+            $systemName = (string) ($geminiSystem['system_name'] ?? $geminiSystem['name'] ?? '');
+            $camelotSystem = $this->findSystem($camelotSystems, $systemName);
+
+            $camelotEquipment = $camelotSystem !== null
+                ? (array) ($camelotSystem['equipment'] ?? [])
+                : [];
 
             $camelotControls = [];
-            foreach ((array) ($camelotSystem['control_items'] ?? []) as $control) {
-                if (!is_array($control)) continue;
-                $code = $this->normalizeCode((string) ($control['code'] ?? ''));
-                if ($code !== '') $camelotControls[$code] = $control;
+            if ($camelotSystem !== null) {
+                foreach ((array) ($camelotSystem['control_items'] ?? []) as $camelotControl) {
+                    if (!is_array($camelotControl)) {
+                        continue;
+                    }
+
+                    $code = $this->normalizeCode((string) ($camelotControl['code'] ?? ''));
+                    if ($code !== '') {
+                        $camelotControls[$code] = $camelotControl;
+                    }
+                }
             }
 
             $finalControls = [];
+
             foreach ((array) ($geminiSystem['control_items'] ?? []) as $geminiControl) {
-                if (!is_array($geminiControl)) continue;
+                if (!is_array($geminiControl)) {
+                    continue;
+                }
+
                 $code = $this->normalizeCode((string) ($geminiControl['code'] ?? ''));
-                if ($code === '') continue;
+                if ($code === '') {
+                    continue;
+                }
 
-                $control = $camelotControls[$code] ?? [
-                    'code' => (string) ($geminiControl['code'] ?? $code),
-                    'results' => [],
-                    'source_pages' => [],
-                ];
+                // Start with Gemini. This preserves Gemini's exact criterion,
+                // scalar result, findings-related fields and control ordering.
+                $finalControl = $geminiControl;
+                $finalControl['code'] = (string) ($geminiControl['code'] ?? $code);
 
-                $criterion = $this->clean((string) ($geminiControl['criterion'] ?? $geminiControl['description'] ?? ''));
-                if ($criterion !== null) $control['criterion'] = $criterion;
-                if (!isset($control['results']) || !is_array($control['results'])) $control['results'] = [];
+                // Camelot is allowed to provide only matrix/equipment results.
+                $camelotControl = $camelotControls[$code] ?? null;
+                if (is_array($camelotControl)) {
+                    $matrixResults = (array) ($camelotControl['results'] ?? []);
+                    if ($matrixResults !== []) {
+                        $finalControl['results'] = $this->mergeResults($matrixResults);
+                    }
+                }
 
-                $finalControls[$code] = $control;
+                // Gemini criterion is authoritative. Never copy Camelot criterion.
+                if (array_key_exists('criterion', $geminiControl)) {
+                    $finalControl['criterion'] = $geminiControl['criterion'];
+                }
+
+                // Camelot source pages are only used when it actually produced
+                // a matrix result. Otherwise keep Gemini's source_pages.
+                if (is_array($camelotControl) && (array) ($camelotControl['results'] ?? []) !== []) {
+                    $pages = $this->pagesFromResults((array) $camelotControl['results']);
+                    if ($pages !== []) {
+                        $finalControl['source_pages'] = $pages;
+                    }
+                }
+
+                $finalControls[$code] = $finalControl;
             }
 
-            $camelotSystem['control_items'] = array_values($finalControls);
+            $finalSystem = $geminiSystem;
+            $finalSystem['system_name'] = $systemName;
+
+            // Equipment belongs exclusively to Camelot.
+            $finalSystem['equipment'] = array_values($camelotEquipment);
+            $finalSystem['control_items'] = array_values($finalControls);
+
+            $finalSystems[] = $finalSystem;
         }
-        unset($camelotSystem);
 
-        $camelotResult['extracted_data']['fire_systems'] = array_values($camelotSystems);
+        $final = $camelotResult;
+        $final['extracted_data']['fire_systems'] = $finalSystems;
 
+        // These fields also belong exclusively to Gemini.
         if (array_key_exists('findings', $geminiData)) {
-            $camelotResult['extracted_data']['findings'] = (array) $geminiData['findings'];
-        }
-        if (array_key_exists('overall_result', $geminiData)) {
-            $camelotResult['extracted_data']['overall_result'] = $geminiData['overall_result'];
-            $camelotResult['extracted_data']['report']['overall_result'] = $geminiData['overall_result'];
+            $final['extracted_data']['findings'] = (array) $geminiData['findings'];
         }
 
-        return $camelotResult;
+        if (array_key_exists('overall_result', $geminiData)) {
+            $final['extracted_data']['overall_result'] = $geminiData['overall_result'];
+            $final['extracted_data']['report']['overall_result'] = $geminiData['overall_result'];
+        }
+
+        return $final;
     }
 
-    private function findSystem(array $systems, string $key, int $index): ?array
+    private function findSystem(array $systems, string $systemName): ?array
     {
-        if ($key !== '') {
-            foreach ($systems as $system) {
-                if (!is_array($system)) continue;
-                if ($this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? '')) === $key) {
-                    return $system;
-                }
+        $key = $this->normalizeLabel($systemName);
+        if ($key === '') {
+            return null;
+        }
+
+        foreach ($systems as $system) {
+            if (!is_array($system)) {
+                continue;
+            }
+
+            $candidate = $this->normalizeLabel(
+                (string) ($system['system_name'] ?? $system['name'] ?? '')
+            );
+
+            if ($candidate === $key) {
+                return $system;
             }
         }
 
-        $fallback = $systems[$index] ?? null;
-        return is_array($fallback) ? $fallback : null;
+        return null;
     }
 
     private function normalizeCode(string $value): string
     {
         $value = trim($value);
-        if ($value === '') return '';
-        if (preg_match('/\b(\d+(?:\.\d+)+)\b/u', $value, $m) === 1) return $m[1];
-        return mb_strtoupper(preg_replace('/\s+/u', '', $value) ?? '', 'UTF-8');
+        if ($value === '') {
+            return '';
+        }
+
+        if (preg_match('/\b(\d+(?:\.\d+)+)\b/u', $value, $m) === 1) {
+            return $m[1];
+        }
+
+        return mb_strtoupper(
+            preg_replace('/\s+/u', '', $value) ?? '',
+            'UTF-8'
+        );
     }
 
     private function normalizeLabel(string $value): string
     {
         $value = mb_strtolower(trim($value), 'UTF-8');
-        $value = strtr($value, ['ı' => 'i', 'ğ' => 'g', 'ü' => 'u', 'ş' => 's', 'ö' => 'o', 'ç' => 'c']);
-        return trim(preg_replace('/\s+/u', ' ', preg_replace('/[^a-z0-9]+/u', ' ', $value) ?? $value) ?? $value);
+        $value = strtr($value, [
+            'ı' => 'i',
+            'ğ' => 'g',
+            'ü' => 'u',
+            'ş' => 's',
+            'ö' => 'o',
+            'ç' => 'c',
+        ]);
+
+        return trim(
+            preg_replace(
+                '/\s+/u',
+                ' ',
+                preg_replace('/[^a-z0-9]+/u', ' ', $value) ?? $value
+            ) ?? $value
+        );
     }
 
-    private function clean(string $value): ?string
+    private function mergeResults(array $results): array
     {
-        $value = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
-        return $value === '' ? null : $value;
+        $merged = [];
+
+        foreach ($results as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+
+            $equipmentCode = trim((string) ($result['equipment_code'] ?? ''));
+            if ($equipmentCode === '') {
+                continue;
+            }
+
+            $key = mb_strtoupper($equipmentCode, 'UTF-8');
+            $merged[$key] = $result;
+        }
+
+        return array_values($merged);
+    }
+
+    private function pagesFromResults(array $results): array
+    {
+        $pages = [];
+
+        foreach ($results as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+
+            foreach ((array) ($result['source_pages'] ?? []) as $page) {
+                $page = (int) $page;
+                if ($page > 0) {
+                    $pages[] = $page;
+                }
+            }
+        }
+
+        return array_values(array_unique($pages));
     }
 }
