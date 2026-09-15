@@ -30,13 +30,22 @@ class TemplateDrivenFireSuppressionMatrixExtractor
                 }
             }
 
+<<<<<<< Updated upstream
             // Criterion text must come from the PDF. Do not inject Gemini's
             // control_text_patterns as criterion values in the fallback path.
+=======
+            /*
+>>>>>>> Stashed changes
             $result['extracted_data']['fire_systems'][$systemIndex]['control_items'] = $this->addCriteria(
                 (array) ($result['extracted_data']['fire_systems'][$systemIndex]['control_items'] ?? []),
                 (array) ($system['control_items'] ?? [])
             );
-        }
+            */
+
+            $result['extracted_data']['fire_systems'][$systemIndex]['control_items'] =
+            (array) ($result['extracted_data']['fire_systems'][$systemIndex]['control_items'] ?? []);
+            };
+
         return $result;
     }
 
