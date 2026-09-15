@@ -9,6 +9,7 @@ use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\Ai\TemplateDiscoveryReportNormalizer;
+use App\Services\Ai\TemplateDrivenFireSuppressionCriterionExtractor;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -39,6 +40,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
         TemplateDiscoveryReportNormalizer $normalizer,
+        TemplateDrivenFireSuppressionCriterionExtractor $reportExtractor,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -57,7 +59,14 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
             $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
             $semantic = $analyzer->analyze($pages);
-            $tables = $normalizer->normalize($semantic);
+
+            // Tek extraction pipeline:
+            // Gemini semantic -> code/criterion metadata
+            // Camelot -> equipment/matrix/results
+            // Merger -> unified fire_systems.control_items
+            $absoluteReportPath = $absolutePath;
+            $extracted = $reportExtractor->extract($absoluteReportPath, $semantic);
+            $tables = $normalizer->normalize($extracted);
 
             $progress->stage($this->analysisId, 'ai_result', 'Template Discovery çıktısı hazır', null, [
                 'ai_semantic' => $semantic,
