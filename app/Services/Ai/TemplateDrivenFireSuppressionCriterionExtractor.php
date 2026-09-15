@@ -60,8 +60,14 @@ class TemplateDrivenFireSuppressionCriterionExtractor
 
             // Gemini's control list is canonical: a control must not disappear
             // merely because Camelot could not locate a result cell for it.
+            $geminiControls = $this->geminiControlsForSystem(
+                $geminiSystems,
+                $systemKey,
+                (int) $systemIndex
+            );
+
             $canonicalControls = [];
-            foreach ($this->geminiControlsForSystem($geminiSystems, $systemKey) as $geminiControl) {
+            foreach ($geminiControls as $geminiControl) {
                 if (!is_array($geminiControl)) continue;
                 $code = $this->normalizeCode((string) ($geminiControl['code'] ?? ''));
                 if ($code === '') continue;
@@ -110,18 +116,23 @@ class TemplateDrivenFireSuppressionCriterionExtractor
         return $result;
     }
 
-    private function geminiControlsForSystem(array $systems, string $systemKey): array
+    private function geminiControlsForSystem(array $systems, string $systemKey, int $systemIndex): array
     {
-        if ($systemKey === '') return [];
-
-        foreach ($systems as $system) {
-            if (!is_array($system)) continue;
-            $candidateKey = $this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? ''));
-            if ($candidateKey !== $systemKey) continue;
-            return array_values(array_filter((array) ($system['control_items'] ?? []), 'is_array'));
+        if ($systemKey !== '') {
+            foreach ($systems as $system) {
+                if (!is_array($system)) continue;
+                $candidateKey = $this->normalizeLabel((string) ($system['system_name'] ?? $system['name'] ?? ''));
+                if ($candidateKey !== $systemKey) continue;
+                return array_values(array_filter((array) ($system['control_items'] ?? []), 'is_array'));
+            }
         }
 
-        return [];
+        // The analyzer keeps template and result systems in the same discovered
+        // order. Use index only as a fallback when a system label changed slightly.
+        $fallback = $systems[$systemIndex] ?? null;
+        return is_array($fallback)
+            ? array_values(array_filter((array) ($fallback['control_items'] ?? []), 'is_array'))
+            : [];
     }
 
     private function normalizeCode(string $value): string
