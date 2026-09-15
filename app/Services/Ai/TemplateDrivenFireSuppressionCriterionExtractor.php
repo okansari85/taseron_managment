@@ -130,7 +130,15 @@ class TemplateDrivenFireSuppressionCriterionExtractor
             if (!is_array($template)) continue;
             foreach ((array) ($template['control_code_patterns'] ?? []) as $pattern) {
                 $pattern = trim((string) $pattern);
-                if ($pattern !== '' && ($this->normalizeCode($pattern) === $code || $this->normalizeCode($this->extractCode($pattern)) === $code)) return $template;
+                if ($pattern === '') continue;
+
+                // control_code_patterns are regex patterns (e.g. ^5\.[1-3]$),
+                // so match the actual code against the pattern instead of trying
+                // to extract a literal code from the regex itself.
+                if (@preg_match($pattern, $code) === 1) return $template;
+
+                // Keep literal-pattern compatibility as a fallback.
+                if ($this->normalizeCode($pattern) === $code || $this->normalizeCode($this->extractCode($pattern)) === $code) return $template;
             }
         }
         return null;
