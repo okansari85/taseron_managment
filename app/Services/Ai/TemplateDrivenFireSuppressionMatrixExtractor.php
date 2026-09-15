@@ -29,6 +29,9 @@ class TemplateDrivenFireSuppressionMatrixExtractor
                     continue;
                 }
             }
+
+            // Criterion text must come from the PDF. Do not inject Gemini's
+            // control_text_patterns as criterion values in the fallback path.
             $result['extracted_data']['fire_systems'][$systemIndex]['control_items'] = $this->addCriteria(
                 (array) ($result['extracted_data']['fire_systems'][$systemIndex]['control_items'] ?? []),
                 (array) ($system['control_items'] ?? [])
@@ -57,8 +60,20 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         foreach ($tables as $table) {
             $grid = $this->matrix($table);
             if (!$grid) continue;
+            $cells = (array) ($table['cells'] ?? []);
             foreach (['equipment_columns', 'equipment_rows'] as $orientation) {
-                $candidate = $this->extractMatrixOrientation($grid, (int) ($table['page'] ?? 0), $orientation, $equipmentHeaderPatterns, $controlTemplates, $controlCodePatterns, $controlLabelPatterns, $resultPatterns, $system);
+                $candidate = $this->extractMatrixOrientation(
+                    $grid,
+                    $cells,
+                    (int) ($table['page'] ?? 0),
+                    $orientation,
+                    $equipmentHeaderPatterns,
+                    $controlTemplates,
+                    $controlCodePatterns,
+                    $controlLabelPatterns,
+                    $resultPatterns,
+                    $system
+                );
                 if ($candidate['score'] > 0) $candidates[] = $candidate;
             }
         }
@@ -82,7 +97,7 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         return array_values($controls);
     }
 
-    private function extractMatrixOrientation(array $grid, int $page, string $orientation, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns, array $system): array
+    private function extractMatrixOrientation(array $grid, array $cells, int $page, string $orientation, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns, array $system): array
     {
         $matrixTemplate = (array) ($system['control_matrix'] ?? []);
         $axisDetection = (array) ($matrixTemplate['axis_detection'] ?? []);
@@ -95,8 +110,8 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         if ($equipmentPosition !== null && $equipmentPosition === $axis) $score += 2;
         if ($declaredOrientation !== null && $declaredOrientation === $orientation) $score += 2;
         $controls = $orientation === 'equipment_columns'
-            ? $this->readEquipmentColumns($grid, $page, $equipmentHeaderPatterns, $controlTemplates, $controlCodePatterns, $controlLabelPatterns, $resultPatterns)
-            : $this->readEquipmentRows($grid, $page, $equipmentHeaderPatterns, $controlTemplates, $controlCodePatterns, $controlLabelPatterns, $resultPatterns);
+            ? $this->readEquipmentColumns($grid, $cells, $page, $equipmentHeaderPatterns, $controlTemplates, $controlCodePatterns, $controlLabelPatterns, $resultPatterns)
+            : $this->readEquipmentRows($grid, $cells, $page, $equipmentHeaderPatterns, $controlTemplates, $controlCodePatterns, $controlLabelPatterns, $resultPatterns);
         if ($controls) $score += min(10, count($controls));
         foreach ($this->patterns($equipmentAxis['detection_patterns'] ?? []) as $pattern) {
             foreach ($grid as $row) if ($this->matchesAny($this->rowText($row), [$pattern])) { $score++; break 2; }
@@ -107,7 +122,7 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         return ['score' => $score, 'orientation' => $orientation, 'controls' => $controls];
     }
 
-    private function readEquipmentColumns(array $grid, int $page, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns): array
+    private function readEquipmentColumns(array $grid, array $cells, int $page, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns): array
     {
         foreach ($grid as $headerRowIndex => $row) {
             $headerColumn = $this->findPatternColumn($row, $equipmentHeaderPatterns);
@@ -121,7 +136,7 @@ class TemplateDrivenFireSuppressionMatrixExtractor
             if (!$equipmentColumns) continue;
             $controls = [];
             for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
-                $control = $this->findControlInRow($grid[$r], $controlTemplates, $controlCodePatterns);
+                $control = $this->findControlInRow($grid[$r], $controlTemplates, $controlCodePatterns, $cells, $r);
                 if ($control === null) continue;
                 $results = [];
                 foreach ($equipmentColumns as $column => $equipmentCode) {
@@ -135,7 +150,7 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         return [];
     }
 
-    private function readEquipmentRows(array $grid, int $page, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns): array
+    private function readEquipmentRows(array $grid, array $cells, int $page, array $equipmentHeaderPatterns, array $controlTemplates, array $controlCodePatterns, array $controlLabelPatterns, array $resultPatterns): array
     {
         $maxColumns = $grid ? max(array_map('count', $grid)) : 0;
         for ($headerColumn = 0; $headerColumn < $maxColumns; $headerColumn++) {
@@ -148,11 +163,20 @@ class TemplateDrivenFireSuppressionMatrixExtractor
                 if ($code !== null) $equipmentRows[$rowIndex] = $code;
             }
             if (!$equipmentRows) continue;
-            $controlHeader = $this->findControlHeaderRow($grid, $controlTemplates, $controlCodePatterns);
+            $controlHeader = $this->findControlHeaderRow($grid, $controlTemplates, $controlCodePatterns, $cells);
             if ($controlHeader === null) continue;
             $controlColumns = [];
             foreach ($grid[$controlHeader] as $column => $value) {
-                $control = $this->findControlInCell((string) $value, $controlTemplates, $controlCodePatterns);
+                $control = $this->findControlInCell(
+                    (string) $value,
+                    $controlTemplates,
+                    $controlCodePatterns,
+                    $cells[$controlHeader][$column] ?? null,
+                    $cells,
+                    $controlHeader,
+                    (int) $column,
+                    $resultPatterns
+                );
                 if ($control !== null) $controlColumns[$column] = $control;
             }
             if (!$controlColumns) continue;
@@ -170,42 +194,161 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         return [];
     }
 
-    private function findControlHeaderRow(array $grid, array $controlTemplates, array $controlCodePatterns): ?int
+    private function findControlHeaderRow(array $grid, array $controlTemplates, array $controlCodePatterns, array $cells = []): ?int
     {
         foreach ($grid as $rowIndex => $row) {
-            foreach ($row as $value) if ($this->findControlInCell((string) $value, $controlTemplates, $controlCodePatterns) !== null) return $rowIndex;
+            foreach ($row as $column => $value) {
+                if ($this->findControlInCell(
+                    (string) $value,
+                    $controlTemplates,
+                    $controlCodePatterns,
+                    $cells[$rowIndex][$column] ?? null,
+                    $cells,
+                    (int) $rowIndex,
+                    (int) $column,
+                    []
+                ) !== null) return $rowIndex;
+            }
         }
         return null;
     }
 
-    private function findControlInRow(array $row, array $controlTemplates, array $controlCodePatterns): ?array
+    private function findControlInRow(array $row, array $controlTemplates, array $controlCodePatterns, array $cells = [], ?int $rowIndex = null, array $resultPatterns = []): ?array
     {
-        foreach ($row as $value) {
-            $control = $this->findControlInCell((string) $value, $controlTemplates, $controlCodePatterns);
+        foreach ($row as $column => $value) {
+            $control = $this->findControlInCell(
+                (string) $value,
+                $controlTemplates,
+                $controlCodePatterns,
+                $rowIndex !== null ? ($cells[$rowIndex][$column] ?? null) : null,
+                $cells,
+                $rowIndex,
+                (int) $column,
+                $resultPatterns
+            );
             if ($control !== null) return $control;
         }
         return null;
     }
 
-    private function findControlInCell(string $value, array $controlTemplates, array $controlCodePatterns): ?array
-    {
+    private function findControlInCell(
+        string $value,
+        array $controlTemplates,
+        array $controlCodePatterns,
+        ?array $cell = null,
+        array $cells = [],
+        ?int $rowIndex = null,
+        ?int $columnIndex = null,
+        array $resultPatterns = []
+    ): ?array {
         $value = trim($value);
         if ($value === '') return null;
+
         foreach ($controlTemplates as $control) {
             if (!is_array($control)) continue;
             $code = $this->matchControlCode($value, (array) ($control['control_code_patterns'] ?? []));
-            if ($code !== null) return ['code' => $code, 'criterion' => $this->criterionFromCell($value, $control)];
+            if ($code !== null) {
+                return [
+                    'code' => $code,
+                    'criterion' => $this->criterionFromPdfCell($value, $code, $cell, $cells, $rowIndex, $columnIndex, $controlCodePatterns, $resultPatterns),
+                ];
+            }
         }
+
         $code = $this->matchControlCode($value, $controlCodePatterns);
-        return $code !== null ? ['code' => $code, 'criterion' => $this->stripControlCode($value, $code)] : null;
+        return $code !== null
+            ? [
+                'code' => $code,
+                'criterion' => $this->criterionFromPdfCell($value, $code, $cell, $cells, $rowIndex, $columnIndex, $controlCodePatterns, $resultPatterns),
+            ]
+            : null;
+    }
+
+    private function criterionFromPdfCell(
+        string $value,
+        string $code,
+        ?array $cell,
+        array $cells,
+        ?int $rowIndex,
+        ?int $columnIndex,
+        array $controlCodePatterns,
+        array $resultPatterns
+    ): ?string {
+        // 1) If the PDF puts code + criterion in one cell, this is authoritative.
+        $sameCell = $this->stripControlCode($value, $code);
+        if ($sameCell !== null) return $this->clean($sameCell);
+
+        if ($cell === null || $rowIndex === null || $columnIndex === null || !$cells) return null;
+
+        $cx1 = (float) ($cell['x1'] ?? 0);
+        $cx2 = (float) ($cell['x2'] ?? 0);
+        $cy1 = (float) ($cell['y1'] ?? 0);
+        $cy2 = (float) ($cell['y2'] ?? 0);
+        $candidates = [];
+
+        foreach ($cells as $r => $rowCells) {
+            foreach ($rowCells as $c => $candidateCell) {
+                if (!is_array($candidateCell)) continue;
+                if ((int) $r === $rowIndex && (int) $c === $columnIndex) continue;
+
+                $text = $this->clean((string) ($candidateCell['text'] ?? ''));
+                if ($text === null) continue;
+                if ($this->isControlText($text, $controlCodePatterns)) continue;
+                if ($resultPatterns && $this->matchResultValue($text, $resultPatterns) !== null) continue;
+                if ($this->looksLikeEquipmentCode($text)) continue;
+
+                $x1 = (float) ($candidateCell['x1'] ?? 0);
+                $x2 = (float) ($candidateCell['x2'] ?? 0);
+                $y1 = (float) ($candidateCell['y1'] ?? 0);
+                $y2 = (float) ($candidateCell['y2'] ?? 0);
+                $xOverlap = min($cx2, $x2) - max($cx1, $x1);
+                $yOverlap = min($cy2, $y2) - max($cy1, $y1);
+                $controlWidth = max(0.01, abs($cx2 - $cx1));
+                $candidateWidth = max(0.01, abs($x2 - $x1));
+                $horizontalOverlapRatio = max(0, $xOverlap) / min($controlWidth, $candidateWidth);
+
+                if ((int) $r === $rowIndex) {
+                    $gap = $x1 >= $cx2 ? $x1 - $cx2 : ($cx1 >= $x2 ? $cx1 - $x2 : 0);
+                    if ($gap > 0 || $yOverlap > 0) {
+                        $directionPenalty = $x1 >= $cx2 ? 0 : 200;
+                        $candidates[] = [
+                            'text' => $text,
+                            'score' => 1000 - $directionPenalty - min(500, $gap),
+                        ];
+                    }
+                    continue;
+                }
+
+                if ($horizontalOverlapRatio < 0.25) continue;
+                $verticalGap = $y1 >= $cy2 ? $y1 - $cy2 : ($cy1 >= $y2 ? $cy1 - $y2 : 0);
+                if ($verticalGap > 150) continue;
+                $candidates[] = [
+                    'text' => $text,
+                    'score' => 700 - min(500, $verticalGap) + min(100, $horizontalOverlapRatio * 100),
+                ];
+            }
+        }
+
+        if (!$candidates) return null;
+        usort($candidates, fn (array $a, array $b) => $b['score'] <=> $a['score']);
+        return $this->clean($candidates[0]['text']);
+    }
+
+    private function isControlText(string $value, array $controlCodePatterns): bool
+    {
+        return $this->matchControlCode($value, $controlCodePatterns) !== null;
+    }
+
+    private function looksLikeEquipmentCode(string $value): bool
+    {
+        return preg_match('/^[A-ZÇĞİÖŞÜ]{1,8}[ -]?\d+$/u', trim($value)) === 1;
     }
 
     private function addCriteria(array $controls, array $templates): array
     {
-        foreach ($controls as &$item) {
-            $template = $this->findControlTemplate($this->normalizeCode((string) ($item['code'] ?? '')), $templates);
-            if ($template !== null) $item['criterion'] = $this->criterionFromTemplate($template);
-        }
+        // Deliberately do not use Gemini control_text_patterns here.
+        // Criterion text is owned by the PDF/Camelot extraction path.
+        foreach ($controls as &$item) $item['criterion'] = null;
         unset($item);
         return $controls;
     }
@@ -230,20 +373,20 @@ class TemplateDrivenFireSuppressionMatrixExtractor
 
     private function criterionFromCell(string $value, array $template): ?string
     {
-        foreach ((array) ($template['control_text_patterns'] ?? []) as $pattern) {
-            $pattern = trim((string) $pattern);
-            if ($pattern !== '' && $this->matchesAny($value, [$pattern])) {
-                $candidate = $this->stripControlCode($value, (string) ($this->matchControlCode($value, (array) ($template['control_code_patterns'] ?? [])) ?? ''));
-                return $this->clean($candidate);
-            }
-        }
-        return $this->stripControlCode($value, (string) ($this->matchControlCode($value, (array) ($template['control_code_patterns'] ?? [])) ?? ''));
+        $code = $this->matchControlCode($value, (array) ($template['control_code_patterns'] ?? []));
+        return $code !== null ? $this->stripControlCode($value, $code) : null;
     }
 
     private function stripControlCode(string $value, string $code): ?string
     {
         $value = trim($value);
-        if ($code !== '') $value = trim(preg_replace('/^' . preg_quote($code, '/') . '\s*[:.)-]?\s*/iu', '', $value) ?? $value);
+        if ($code !== '') {
+            $value = trim(preg_replace(
+                '/^' . preg_quote($code, '/') . '\\s*[:.)-]?\\s*/iu',
+                '',
+                $value
+            ) ?? $value);
+        }
         return $value !== '' ? $value : null;
     }
 
@@ -277,7 +420,39 @@ class TemplateDrivenFireSuppressionMatrixExtractor
     private function rowText(array $row): string { return trim(implode(' ', array_values(array_filter(array_map('strval', $row), fn ($v) => trim($v) !== '')))); }
     private function findPatternColumn(array $row, array $patterns): ?int { foreach ($row as $index => $value) if ($this->matchesAny((string) $value, $patterns)) return (int) $index; return null; }
     private function matchesAny(string $value, array $patterns): bool { foreach ($patterns as $pattern) if (@preg_match($pattern, $value) === 1 || @preg_match('~' . $pattern . '~iu', $value) === 1 || $this->normalizeLabel($pattern) === $this->normalizeLabel($value)) return true; return false; }
-    private function matchControlCode(string $value, array $patterns): ?string { $value = trim($value); if ($value === '') return null; foreach ($patterns as $pattern) { $pattern = trim((string) $pattern); if ($pattern !== '' && ($this->normalizeCode($value) === $this->normalizeCode($pattern) || @preg_match($pattern, $value) === 1 || @preg_match('~' . $pattern . '~iu', $value) === 1)) return $value; } return null; }
+    private function matchControlCode(string $value, array $patterns): ?string
+    {
+        $value = trim(str_replace(["\n", "\r"], ' ', $value));
+        if ($value === '') return null;
+
+        $extractPrefix = static function (string $text): ?string {
+            if (preg_match('/^\s*([A-Za-zÇĞİÖŞÜ]{0,8}[ -]?\d+(?:[.\-]\d+)*)\b/u', $text, $matches) === 1) {
+                return trim($matches[1]);
+            }
+            return null;
+        };
+
+        foreach ($patterns as $pattern) {
+            $pattern = trim((string) $pattern);
+            if ($pattern === '') continue;
+
+            $patternCode = $extractPrefix($pattern);
+            $valueCode = $extractPrefix($value);
+
+            if ($valueCode !== null && $patternCode !== null && $this->normalizeCode($valueCode) === $this->normalizeCode($patternCode)) return $valueCode;
+            if ($this->normalizeCode($value) === $this->normalizeCode($pattern)) return $valueCode ?? $value;
+
+            if (@preg_match($pattern, $value) === 1 || @preg_match('~' . $pattern . '~iu', $value) === 1) {
+                return $valueCode ?? $patternCode ?? $value;
+            }
+        }
+
+        // Last-resort PDF recognition: a control cell may contain
+        // "5.53 Hidrantlar..." while Gemini only discovered the matrix shape.
+        if ($valueCode !== null && preg_match('/^\d+(?:\.\d+)+$/', $valueCode) === 1) return $valueCode;
+
+        return null;
+    }
     private function matchResultValue(string $value, array $patterns): ?string { $value = trim($value); if ($value === '') return null; foreach ($patterns as $pattern) if ($this->normalizeLabel($value) === $this->normalizeLabel((string) $pattern) || @preg_match($pattern, $value) === 1 || @preg_match('~' . $pattern . '~iu', $value) === 1) return $value; return null; }
     private function normalizeLabel(string $value): string { $value = mb_strtolower(trim($value), 'UTF-8'); return rtrim(preg_replace('/\s+/u', ' ', $value) ?? $value, ':'); }
     private function normalizeCode(string $value): string { return mb_strtoupper(preg_replace('/\s+/u', '', trim($value)) ?? '', 'UTF-8'); }
