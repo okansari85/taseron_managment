@@ -192,19 +192,26 @@ class TemplateDrivenFireSuppressionExtractor
         return array_values($out);
     }
 
-    private function matchControlCode(string $value, array $patterns): ?string
+     private function matchControlCode(string $value, array $patterns): ?string
     {
         $value = trim($value);
         if ($value === '') return null;
         $normalizedValue = $this->normalizeCode($value);
+
         foreach ($patterns as $pattern) {
             $pattern = trim($pattern);
             if ($pattern === '') continue;
+
             $normalizedPattern = $this->normalizeCode($pattern);
+
             if ($normalizedPattern === $normalizedValue) return $value;
-            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match($pattern, $value) === 1) return $value;
-            if ((str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[')) && @preg_match('~' . $pattern . '~iu', $value) === 1) return $value;
+
+            if (
+                (str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '['))
+                && @preg_match('~^(?:' . $pattern . ')$~iu', $value) === 1
+            ) return $value;
         }
+
         return null;
     }
 
