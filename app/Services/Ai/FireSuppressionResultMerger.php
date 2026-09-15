@@ -7,10 +7,6 @@ namespace App\Services\Ai;
  *
  * Gemini  -> system_name, code, criterion, findings, overall_result
  * Camelot -> equipment, matrix results (U/UD/N), value, source_pages
- *
- * The final JSON is always built from Gemini's control/system tree.
- * Camelot can only enrich that tree; it can never create, remove, move,
- * rename or re-label Gemini controls.
  */
 class FireSuppressionResultMerger
 {
@@ -20,10 +16,20 @@ class FireSuppressionResultMerger
             ?? $semantic['extracted_data']
             ?? []);
 
+        // Current Template Discovery keeps the discovered system tree under
+        // template.fire_systems.systems. Do not drop it just because
+        // extracted_data intentionally contains findings only.
         $geminiSystems = array_values(array_filter(
             (array) ($geminiData['fire_systems'] ?? []),
             'is_array'
         ));
+
+        if ($geminiSystems === []) {
+            $geminiSystems = array_values(array_filter(
+                (array) ($semantic['template']['fire_systems']['systems'] ?? []),
+                'is_array'
+            ));
+        }
 
         $camelotSystems = array_values(array_filter(
             (array) ($camelotResult['extracted_data']['fire_systems'] ?? []),
@@ -32,11 +38,13 @@ class FireSuppressionResultMerger
 
         $finalSystems = [];
 
-        // Gemini defines the complete system/control tree.
         foreach ($geminiSystems as $geminiSystem) {
             $systemName = (string) ($geminiSystem['system_name'] ?? $geminiSystem['name'] ?? '');
-            $camelotSystem = $this->findSystem($camelotSystems, $systemName);
+            if ($systemName === '') {
+                continue;
+            }
 
+            $camelotSystem = $this->findSystem($camelotSystems, $systemName);
             $camelotEquipment = $camelotSystem !== null
                 ? (array) ($camelotSystem['equipment'] ?? [])
                 : [];
@@ -56,7 +64,6 @@ class FireSuppressionResultMerger
             }
 
             $finalControls = [];
-
             foreach ((array) ($geminiSystem['control_items'] ?? []) as $geminiControl) {
                 if (!is_array($geminiControl)) {
                     continue;
@@ -64,35 +71,30 @@ class FireSuppressionResultMerger
 
                 $code = $this->normalizeCode((string) ($geminiControl['code'] ?? ''));
                 if ($code === '') {
+                    // Template-discovery control items currently carry code
+                    // patterns rather than a concrete code. Keep those
+                    // controls out of the final semantic tree until Gemini
+                    // provides the concrete semantic control payload.
                     continue;
                 }
 
-                // Start with Gemini. This preserves Gemini's exact criterion,
-                // scalar result, findings-related fields and control ordering.
                 $finalControl = $geminiControl;
                 $finalControl['code'] = (string) ($geminiControl['code'] ?? $code);
 
-                // Camelot is allowed to provide only matrix/equipment results.
                 $camelotControl = $camelotControls[$code] ?? null;
                 if (is_array($camelotControl)) {
                     $matrixResults = (array) ($camelotControl['results'] ?? []);
                     if ($matrixResults !== []) {
                         $finalControl['results'] = $this->mergeResults($matrixResults);
+                        $pages = $this->pagesFromResults($matrixResults);
+                        if ($pages !== []) {
+                            $finalControl['source_pages'] = $pages;
+                        }
                     }
                 }
 
-                // Gemini criterion is authoritative. Never copy Camelot criterion.
                 if (array_key_exists('criterion', $geminiControl)) {
                     $finalControl['criterion'] = $geminiControl['criterion'];
-                }
-
-                // Camelot source pages are only used when it actually produced
-                // a matrix result. Otherwise keep Gemini's source_pages.
-                if (is_array($camelotControl) && (array) ($camelotControl['results'] ?? []) !== []) {
-                    $pages = $this->pagesFromResults((array) $camelotControl['results']);
-                    if ($pages !== []) {
-                        $finalControl['source_pages'] = $pages;
-                    }
                 }
 
                 $finalControls[$code] = $finalControl;
@@ -100,8 +102,6 @@ class FireSuppressionResultMerger
 
             $finalSystem = $geminiSystem;
             $finalSystem['system_name'] = $systemName;
-
-            // Equipment belongs exclusively to Camelot.
             $finalSystem['equipment'] = array_values($camelotEquipment);
             $finalSystem['control_items'] = array_values($finalControls);
 
@@ -111,7 +111,6 @@ class FireSuppressionResultMerger
         $final = $camelotResult;
         $final['extracted_data']['fire_systems'] = $finalSystems;
 
-        // These fields also belong exclusively to Gemini.
         if (array_key_exists('findings', $geminiData)) {
             $final['extracted_data']['findings'] = (array) $geminiData['findings'];
         }
