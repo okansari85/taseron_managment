@@ -161,6 +161,357 @@ class TemplateDrivenFireSuppressionExtractor
         return array_values(array_unique($tokens));
     }
 
+private function extractControls(array $tables, array $controlTemplates): array
+{
+    $out = [];
+
+    foreach ($controlTemplates as $control) {
+        if (!is_array($control)) continue;
+
+        $codePatterns = array_values(array_filter(
+            array_map('strval', (array) ($control['control_code_patterns'] ?? []))
+        ));
+
+        $resultPatterns = array_values(array_filter(
+            array_map('strval', (array) ($control['result_patterns'] ?? []))
+        ));
+
+        if (!$codePatterns) continue;
+
+        foreach ($tables as $table) {
+
+            // EKLENDİ
+            $cells = (array) ($table['cells'] ?? []);
+
+            // rowIndex EKLENDİ
+            foreach ($this->matrix($table) as $rowIndex => $row) {
+
+                // columnIndex EKLENDİ
+                foreach ($row as $columnIndex => $value) {
+
+                    $code = $this->matchControlCode(
+                        (string) $value,
+                        $codePatterns
+                    );
+
+                    if ($code === null) continue;
+
+                    $result = null;
+
+                    foreach ($row as $resultIndex => $candidate) {
+
+                        if ((int) $resultIndex === (int) $columnIndex) {
+                            continue;
+                        }
+
+                        $matched = $this->matchResultValue(
+                            (string) $candidate,
+                            $resultPatterns
+                        );
+
+                        if ($matched !== null) {
+                            $result = $matched;
+                            break;
+                        }
+                    }
+
+                    /*
+                     * Kriteri Gemini'den değil,
+                     * Camelot'un PDF hücrelerinden bul.
+                     */
+                    $criterion = $this->findCriterionFromCells(
+                        $cells,
+                        (int) $rowIndex,
+                        (int) $columnIndex,
+                        $code,
+                        $codePatterns,
+                        $resultPatterns
+                    );
+
+                    $out[$this->normalizeCode($code)] = [
+                        'code' => $code,
+                        'criterion' => $criterion,
+                        'result' => $result,
+                        'source_pages' => array_values(
+                            array_unique(
+                                array_filter([
+                                    (int) ($table['page'] ?? 0)
+                                ])
+                            )
+                        ),
+                    ];
+                }
+            }
+        }
+    }
+
+    return array_values($out);
+}
+
+
+
+private function findCriterionFromCells(
+    array $cells,
+    int $controlRow,
+    int $controlColumn,
+    string $code,
+    array $codePatterns,
+    array $resultPatterns
+): ?string {
+    $controlCell = $cells[$controlRow][$controlColumn] ?? null;
+
+    if (!is_array($controlCell)) {
+        return null;
+    }
+
+    $controlText = trim((string) ($controlCell['text'] ?? ''));
+
+    if ($controlText === '') {
+        return null;
+    }
+
+    $controlX1 = (float) ($controlCell['x1'] ?? 0);
+    $controlX2 = (float) ($controlCell['x2'] ?? 0);
+    $controlY1 = (float) ($controlCell['y1'] ?? 0);
+    $controlY2 = (float) ($controlCell['y2'] ?? 0);
+
+    /*
+     * Önce kontrol hücresinin içinde criterion var mı?
+     *
+     * Örnek:
+     * 5.1 Proje varlığı ve onayı
+     */
+    $sameCellCriterion = trim(
+        preg_replace(
+            '/^' . preg_quote($code, '/') . '\s*[:.)-]?\s*/iu',
+            '',
+            $controlText
+        ) ?? $controlText
+    );
+
+    if (
+        $sameCellCriterion !== ''
+        && $sameCellCriterion !== $controlText
+        && $this->normalizeCode($sameCellCriterion) !== $this->normalizeCode($code)
+    ) {
+        return $sameCellCriterion;
+    }
+
+    /*
+     * ============================================================
+     * KOORDİNAT TABANLI KRİTER ARAMA
+     * ============================================================
+     */
+
+    $horizontalCandidates = [];
+    $verticalCandidates = [];
+
+    foreach ($cells as $rowIndex => $rowCells) {
+        foreach ($rowCells as $columnIndex => $cell) {
+
+            if (!is_array($cell)) {
+                continue;
+            }
+
+            $text = trim((string) ($cell['text'] ?? ''));
+
+            if ($text === '') {
+                continue;
+            }
+
+            /*
+             * Kontrol hücresinin kendisi
+             */
+            if (
+                (int) $rowIndex === $controlRow
+                && (int) $columnIndex === $controlColumn
+            ) {
+                continue;
+            }
+
+            /*
+             * Başka bir kontrol kodunu criterion olarak alma.
+             */
+            $isControlCode = false;
+
+            foreach ($codePatterns as $pattern) {
+                if (
+                    $this->matchControlCode(
+                        $text,
+                        [$pattern]
+                    ) !== null
+                ) {
+                    $isControlCode = true;
+                    break;
+                }
+            }
+
+            if ($isControlCode) {
+                continue;
+            }
+
+            /*
+             * Sonuç hücresini criterion olarak alma.
+             */
+            if (
+                $this->matchResultValue(
+                    $text,
+                    $resultPatterns
+                ) !== null
+            ) {
+                continue;
+            }
+
+            $x1 = (float) ($cell['x1'] ?? 0);
+            $x2 = (float) ($cell['x2'] ?? 0);
+            $y1 = (float) ($cell['y1'] ?? 0);
+            $y2 = (float) ($cell['y2'] ?? 0);
+
+            /*
+             * ====================================================
+             * 1. YATAY KOMŞULUK
+             *
+             * [5.1] [Proje varlığı ve onayı] [UD]
+             *
+             * Kontrolün sağındaki hücreleri değerlendir.
+             * ====================================================
+             */
+
+            $verticalOverlap = min($controlY2, $y2)
+                - max($controlY1, $y1);
+
+            if (
+                $verticalOverlap > 0
+                && $x1 >= $controlX2
+            ) {
+                $distance = $x1 - $controlX2;
+
+                $horizontalCandidates[] = [
+                    'text' => $text,
+                    'distance' => $distance,
+                    'overlap' => $verticalOverlap,
+                ];
+
+                continue;
+            }
+
+            /*
+             * ====================================================
+             * 2. DİKEY KOMŞULUK
+             *
+             * [5.1]
+             * [Proje varlığı ve onayı]
+             *
+             * X ekseninde hizalıysa değerlendir.
+             * ====================================================
+             */
+
+            $horizontalOverlap = min($controlX2, $x2)
+                - max($controlX1, $x1);
+
+            if ($horizontalOverlap <= 0) {
+                continue;
+            }
+
+            /*
+             * Kontrolün hemen altında
+             */
+            if ($y1 >= $controlY2) {
+
+                $verticalCandidates[] = [
+                    'text' => $text,
+                    'distance' => $y1 - $controlY2,
+                    'overlap' => $horizontalOverlap,
+                ];
+
+                continue;
+            }
+
+            /*
+             * Kontrolün hemen üstünde
+             */
+            if ($y2 <= $controlY1) {
+
+                $verticalCandidates[] = [
+                    'text' => $text,
+                    'distance' => $controlY1 - $y2,
+                    'overlap' => $horizontalOverlap,
+                ];
+            }
+        }
+    }
+
+    /*
+     * ============================================================
+     * YATAY ADAYLAR
+     *
+     * En yakın hücreyi seç.
+     * ============================================================
+     */
+
+    if ($horizontalCandidates !== []) {
+
+        usort(
+            $horizontalCandidates,
+            function (array $a, array $b): int {
+
+                /*
+                 * Önce yakınlık.
+                 * Eşitse daha fazla dikey örtüşme.
+                 */
+                if ($a['distance'] == $b['distance']) {
+                    return $b['overlap'] <=> $a['overlap'];
+                }
+
+                return $a['distance'] <=> $b['distance'];
+            }
+        );
+
+        return trim(
+            $horizontalCandidates[0]['text']
+        );
+    }
+
+    /*
+     * ============================================================
+     * DİKEY ADAYLAR
+     * ============================================================
+     */
+
+    if ($verticalCandidates !== []) {
+
+        usort(
+            $verticalCandidates,
+            function (array $a, array $b): int {
+
+                if ($a['distance'] == $b['distance']) {
+                    return $b['overlap'] <=> $a['overlap'];
+                }
+
+                return $a['distance'] <=> $b['distance'];
+            }
+        );
+
+        return trim(
+            $verticalCandidates[0]['text']
+        );
+    }
+
+    return null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+/*
     private function extractControls(array $tables, array $controlTemplates): array
     {
         $out = [];
@@ -180,17 +531,53 @@ class TemplateDrivenFireSuppressionExtractor
                             $matched = $this->matchResultValue((string) $candidate, $resultPatterns);
                             if ($matched !== null) { $result = $matched; break; }
                         }
+
+
+                                /*
+                            * Kriteri Gemini'den değil,
+                            * Camelot'un PDF hücrelerinden bul.
+
+                           $criterion = $this->findCriterionFromCells(
+                            $cells,
+                            (int) $rowIndex,
+                            (int) $columnIndex,
+                            $code,
+                            $codePatterns,
+                            $resultPatterns
+                            );
+
+                            $out[$this->normalizeCode($code)] = [
+                            'code' => $code,
+                            'criterion' => $criterion,
+                            'result' => $result,
+                            'source_pages' => array_values(
+                                array_unique(
+                                    array_filter([
+                                        (int) ($table['page'] ?? 0)
+                                    ])
+                                )
+                            ),
+                            ];
+
+
+
+
+
+                        /*
                         $out[$this->normalizeCode($code)] = [
                             'code' => $code,
                             'result' => $result,
                             'source_pages' => array_values(array_unique(array_filter([(int) ($table['page'] ?? 0)]))),
                         ];
+
                     }
                 }
             }
         }
         return array_values($out);
     }
+  */
+
 
      private function matchControlCode(string $value, array $patterns): ?string
     {
