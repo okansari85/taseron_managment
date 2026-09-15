@@ -2,9 +2,7 @@
 
 namespace App\Services\Ai;
 
-use RuntimeException;
-
-/** Normalizes Template Discovery output into the stable report contract. */
+/** Normalizes the final fire-suppression extraction into the stable report contract. */
 class TemplateDiscoveryReportNormalizer
 {
     public function normalize(array $semantic, ?string $fixtureId = null): array
@@ -14,7 +12,9 @@ class TemplateDiscoveryReportNormalizer
             : $semantic;
 
         $report = is_array($data['report'] ?? null) ? $data['report'] : [];
-        $systems = is_array($data['systems'] ?? null) ? $data['systems'] : [];
+        $systems = is_array($data['systems'] ?? null)
+            ? $data['systems']
+            : (is_array($data['fire_systems'] ?? null) ? $data['fire_systems'] : []);
         $findings = is_array($data['findings'] ?? null) ? $data['findings'] : [];
 
         $normalizedSystems = [];
@@ -24,17 +24,17 @@ class TemplateDiscoveryReportNormalizer
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
 
-            $name = $this->stringOrNull($system['name'] ?? null);
+            $name = $this->stringOrNull($system['name'] ?? $system['system_name'] ?? null);
             if ($name === null) continue;
 
             $category = $this->normalizeCategory($system['category'] ?? null);
-            $components = $this->normalizeComponents((array) ($system['components'] ?? []));
+            $components = $this->normalizeComponents((array) ($system['components'] ?? $system['equipment'] ?? []));
             $controls = $this->normalizeControls((array) ($system['control_items'] ?? []));
 
             $known = (bool) ($system['equipment_count_known'] ?? (count($components) > 0));
             $systemEquipmentCount = $known
                 ? max(0, (int) ($system['equipment_count'] ?? count($components)))
-                : 0;
+                : count($components);
 
             $normalizedSystems[] = [
                 'name' => $name,
@@ -71,12 +71,12 @@ class TemplateDiscoveryReportNormalizer
             'candidate_inventory_items' => (array) ($data['candidate_inventory_items'] ?? []),
             'unmatched_codes' => array_values(array_filter(array_map('strval', (array) ($data['unmatched_codes'] ?? [])))),
             'analyzer' => [
-                'version' => 'template-discovery-1',
+                'version' => 'template-discovery-2',
                 'table_count' => $this->templateTableCount($semantic),
                 'equipment_count' => $equipmentCount,
                 'control_count' => $controlCount,
                 'finding_count' => count($normalizedFindings),
-                'fixture_mode' => false,
+                'fixture_mode' => $fixtureId !== null,
             ],
             'fixture_id' => $fixtureId,
         ];
@@ -121,7 +121,7 @@ class TemplateDiscoveryReportNormalizer
         foreach ($controls as $control) {
             if (!is_array($control)) continue;
 
-            $code = trim((string) ($control['code'] ?? ''));
+            $code = trim((string) ($control['code'] ?? $control['control_code'] ?? ''));
             if ($code === '') continue;
 
             $key = $this->normalizeCode($code);
@@ -130,15 +130,16 @@ class TemplateDiscoveryReportNormalizer
 
             $scope = strtolower(trim((string) ($control['scope'] ?? 'system')));
             $scope = in_array($scope, ['equipment', 'system'], true) ? $scope : 'system';
-
             $equipment = trim((string) ($control['equipment'] ?? ''));
             if ($scope === 'system') $equipment = '';
 
             $results = is_array($control['results'] ?? null) ? $control['results'] : [];
+            $criterion = $this->stringOrNull($control['criterion'] ?? $control['description'] ?? null);
 
             $out[] = [
                 'code' => $code,
-                'description' => $this->stringOrNull($control['description'] ?? null),
+                'description' => $criterion,
+                'criterion' => $criterion,
                 'scope' => $scope,
                 'equipment' => $equipment,
                 'results' => $this->normalizeResults($results),
@@ -152,16 +153,28 @@ class TemplateDiscoveryReportNormalizer
     private function normalizeResults(array $results): array
     {
         $out = [];
-        foreach ($results as $key => $value) {
-            $key = trim((string) $key);
-            if ($key === '') continue;
 
+        foreach ($results as $key => $value) {
             if (is_array($value)) {
-                $out[$key] = array_values(array_map('strval', $value));
+                // Camelot matrix result object: keep its structure intact.
+                if (array_key_exists('equipment_code', $value) || array_key_exists('result', $value)) {
+                    $out[] = [
+                        'equipment_code' => $this->stringOrNull($value['equipment_code'] ?? $value['equipment'] ?? null),
+                        'result' => $this->stringOrNull($value['result'] ?? null),
+                        'value' => $value['value'] ?? null,
+                        'source_pages' => $this->pages($value['source_pages'] ?? []),
+                    ];
+                    continue;
+                }
+
+                // Preserve ordinary nested result data instead of stringifying it.
+                $out[$key] = $value;
             } elseif ($value !== null) {
-                $out[$key] = trim((string) $value);
+                $normalizedKey = trim((string) $key);
+                if ($normalizedKey !== '') $out[$normalizedKey] = trim((string) $value);
             }
         }
+
         return $out;
     }
 
@@ -192,7 +205,7 @@ class TemplateDiscoveryReportNormalizer
     private function templateTableCount(array $semantic): int
     {
         $count = 0;
-        foreach ((array) ($semantic['template']['systems'] ?? []) as $system) {
+        foreach ((array) ($semantic['template']['fire_systems']['systems'] ?? $semantic['template']['systems'] ?? []) as $system) {
             if (!is_array($system)) continue;
             $count += count((array) ($system['tables'] ?? []));
         }
@@ -211,15 +224,9 @@ class TemplateDiscoveryReportNormalizer
     {
         $value = mb_strtolower(trim((string) $category), 'UTF-8');
         $allowed = [
-            'yangin_dolabi',
-            'yangin_pompasi',
-            'hidrant',
-            'sprinkler',
-            'su_alma_verme',
-            'su_deposu',
-            'sabit_boru_tesisati',
-            'gazli_sondurme',
-            'diger',
+            'yangin_dolabi', 'yangin_pompasi', 'hidrant', 'sprinkler',
+            'su_alma_verme', 'su_deposu', 'sabit_boru_tesisati',
+            'gazli_sondurme', 'diger',
         ];
         return in_array($value, $allowed, true) ? $value : 'diger';
     }
