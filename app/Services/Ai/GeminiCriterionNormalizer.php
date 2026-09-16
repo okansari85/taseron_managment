@@ -4,18 +4,24 @@ namespace App\Services\Ai;
 
 /**
  * Normalizes only Gemini criterion metadata before the existing pipeline runs.
- * It does not read PDF/Camelot data and does not modify any other Gemini field.
+ * No PDF/Camelot data is read and no non-criterion Gemini field is changed.
  */
 class GeminiCriterionNormalizer
 {
     public function normalize(array $semantic): array
     {
-        $data =& $semantic['data']['extracted_data'];
-        if (!isset($semantic['data']['extracted_data']) || !is_array($data)) {
-            $data =& $semantic['extracted_data'];
+        $data = null;
+        $path = null;
+
+        if (isset($semantic['data']['extracted_data']) && is_array($semantic['data']['extracted_data'])) {
+            $data = $semantic['data']['extracted_data'];
+            $path = ['data', 'extracted_data'];
+        } elseif (isset($semantic['extracted_data']) && is_array($semantic['extracted_data'])) {
+            $data = $semantic['extracted_data'];
+            $path = ['extracted_data'];
         }
 
-        if (!is_array($data)) {
+        if ($data === null) {
             return $semantic;
         }
 
@@ -24,71 +30,32 @@ class GeminiCriterionNormalizer
                 continue;
             }
 
-            $controls = (array) ($system['control_items'] ?? []);
-            if ($controls === []) {
-                continue;
-            }
-
-            $normalized = [];
-            foreach ($controls as $control) {
+            foreach ((array) ($system['control_items'] ?? []) as $controlIndex => $control) {
                 if (!is_array($control)) {
-                    $normalized[] = $control;
                     continue;
                 }
 
-                $codes = $this->expandCodes((array) ($control['control_code_patterns'] ?? []));
-                $criteria = array_values(array_filter(array_map(
-                    static fn ($value): string => trim((string) $value),
-                    (array) ($control['control_text_patterns'] ?? [])
-                ), static fn (string $value): bool => $value !== ''));
+                if (!array_key_exists('criterion', $control) || trim((string) $control['criterion']) === '') {
+                    $criteria = array_values(array_filter(array_map(
+                        static fn ($value): string => trim((string) $value),
+                        (array) ($control['control_text_patterns'] ?? [])
+                    ), static fn (string $value): bool => $value !== ''));
 
-                if ($codes === [] || $criteria === []) {
-                    $normalized[] = $control;
-                    continue;
-                }
-
-                foreach ($codes as $index => $code) {
-                    $item = $control;
-                    $item['criterion'] = $criteria[$index] ?? $criteria[0];
-                    $normalized[] = $item;
-                }
-            }
-
-            $data['fire_systems'][$systemIndex]['control_items'] = $normalized;
-        }
-
-        return $semantic;
-    }
-
-    private function expandCodes(array $patterns): array
-    {
-        $codes = [];
-
-        foreach ($patterns as $pattern) {
-            $value = trim(str_replace('\\.', '.', (string) $pattern));
-            $value = preg_replace('/\s+/u', '', $value) ?? $value;
-
-            if (preg_match('/^5\.\[(\d+)-(\d+)\]$/', $value, $match) === 1) {
-                for ($n = (int) $match[1]; $n <= (int) $match[2]; $n++) {
-                    $codes[] = '5.' . $n;
-                }
-                continue;
-            }
-
-            if (preg_match('/^5\.\(([^)]+)\)$/', $value, $match) === 1) {
-                foreach (explode('|', $match[1]) as $part) {
-                    if (ctype_digit(trim($part))) {
-                        $codes[] = '5.' . (int) trim($part);
+                    if (count($criteria) === 1) {
+                        $control['criterion'] = $criteria[0];
                     }
                 }
-                continue;
-            }
 
-            if (preg_match('/^5\.\d+$/', $value) === 1) {
-                $codes[] = $value;
+                $data['fire_systems'][$systemIndex]['control_items'][$controlIndex] = $control;
             }
         }
 
-        return array_values(array_unique($codes));
+        $target =& $semantic;
+        foreach ($path as $key) {
+            $target =& $target[$key];
+        }
+        $target = $data;
+
+        return $semantic;
     }
 }
