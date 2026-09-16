@@ -5,14 +5,15 @@ namespace App\Services\Ai;
 /**
  * Backward-compatible orchestration entry point.
  *
- * Gemini remains the semantic authority. Camelot is used for equipment and
- * inspection results; the overall fallback runs only when Gemini/Camelot
- * produced no overall result.
+ * Gemini remains the semantic authority. Camelot supplies equipment and
+ * inspection results; the standard-result pass fixes paired control rows
+ * before the final merger runs.
  */
 class TemplateDrivenFireSuppressionCriterionExtractor
 {
     public function __construct(
         private TemplateDrivenFireSuppressionMatrixExtractor $matrixExtractor,
+        private FireSuppressionStandardResultExtractor $standardResultExtractor,
         private FireSuppressionResultMerger $merger,
         private FireSuppressionOverallResultFallback $overallFallback,
     ) {}
@@ -20,6 +21,7 @@ class TemplateDrivenFireSuppressionCriterionExtractor
     public function extract(string $pdfPath, array $semantic): array
     {
         $camelotResult = $this->matrixExtractor->extract($pdfPath, $semantic);
+        $camelotResult = $this->standardResultExtractor->apply($pdfPath, $semantic, $camelotResult);
         $final = $this->merger->merge($camelotResult, $semantic);
 
         $overall = $final['extracted_data']['overall_result'] ?? null;
