@@ -58,63 +58,35 @@ class FireSuppressionResultMerger
                 $geminiControls = (array) ($templateSystem['control_items'] ?? []);
             }
 
-            $materializedControls = $this->materializeGeminiControls($geminiControls);
-            $finalControls = [];
+            // Camelot already resolved the template's control_code_patterns against the
+            // real PDF cells into concrete code + criterion + result/results (verified
+            // correct). Use that as the base so a system never loses its controls just
+            // because Gemini's control_items entries are abstract regex patterns rather
+            // than concrete controls - which is the normal case, since
+            // extracted_data.fire_systems is never populated by Gemini today. Only a
+            // genuinely concrete Gemini control (a real code, not a pattern) is allowed to
+            // override code/criterion, per this class's stated authority split.
+            $finalControls = $camelotControls;
 
-            foreach ($materializedControls as $geminiControl) {
-                $code = $this->concreteCode($geminiControl);
+            foreach ($geminiControls as $geminiControl) {
+                if (!is_array($geminiControl)) {
+                    continue;
+                }
+
+                $code = $this->directCode($geminiControl);
                 if ($code === '') {
                     continue;
                 }
 
-                $finalControl = $geminiControl;
-                $finalControl['code'] = $code;
-                $finalControl['criterion'] = $this->concreteCriterion($geminiControl);
-
-                unset(
-                    $finalControl['control_code_patterns'],
-                    $finalControl['control_text_patterns'],
-                    $finalControl['result_patterns']
+                $finalControls[$code] = array_merge(
+                    $finalControls[$code] ?? [],
+                    ['code' => $code]
                 );
 
-                // Camelot owns only result/value/page data. Standard tables
-                // return a scalar result; matrix tables return results[].
-                if (isset($camelotControls[$code])) {
-                    $camelotControl = $camelotControls[$code];
-
-                    if (array_key_exists('result', $camelotControl)
-                        && trim((string) $camelotControl['result']) !== '') {
-                        $finalControl['result'] = $camelotControl['result'];
-                    }
-
-                    $results = array_values(array_filter(
-                        (array) ($camelotControl['results'] ?? []),
-                        'is_array'
-                    ));
-
-                    if ($results !== []) {
-                        $finalControl['results'] = $this->mergeResults($results);
-                        $pages = $this->pagesFromResults($results);
-                        if ($pages !== []) {
-                            $finalControl['source_pages'] = $pages;
-                        }
-                    }
-
-                    if (isset($camelotControl['source_pages'])) {
-                        $pages = array_values(array_unique(array_filter(array_map(
-                            'intval',
-                            (array) $camelotControl['source_pages']
-                        ))));
-                        if ($pages !== []) {
-                            $finalControl['source_pages'] = array_values(array_unique(array_merge(
-                                (array) ($finalControl['source_pages'] ?? []),
-                                $pages
-                            )));
-                        }
-                    }
+                $criterion = $this->concreteCriterion($geminiControl);
+                if ($criterion !== null) {
+                    $finalControls[$code]['criterion'] = $criterion;
                 }
-
-                $finalControls[$code] = $finalControl;
             }
 
             $finalSystem = $geminiSystem;
@@ -142,42 +114,6 @@ class FireSuppressionResultMerger
         }
 
         return $final;
-    }
-
-    private function materializeGeminiControls(array $controls): array
-    {
-        $materialized = [];
-
-        foreach ($controls as $control) {
-            if (!is_array($control)) {
-                continue;
-            }
-
-            $directCode = $this->directCode($control);
-            if ($directCode !== '') {
-                $item = $control;
-                $item['code'] = $directCode;
-                $materialized[] = $item;
-                continue;
-            }
-
-            $codes = $this->expandCodePatterns((array) ($control['control_code_patterns'] ?? []));
-            $criteria = array_values(array_map(
-                static fn ($value): string => trim((string) $value),
-                (array) ($control['control_text_patterns'] ?? [])
-            ));
-
-            foreach ($codes as $index => $code) {
-                $item = $control;
-                $item['code'] = $code;
-                if (isset($criteria[$index]) && $criteria[$index] !== '') {
-                    $item['criterion'] = $criteria[$index];
-                }
-                $materialized[] = $item;
-            }
-        }
-
-        return $materialized;
     }
 
     private function directCode(array $control): string
@@ -267,17 +203,6 @@ class FireSuppressionResultMerger
         return $indexed;
     }
 
-    private function concreteCode(array $control): string
-    {
-        $code = $this->directCode($control);
-        if ($code !== '') {
-            return $code;
-        }
-
-        $codes = $this->expandCodePatterns((array) ($control['control_code_patterns'] ?? []));
-        return $codes[0] ?? '';
-    }
-
     private function concreteCriterion(array $control): ?string
     {
         foreach (['criterion', 'control_text', 'text', 'description'] as $key) {
@@ -335,39 +260,6 @@ class FireSuppressionResultMerger
         ]);
 
         return trim(preg_replace('/\s+/u', ' ', preg_replace('/[^a-z0-9]+/u', ' ', $value) ?? $value) ?? $value);
-    }
-
-    private function mergeResults(array $results): array
-    {
-        $merged = [];
-        foreach ($results as $result) {
-            if (!is_array($result)) {
-                continue;
-            }
-            $equipmentCode = trim((string) ($result['equipment_code'] ?? ''));
-            if ($equipmentCode === '') {
-                continue;
-            }
-            $merged[mb_strtoupper($equipmentCode, 'UTF-8')] = $result;
-        }
-        return array_values($merged);
-    }
-
-    private function pagesFromResults(array $results): array
-    {
-        $pages = [];
-        foreach ($results as $result) {
-            if (!is_array($result)) {
-                continue;
-            }
-            foreach ((array) ($result['source_pages'] ?? []) as $page) {
-                $page = (int) $page;
-                if ($page > 0) {
-                    $pages[] = $page;
-                }
-            }
-        }
-        return array_values(array_unique($pages));
     }
 
     private function hasOverallResult(mixed $overall): bool

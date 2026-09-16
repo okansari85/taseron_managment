@@ -98,6 +98,9 @@ Her sistemin altında o sisteme ait kontrol maddelerinin patternlerini keşfet.
 Kontrol kodlarını örneklerden üretme.
 Sonuç aliaslarını da varsayma.
 
+Kontrol kodu pattern'i birden fazla basamağı kapsayan bir sayı aralığını (örn. 38-52) tek regex ile ifade edecekse DİKKAT: onlar basamağını sabitleyip birler basamağına aralık verme — örn. [4-5][0-2] YANLIŞTIR, sadece 40,41,42,50,51,52'yi eşler, 43-49'u tamamen KAÇIRIR. Onluk sınırı aşan aralıkları basamak gruplarına böl: 38-52 için doğrusu ^5\.(?:3[8-9]|4[0-9]|5[0-2])$ (38-39 | 40-49 | 50-52) şeklindedir.
+Yazdığın control_code_patterns'ın gerçekte eşleştirdiği kod sayısı, aynı control_items içindeki control_text_patterns listesinin eleman sayısıyla eşit olmalıdır — kendi yazdığın pattern'i bu şekilde kontrol et, eşleşmiyorsa düzelt.
+
 5. EKİPMANLAR
 Her ekipmanın hangi sisteme ait olduğunu açıkça system_name alanında belirt.
 Ekipmanların gerçek değerlerini extracted_data'ya koyma; bunlar template içinde Camelot'un okuyacağı yapısal bilgi olarak kalır.

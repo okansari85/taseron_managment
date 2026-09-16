@@ -793,6 +793,13 @@ class FireSuppressionUnifiedNormalizer
                 'criterion' => $criterion,
                 'scope' => $scope,
                 'equipment' => $equipment,
+                // Standard (non-matrix) controls carry a single scalar 'result'
+                // (U/UD/...); matrix controls carry a per-equipment 'results' array
+                // instead and have no top-level scalar result. Expose both rather
+                // than only reading 'results', which silently dropped every
+                // standard control's result.
+                'result' => $this->stringOrNull($control['result'] ?? null),
+                'result_normalized' => $this->normalizeResult($control['result'] ?? null),
                 'results' => $this->normalizeResults((array) ($control['results'] ?? [])),
                 'source_pages' => $this->pages($control['source_pages'] ?? []),
             ];
@@ -922,6 +929,13 @@ class FireSuppressionUnifiedNormalizer
     private function normalizeResult(mixed $value): ?string
     {
         if ($value === null) return null;
+
+        // overall_result travels as {status, text} - reduce it to the status text
+        // before normalizing rather than crashing on the array-to-string cast.
+        if (is_array($value)) {
+            $value = $value['status'] ?? $value['text'] ?? null;
+            if ($value === null) return null;
+        }
 
         $value = mb_strtolower(trim((string) $value), 'UTF-8');
         if ($value === '') return null;

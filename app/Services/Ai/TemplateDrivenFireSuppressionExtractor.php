@@ -29,13 +29,17 @@ class TemplateDrivenFireSuppressionExtractor
             $equipment = [];
             foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
                 if (!is_array($equipmentTemplate)) continue;
-                foreach ($this->extractHorizontalEquipment(
-                    $latticeTables,
-                    $equipmentTemplate,
-                    $controlTemplates,
-                    $system['section_heading_patterns'] ?? [],
-                    $allSystemSectionPatterns
-                ) as $item) {
+                $orientation = mb_strtolower(trim((string) ($equipmentTemplate['table_structure']['orientation'] ?? '')), 'UTF-8');
+                $extractedEquipment = $orientation === 'vertical_key_value'
+                    ? $this->extractVerticalKeyValueEquipment($latticeTables, $equipmentTemplate)
+                    : $this->extractHorizontalEquipment(
+                        $latticeTables,
+                        $equipmentTemplate,
+                        $controlTemplates,
+                        $system['section_heading_patterns'] ?? [],
+                        $allSystemSectionPatterns
+                    );
+                foreach ($extractedEquipment as $item) {
                     $equipment[] = $item;
                 }
             }
@@ -135,6 +139,106 @@ class TemplateDrivenFireSuppressionExtractor
         return array_values($items);
     }
 
+    /**
+     * "vertical_key_value" orientation: each equipment instance is its own small
+     * lattice table (a paired label:value grid, e.g. "Marka | CLARKE | Tip - Model | DİZEL"
+     * on one row, "Pompa Seri No | 1" on another), not a shared table with one column per
+     * equipment. Gemini's equipment_identity.identity_patterns lists the instances in
+     * reading order (e.g. "1 NUMARALI POMPA", "2 NUMARALI POMPA", "JOKEY POMPA") - each
+     * matching lattice table is paired with the identity pattern at the same position,
+     * in top-to-bottom document order.
+     */
+    private function extractVerticalKeyValueEquipment(array $latticeTables, array $template): array
+    {
+        $leftLabels = array_values(array_filter(array_map('strval', (array) (
+            $template['camelot_extraction']['left_column_patterns']
+            ?? $template['table_structure']['left_column']['label_patterns']
+            ?? []
+        ))));
+        $rightLabels = array_values(array_filter(array_map('strval', (array) (
+            $template['camelot_extraction']['right_column_patterns']
+            ?? $template['table_structure']['right_column']['header_patterns']
+            ?? []
+        ))));
+        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
+        if (!$leftLabels || !$identityPatterns) return [];
+
+        $valueLabels = array_values(array_unique(array_merge($leftLabels, $rightLabels)));
+
+        $blocks = [];
+        foreach ($latticeTables as $table) {
+            $rows = $this->matrix($table);
+            if (!$rows) continue;
+            $firstLabel = $this->cleanValue((string) ($rows[0][0] ?? ''));
+            if (!$this->matchesAny($firstLabel, $leftLabels)) continue;
+
+            // A table can coincidentally start with one of our labels (e.g. a
+            // diesel-pump fuel-tank table also has "Marka" as its first row) without
+            // actually being one of this equipment's blocks - require most of the
+            // declared labels to actually show up in the block before accepting it.
+            $matchedLabels = 0;
+            foreach ($rows as $row) {
+                for ($column = 0; $column + 1 < count($row); $column += 2) {
+                    $label = $this->cleanValue((string) ($row[$column] ?? ''));
+                    if ($label !== '' && $this->matchesAny($label, $valueLabels)) $matchedLabels++;
+                }
+            }
+            if ($matchedLabels < max(2, (int) ceil(count($valueLabels) / 2))) continue;
+
+            $blocks[] = ['table' => $table, 'rows' => $rows, 'y' => (float) ($table['bbox'][1] ?? 0)];
+        }
+        if (!$blocks) return [];
+
+        usort($blocks, function (array $a, array $b): int {
+            $pageA = (int) ($a['table']['page'] ?? 0);
+            $pageB = (int) ($b['table']['page'] ?? 0);
+            if ($pageA !== $pageB) return $pageA <=> $pageB;
+            return $b['y'] <=> $a['y']; // higher y = closer to the page top = read first
+        });
+
+        // A non-numeric identity pattern (e.g. "JOKEY POMPA") repeats the equipment's own
+        // name as a word inside it - strip whatever the template calls this equipment
+        // (from equipment_name, not a hardcoded word) to leave just the distinguishing
+        // part ("JOKEY"), so this works for any equipment type/vendor wording.
+        $equipmentNameTokens = array_values(array_filter(
+            preg_split('/\s+/u', mb_strtoupper((string) ($template['equipment_name'] ?? ''), 'UTF-8')) ?: []
+        ));
+
+        $codes = [];
+        foreach ($identityPatterns as $pattern) {
+            if (preg_match('/(\d+)/u', $pattern, $match) === 1) { $codes[] = $match[1]; continue; }
+            $remaining = mb_strtoupper($pattern, 'UTF-8');
+            foreach ($equipmentNameTokens as $token) {
+                $remaining = trim(preg_replace('/\b' . preg_quote($token, '/') . '\b/ui', '', $remaining) ?? $remaining);
+            }
+            $codes[] = $remaining !== '' ? $remaining : trim($pattern);
+        }
+
+        $items = [];
+        foreach ($blocks as $index => $block) {
+            $code = $codes[$index] ?? (string) ($index + 1);
+            $properties = [];
+            foreach ($block['rows'] as $row) {
+                for ($column = 0; $column + 1 < count($row); $column += 2) {
+                    $label = $this->cleanValue((string) ($row[$column] ?? ''));
+                    $value = trim((string) ($row[$column + 1] ?? ''));
+                    if ($label === '' || $value === '' || $value === '-') continue;
+                    if (!$this->matchesAny($label, $valueLabels)) continue;
+                    $properties[$label] = $this->cleanValue($value);
+                }
+            }
+            if (!$properties) continue;
+            $items[] = [
+                'code' => $code,
+                'name' => $this->string($template['equipment_name'] ?? null),
+                'system_name' => $this->string($template['system_name'] ?? null),
+                'properties' => $properties,
+                'source_pages' => array_values(array_unique(array_filter([(int) ($block['table']['page'] ?? 0)]))),
+            ];
+        }
+        return $items;
+    }
+
     private function headerFromRow(array $row, int $headerColumn, array $template): array
     {
         $header = [];
@@ -151,14 +255,51 @@ class TemplateDrivenFireSuppressionExtractor
     {
         $value = trim(str_replace(["\n", "\r"], ' ', $value));
         if ($value === '' || $value === '-') return [];
+        // A dash-joined numeric list/range can be broken across a PDF line-wrap right
+        // after a dash (e.g. "62-63-...-69- 70-71-...-74"); collapse that first so the
+        // whole sequence stays one token instead of two truncated halves.
+        $value = preg_replace('/-\s+/u', '-', $value) ?? $value;
         $tokens = [];
         foreach (preg_split('/\s+/u', $value) ?: [] as $token) {
             $token = trim($token, " ,;");
             if ($token === '') continue;
-            if ($identityPatterns && $this->matchesAny($token, $identityPatterns)) { $tokens[] = $token; continue; }
-            if (!$identityPatterns && preg_match('/^\d+$/u', $token)) $tokens[] = $token;
+            if ($identityPatterns && $this->matchesAny($token, $identityPatterns)) {
+                foreach ($this->expandNumericCodeSequence($token) as $code) $tokens[] = $code;
+                continue;
+            }
+            if (!$identityPatterns && preg_match('/^\d+(?:-\d+)*$/u', $token)) {
+                foreach ($this->expandNumericCodeSequence($token) as $code) $tokens[] = $code;
+            }
         }
         return array_values(array_unique($tokens));
+    }
+
+    /**
+     * A token like "62-63-64-...-74" already lists every code (dash used as a
+     * separator between consecutive items) - split it into its numbers as-is. A
+     * token with exactly two dash-joined numbers, e.g. "10-20", is a range
+     * shorthand meaning every code from the first to the second inclusive.
+     * A token without a dash-joined numeric sequence (e.g. "YD1", "Jokey") is
+     * returned unchanged.
+     */
+    private function expandNumericCodeSequence(string $token): array
+    {
+        if (preg_match('/^([A-ZÇĞİÖŞÜa-z]*)(\d+(?:-\d+)+)$/u', $token, $match) !== 1) {
+            return [$token];
+        }
+        $prefix = $match[1];
+        $numbers = array_values(array_filter(explode('-', $match[2]), fn ($part) => $part !== ''));
+        if (count($numbers) < 2) return [$token];
+
+        if (count($numbers) === 2) {
+            [$start, $end] = array_map('intval', $numbers);
+            if ($start > $end) [$start, $end] = [$end, $start];
+            $expanded = [];
+            for ($number = $start; $number <= $end; $number++) $expanded[] = $prefix . $number;
+            return $expanded;
+        }
+
+        return array_map(static fn ($number) => $prefix . $number, $numbers);
     }
 
 private function extractControls(array $tables, array $controlTemplates): array
@@ -595,8 +736,8 @@ private function findCriterionFromCells(
 
             if (
                 (str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '['))
-                && @preg_match('~^(?:' . $pattern . ')$~iu', $value) === 1
-            ) return $value;
+                && @preg_match('~^(?:' . $pattern . ')[.:\)]?$~iu', $value) === 1
+            ) return rtrim($value, '.:)');
         }
 
         return null;

@@ -436,24 +436,31 @@ class TemplateDrivenFireSuppressionMatrixExtractor
             return null;
         };
 
+        $valueCode = $extractPrefix($value);
+
         foreach ($patterns as $pattern) {
             $pattern = trim((string) $pattern);
             if ($pattern === '') continue;
 
             $patternCode = $extractPrefix($pattern);
-            $valueCode = $extractPrefix($value);
 
             if ($valueCode !== null && $patternCode !== null && $this->normalizeCode($valueCode) === $this->normalizeCode($patternCode)) return $valueCode;
             if ($this->normalizeCode($value) === $this->normalizeCode($pattern)) return $valueCode ?? $value;
 
+            // Code alone in its own cell.
             if (@preg_match($pattern, $value) === 1 || @preg_match('~' . $pattern . '~iu', $value) === 1) {
                 return $valueCode ?? $patternCode ?? $value;
             }
-        }
 
-        // Last-resort PDF recognition: a control cell may contain
-        // "5.53 Hidrantlar..." while Gemini only discovered the matrix shape.
-        if ($valueCode !== null && preg_match('/^\d+(?:\.\d+)+$/', $valueCode) === 1) return $valueCode;
+            // Code + criterion combined in one cell (e.g. "5.53 Hidrantlar: ...") -
+            // the pattern's own anchors make the whole-cell checks above fail even
+            // though the code itself is exactly what the pattern declares. Validate
+            // just the extracted leading code against the same declared pattern
+            // (not "any digit.digit shape" - that reopened cross-system leakage).
+            if ($valueCode !== null && $valueCode !== $value
+                && (@preg_match($pattern, $valueCode) === 1 || @preg_match('~' . $pattern . '~iu', $valueCode) === 1)
+            ) return $valueCode;
+        }
 
         return null;
     }
