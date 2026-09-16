@@ -852,6 +852,27 @@ class FireSuppressionUnifiedNormalizer
         return [$m[1] ?? $code, isset($m[2]) && $m[2] !== '' ? (int) $m[2] : -1, $m[3] ?? ''];
     }
 
+    /**
+     * A finding usually names equipment by a short acronym of the equipment's
+     * OWN type name (e.g. "Yangın Dolapları" -> "YD", "Yangın Hidrantı" -> "YH"),
+     * not the bare code - derive it from the first letter of each word rather
+     * than hardcoding a per-vendor abbreviation.
+     */
+    private function equipmentCodePrefix(string $equipmentName): string
+    {
+        $words = array_values(array_filter(
+            preg_split('/\s+/u', trim(mb_strtoupper($equipmentName, 'UTF-8'))) ?: [],
+            static fn (string $w): bool => $w !== ''
+        ));
+        if (count($words) < 2) return '';
+
+        $letters = '';
+        foreach ($words as $word) {
+            $letters .= mb_substr($word, 0, 1, 'UTF-8');
+        }
+        return $letters;
+    }
+
     private function normalizeFindings(array $findings, array $normalizedSystems = []): array
     {
         // Gemini deliberately never fills affected_equipment (the prompt tells it
@@ -861,21 +882,24 @@ class FireSuppressionUnifiedNormalizer
         // pattern - so this only ever reports a code we've actually confirmed
         // exists, rather than guessing from arbitrary numbers in the text.
         $codesBySystem = [];
+        $prefixBySystem = [];
         foreach ($normalizedSystems as $system) {
             if (!is_array($system)) continue;
             $systemKey = $this->normalizeLabel((string) ($system['name'] ?? ''));
             if ($systemKey === '') continue;
             $codes = [];
+            $equipmentName = '';
             foreach ((array) ($system['components'] ?? []) as $component) {
                 $code = trim((string) ($component['code'] ?? ''));
                 if ($code !== '') $codes[] = $code;
+                if ($equipmentName === '') $equipmentName = trim((string) ($component['name'] ?? ''));
             }
-            // Longest first, and skip short pure-digit codes ("1", "2") - too likely
-            // to coincidentally appear inside an unrelated control-code reference
-            // like "5.2)" in the same finding text.
-            $codes = array_values(array_filter($codes, static fn (string $c) => mb_strlen($c) >= 2 || !ctype_digit($c)));
-            usort($codes, static fn (string $a, string $b) => mb_strlen($b) <=> mb_strlen($a));
-            $codesBySystem[$systemKey] = $codes;
+            $codesBySystem[$systemKey] = array_values(array_unique($codes));
+            // A finding usually refers to equipment by a short acronym of its own
+            // type name (e.g. "Yangın Dolapları" -> "YD-9"), not the bare code -
+            // derive that acronym from the SAME equipment_name Camelot already
+            // read, rather than hardcoding it per report/vendor.
+            $prefixBySystem[$systemKey] = $this->equipmentCodePrefix($equipmentName);
         }
 
         $out = [];
@@ -893,12 +917,54 @@ class FireSuppressionUnifiedNormalizer
             ))));
 
             if ($systemName !== null) {
-                $candidateCodes = $codesBySystem[$this->normalizeLabel($systemName)] ?? [];
+                $systemKey = $this->normalizeLabel($systemName);
+                $candidateCodes = $codesBySystem[$systemKey] ?? [];
+                $prefix = $prefixBySystem[$systemKey] ?? '';
+                $codeLookup = array_flip($candidateCodes);
+
+                if ($prefix !== '') {
+                    $quotedPrefix = preg_quote($prefix, '/');
+
+                    // Range phrases: "YD-16 İLE YD-72 ARASI" -> every real code
+                    // that actually exists between 16 and 72 (never invents a
+                    // code that isn't genuinely part of this equipment).
+                    if (preg_match_all(
+                        '/' . $quotedPrefix . '[-\s]?(\d+)\s*(?:[İI]LE|-)\s*' . $quotedPrefix . '[-\s]?(\d+)\s*ARASI/iu',
+                        $description,
+                        $rangeMatches,
+                        PREG_SET_ORDER
+                    ) > 0) {
+                        foreach ($rangeMatches as $rangeMatch) {
+                            $start = (int) $rangeMatch[1];
+                            $end = (int) $rangeMatch[2];
+                            if ($start > $end) [$start, $end] = [$end, $start];
+                            for ($n = $start; $n <= $end; $n++) {
+                                if (isset($codeLookup[(string) $n])) $affected[] = (string) $n;
+                            }
+                        }
+                    }
+
+                    // Individual prefixed mentions: "YD-9", "YD118" (missing
+                    // dash - a real typo/OCR variant in the source), "YD 9". The
+                    // prefix removes the ambiguity a bare short number would have,
+                    // so no length filtering is needed here.
+                    foreach ($candidateCodes as $code) {
+                        if (preg_match('/\b' . $quotedPrefix . '[-\s]?' . preg_quote($code, '/') . '\b/iu', $description) === 1) {
+                            $affected[] = $code;
+                        }
+                    }
+                }
+
+                // Bare (unprefixed) mentions - keep this conservative: skip short
+                // pure-digit codes ("1", "2"), too likely to coincidentally
+                // appear inside an unrelated control-code reference like "5.2)".
                 foreach ($candidateCodes as $code) {
+                    if (mb_strlen($code) < 2 && ctype_digit($code)) continue;
                     if (preg_match('/\b' . preg_quote($code, '/') . '\b/ui', $description) === 1) {
                         $affected[] = $code;
                     }
                 }
+
                 $affected = array_values(array_unique($affected));
                 usort($affected, fn (string $a, string $b) => $this->naturalEquipmentOrder($a) <=> $this->naturalEquipmentOrder($b));
             }

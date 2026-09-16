@@ -1,0 +1,14 @@
+report: {"report_no": "PK.239.00026.01", "company_name": "4A LOJ\u0130ST\u0130K H\u0130ZMETLER\u0130 L\u0130M\u0130TED \u015e\u0130RKET\u0130", "control_date": "2026-04-10", "next_control_date": "2027-04-10", "overall_result": "yukar\u0131da \u00f6zellikleri yaz\u0131l\u0131 yangin s\u00f6nd\u00fcrme tesi\u0307sati\u2019 n\u0131n, bilgi notu b\u00f6l\u00fcm\u00fcnde belirtilen maddeler ile ilgili mevzuat h\u00fck\u00fcmlerine uygun"}
+Belge ve Kayıt Kontrolleri equip=0
+Yangın Pompa Bölmesi (Projeye Uygunluk ve Çalışma) equip=4
+Su Deposu Kontrolü equip=0
+Yağmurlama Sistemi Kontrolü equip=0
+Yangın Dolapları ve Hortum Sistemlerinin Kontrolü equip=20
+Hidrant ve İtfaiye Bağlantısı Kontrolü equip=0
+finding-29 ['YD14', 'YD15']
+finding-30 ['YD1', 'YD2', 'YD3', 'YD4', 'YD14', 'YD15', 'YD16', 'YD17', 'YD18', 'YD19', 'YD20']
+finding-31 ['YD1', 'YD2', 'YD3', 'YD4']
+finding-32 ['YD19']
+finding-33 ['YD1', 'YD2', 'YD3', 'YD4', 'YD5', 'YD6', 'YD7', 'YD8', 'YD9', 'YD10', 'YD11', 'YD13', 'YD14', 'YD15', 'YD16', 'YD17', 'YD18', 'YD19', 'YD20']
+finding-34 ['YD1', 'YD2', 'YD3', 'YD4', 'YD5', 'YD6', 'YD7', 'YD8', 'YD9', 'YD10', 'YD11', 'YD12', 'YD13', 'YD14', 'YD15', 'YD16', 'YD17', 'YD18', 'YD20']
+finding-35 ['YD1', 'YD2', 'YD3', 'YD4', 'YD5', 'YD6', 'YD7', 'YD8', 'YD9', 'YD10', 'YD11', 'YD13', 'YD14', 'YD15', 'YD16', 'YD17', 'YD18', 'YD19', 'YD20']

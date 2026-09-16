@@ -1,0 +1,12 @@
+NETA report: {"report_no": "NT/24/3137-1/009", "company_name": "ARÇELİK A.Ş - ELEKTRONİK İŞLETMESİ BEYLİKDÜZÜ", "control_date": "2025-01-03", "next_control_date": "2026-01-03", "overall_result": null}
+OKCO control_items total: 55
+OKCO report: {"report_no": "PK.239.00026.01", "company_name": "4A LOJİSTİK HİZMETLERİ LİMİTED ŞİRKETİ", "control_date": "2026-04-10", "next_control_date": "2027-04-10", "overall_result": "yukarıda özellikleri yazılı yangin söndürme tesi̇sati’ nın, bilgi notu bölümünde belirtilen maddeler ile ilgili mevzuat hükümlerine uygun"}
+Belge ve Kayıt Kontrolleri equip=0
+Yangın Pompa Bölmesi (Projeye Uygunluk ve Çalışma) equip=4
+Su Deposu Kontrolü equip=0
+Yağmurlama Sistemi Kontrolü equip=0
+Yangın Dolapları ve Hortum Sistemlerinin Kontrolü equip=20
+Hidrant ve İtfaiye Bağlantısı Kontrolü equip=0
+NETA total control_items: 136
+Yangın Dolapları ve Hortum Sistemlerinin Kontrolü occ=279 uniq=127
+Hidrant Tesisatı Kontrolü occ=37 uniq=37

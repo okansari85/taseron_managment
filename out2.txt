@@ -1,0 +1,2 @@
+NETA report: {"report_no": "NT/24/3137-1/009", "company_name": "ARÇELÝK A.Þ - ELEKTRONÝK ÝÞLETMESÝ BEYLÝKDÜZÜ", "control_date": "2025-01-03", "next_control_date": "2026-01-03", "overall_result": "uygun deildir"}
+OKCO control_items total: 55 report: 4A LOJÝSTÝK HÝZMETLERÝ LÝMÝTED ÞÝRKETÝ

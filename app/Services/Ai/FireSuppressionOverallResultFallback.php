@@ -46,7 +46,17 @@ class FireSuppressionOverallResultFallback
         if ($result === [] && $this->pdftotextAvailable()) {
             $rawText = $this->readRawText($pdfPath);
             if ($rawText !== null) {
-                $lines = preg_split('/\r\n|\r|\n/u', $rawText) ?: [];
+                // A ligature glyph the PDF's own font doesn't map cleanly (the
+                // same issue seen elsewhere) can leave an invalid UTF-8 byte in
+                // pdftotext's output; preg_split's /u mode refuses to touch the
+                // WHOLE string if even one such byte is present, silently
+                // returning nothing. Sanitize first so one bad byte can't erase
+                // this entire fallback. Splitting on plain ASCII newlines never
+                // needs Unicode mode anyway.
+                if (!mb_check_encoding($rawText, 'UTF-8')) {
+                    $rawText = @iconv('UTF-8', 'UTF-8//IGNORE', $rawText) ?: $rawText;
+                }
+                $lines = preg_split('/\r\n|\r|\n/', $rawText) ?: [];
                 $lines = array_values(array_filter(array_map('trim', $lines), static fn (string $l): bool => $l !== ''));
                 $result = $this->scanLines($lines);
             }
@@ -77,7 +87,10 @@ class FireSuppressionOverallResultFallback
 
             $parts[] = $text;
 
-            if (preg_match('/UYGUN\s+DEĞİLDİR|UYGUN\s+DEGILDIR/iu', $text, $match) === 1) {
+            // The same dropped-character issue can strip "ğ"/"İ" from "DEĞİLDİR"
+            // (-> "DEILDIR" or similar) - match loosely rather than requiring the
+            // exact accented spelling.
+            if (preg_match('/UYGUN\s+DE.{0,2}LD.R/iu', $text, $match) === 1) {
                 $status = trim($match[0]);
             } elseif ($status === null && preg_match('/\bUYGUNDUR\b/iu', $text, $match) === 1) {
                 $status = trim($match[0]);
@@ -120,8 +133,11 @@ class FireSuppressionOverallResultFallback
 
     private function isStart(string $text): bool
     {
-        return preg_match('/(?:^|\s)\d+\.\s*SONUÇ\s*(?:VE\s*)?KANAAT/iu', $text) === 1
-            || preg_match('/SONUÇ\s*(?:VE\s*)?KANAAT/iu', $text) === 1;
+        // A ligature/encoding glitch can drop the "Ç" (or another single
+        // character) from "SONUÇ" entirely - tolerate one missing/altered
+        // character there instead of requiring an exact match.
+        return preg_match('/(?:^|\s)\d+\.\s*SONU.?\s*(?:VE\s*)?KANAAT/iu', $text) === 1
+            || preg_match('/SONU.?\s*(?:VE\s*)?KANAAT/iu', $text) === 1;
     }
 
     private function isEnd(string $text): bool

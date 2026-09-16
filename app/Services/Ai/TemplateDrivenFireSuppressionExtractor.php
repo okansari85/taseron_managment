@@ -897,7 +897,9 @@ private function findCriterionFromCells(
         // whole block silently comes back empty for reports that use the other one.
         $result = [];
         foreach ($tables as $table) {
-            foreach ($this->matrix($table) as $row) {
+            $rows = $this->matrix($table);
+            foreach ($rows as $rowIndex => $row) {
+                $this->applyColumnAlignedFields($result, $rows, $rowIndex, $fieldTemplates);
                 foreach ($fieldTemplates as $field) {
                     if (!is_array($field)) continue;
                     $key = $this->string($field['key'] ?? null);
@@ -923,10 +925,12 @@ private function findCriterionFromCells(
         // Same reasoning as extractReportInformation() - don't assume one table
         // flavor holds this section.
         foreach ($tables as $table) {
-            foreach ($this->matrix($table) as $row) {
+            $rows = $this->matrix($table);
+            foreach ($rows as $rowIndex => $row) {
                 $text = $this->rowText($row);
                 if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $sectionFound = true; continue; }
                 if (!$sectionFound) continue;
+                $this->applyColumnAlignedFields($result, $rows, $rowIndex, $fields);
                 foreach ($fields as $field) {
                     if (!is_array($field)) continue;
                     $key = $this->string($field['key'] ?? null);
@@ -941,6 +945,50 @@ private function findCriterionFromCells(
             }
         }
         return $result;
+    }
+
+    /**
+     * Some reports print report/facility fields as a header ROW (multiple field
+     * labels across columns) with the actual values in a SEPARATE row directly
+     * below at the same column positions - a spreadsheet-like shape, not the
+     * "label | value" pairs within one row that the caller's own scan handles.
+     * If this row matches 2+ of our own fields at once, treat it as that header
+     * and pull values from the next row by column position instead.
+     */
+    private function applyColumnAlignedFields(array &$result, array $rows, int $rowIndex, array $fieldTemplates): void
+    {
+        if (!isset($rows[$rowIndex + 1])) return;
+        $row = $rows[$rowIndex];
+
+        // A genuine header row (values live in the NEXT row, not this one) never
+        // itself contains an actual value - and report/facility fields always
+        // include at least one date (report_date/control_date/validity_date). If
+        // THIS row already has a date-looking cell, it's a normal "label | value"
+        // row with several pairs packed into one line (e.g. "Ünvanı | 4A
+        // LOJİSTİK... | Rapor Tarihi | 10.04.2026"), which the caller's own
+        // same-row scan already handles - don't reinterpret it as a header, or
+        // the next unrelated row's labels get grabbed as "values" instead.
+        foreach ($row as $cell) {
+            if (preg_match('/\b\d{1,2}[.\/]\d{1,2}[.\/]\d{2,4}\b/u', (string) $cell) === 1) return;
+        }
+
+        $headerMatches = [];
+        foreach ($fieldTemplates as $field) {
+            if (!is_array($field)) continue;
+            $key = $this->string($field['key'] ?? null);
+            $patterns = array_values(array_filter(array_map('strval', (array) ($field['label_patterns'] ?? []))));
+            if ($key === null || !$patterns || array_key_exists($key, $result)) continue;
+            $column = $this->findPatternColumn($row, $patterns, true);
+            if ($column !== null) $headerMatches[$column] = $key;
+        }
+
+        if (count($headerMatches) < 2) return;
+
+        $valueRow = $rows[$rowIndex + 1];
+        foreach ($headerMatches as $column => $key) {
+            $value = trim((string) ($valueRow[$column] ?? ''));
+            if ($value !== '' && $value !== '-') $result[$key] = $this->cleanValue($value);
+        }
     }
 
     /**
@@ -1020,7 +1068,17 @@ private function findCriterionFromCells(
             foreach ($row as $index => $value) {
                 $normalizedValue = $this->normalizeLabel((string) $value);
                 foreach ($patterns as $pattern) {
-                    if ($normalizedValue === $this->normalizeLabel((string) $pattern)) return (int) $index;
+                    $normalizedPattern = $this->normalizeLabel((string) $pattern);
+                    if ($normalizedValue === $normalizedPattern) return (int) $index;
+                    // The ligature artifact above can swallow trailing letters
+                    // rather than just a control character (e.g. "saati" ->
+                    // "saa"), so an exact match can legitimately come up one or
+                    // two characters short. Accept a close prefix match too,
+                    // rather than only a byte-for-byte equal string.
+                    if ($normalizedValue !== '' && $normalizedPattern !== ''
+                        && mb_strlen($normalizedPattern, 'UTF-8') - mb_strlen($normalizedValue, 'UTF-8') <= 2
+                        && str_starts_with($normalizedPattern, $normalizedValue)
+                    ) return (int) $index;
                 }
             }
         }
@@ -1060,6 +1118,16 @@ private function findCriterionFromCells(
 
     private function normalizeLabel(string $value): string
     {
+        // Some PDFs render a "ti"/"fi"-style ligature as a stray control
+        // character (observed as \x00) that swallows those letters entirely
+        // (e.g. "Saati" -> "Saa" + \x00) - strip it so it doesn't block an
+        // otherwise-exact label match.
+        $value = preg_replace('/[\x00-\x1F]/u', '', $value) ?? $value;
+        // A "label" passed in here is often actually a self-anchored regex
+        // pattern (e.g. "^Muayene Tarihi ve Saati$") rather than a plain string -
+        // strip the literal anchor characters so an exact/prefix comparison
+        // against real (unanchored) cell text isn't defeated by them.
+        $value = preg_replace('/^\^|\$$/u', '', trim($value)) ?? $value;
         $value = mb_strtolower(trim($value), 'UTF-8');
         return rtrim(preg_replace('/\s+/u', ' ', $value) ?? $value, ':');
     }
