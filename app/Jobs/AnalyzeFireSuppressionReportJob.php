@@ -7,6 +7,7 @@ use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
 use App\Services\Ai\CamelotCriterionNormalizer;
+use App\Services\Ai\FireSuppressionResultMerger;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\Ai\TemplateDiscoveryReportNormalizer;
@@ -41,6 +42,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
         CamelotCriterionNormalizer $criterionNormalizer,
+        FireSuppressionResultMerger $resultMerger,
         TemplateDiscoveryReportNormalizer $normalizer,
         TemplateDrivenFireSuppressionCriterionExtractor $reportExtractor,
         MatchingEngine $matchingEngine,
@@ -62,16 +64,17 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
             $semantic = $analyzer->analyze($pages);
 
-            // Gemini supplies the discovered code/result patterns.
-            // Camelot resolves concrete criteria from cell coordinates.
-            $semantic = $criterionNormalizer->normalize($semantic, $absolutePath);
-
-            // Tek extraction pipeline:
-            // Gemini semantic -> code/criterion metadata
-            // Camelot -> equipment/matrix/results
-            // Merger -> unified fire_systems.control_items
+            // IMPORTANT: existing extraction must receive the original Gemini template.
+            // Concrete Camelot criteria are resolved only after equipment/results extraction.
             $absoluteReportPath = $absolutePath;
             $extracted = $reportExtractor->extract($absoluteReportPath, $semantic);
+
+            // Resolve concrete criteria separately, then merge them onto the already
+            // extracted Camelot result. This prevents criterion discovery from changing
+            // the control template used by equipment extraction.
+            $semantic = $criterionNormalizer->normalize($semantic, $absolutePath);
+            $extracted = $resultMerger->merge($extracted, $semantic);
+
             $tables = $normalizer->normalize($extracted);
 
             $progress->stage($this->analysisId, 'ai_result', 'Template Discovery çıktısı hazır', null, [
