@@ -6,12 +6,9 @@ use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
-use App\Services\Ai\CamelotCriterionNormalizer;
-use App\Services\Ai\FireSuppressionResultMerger;
+use App\Services\Ai\FireSuppressionUnifiedNormalizer;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
-use App\Services\Ai\TemplateDiscoveryReportNormalizer;
-use App\Services\Ai\TemplateDrivenFireSuppressionCriterionExtractor;
 use App\Services\Matching\FireSuppressionMatchingProfile;
 use App\Services\Matching\MatchingEngine;
 use Illuminate\Bus\Queueable;
@@ -41,10 +38,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
-        CamelotCriterionNormalizer $criterionNormalizer,
-        FireSuppressionResultMerger $resultMerger,
-        TemplateDiscoveryReportNormalizer $normalizer,
-        TemplateDrivenFireSuppressionCriterionExtractor $reportExtractor,
+        FireSuppressionUnifiedNormalizer $normalizer,
         MatchingEngine $matchingEngine,
         FireSuppressionMatchingProfile $matchingProfile,
         FireSuppressionAnalysisProgress $progress,
@@ -64,24 +58,14 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
             $semantic = $analyzer->analyze($pages);
 
-            // IMPORTANT: existing extraction must receive the original Gemini template.
-            // Concrete Camelot criteria are resolved only after equipment/results extraction.
-            $absoluteReportPath = $absolutePath;
-            $extracted = $reportExtractor->extract($absoluteReportPath, $semantic);
-
-            // Resolve concrete criteria separately, then merge them onto the already
-            // extracted Camelot result. This prevents criterion discovery from changing
-            // the control template used by equipment extraction.
-            $semantic = $criterionNormalizer->normalize($semantic, $absolutePath);
-            $extracted = $resultMerger->merge($extracted, $semantic);
-
-            $tables = $normalizer->normalize($extracted);
+            $progress->stage($this->analysisId, 'tables', 'Gemini template + Camelot verileri birleştiriliyor');
+            $tables = $normalizer->normalize($absolutePath, $semantic);
 
             $progress->stage($this->analysisId, 'ai_result', 'Template Discovery çıktısı hazır', null, [
                 'ai_semantic' => $semantic,
             ]);
 
-            $progress->stage($this->analysisId, 'tables', 'Hedef JSON ekipman eşleştirmesine hazırlanıyor');
+            $progress->stage($this->analysisId, 'matching', 'Ekipman eşleştirmesine hazırlanıyor');
 
             $candidateIds = [];
             $matchedIds = [];
