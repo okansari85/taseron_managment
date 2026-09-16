@@ -430,7 +430,7 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         if ($value === '') return null;
 
         $extractPrefix = static function (string $text): ?string {
-            if (preg_match('/^\s*([A-Za-zÇĞİÖŞÜ]{0,8}[ -]?\d+(?:[.\-]\d+)*)\b/u', $text, $matches) === 1) {
+            if (preg_match('/^\s*([A-Za-zÇĞİÖŞÜ]{0,8}[ .\-]?\d+(?:[.\-]\d+)*)\b/u', $text, $matches) === 1) {
                 return trim($matches[1]);
             }
             return null;

@@ -60,11 +60,14 @@ Bunları hardcode etme. PDF'de ne varsa onu keşfet. Farklı kod, ekipman adı, 
 
 1. RAPOR GENEL BİLGİLERİ
 Sadece Camelot'un bulmasına yardımcı olacak label/alan patternlerini keşfet.
-Aşağıdaki dört alanı hedefle:
+Aşağıdaki alanları hedefle:
+- report_no (Rapor No, Rapor Numarası gibi bir label ile PDF'de gerçekten varsa)
 - company_title
 - address
 - report_date
+- control_date (Kontrol Tarihi, Muayene Tarihi gibi bir label ile PDF'de gerçekten varsa; report_date ile aynı alan değildir, karıştırma)
 - validity_date
+PDF'de bu alanlardan biri gerçekten yoksa uydurma, atla.
 Gerçek değerleri template'e yazma.
 PDF'de kullanılan gerçek kolon/alan başlıklarını label_patterns içine koy.
 
@@ -136,6 +139,8 @@ control_matrix.matrix_relationship ile ekipman/kontrol/sonuç ilişkisini açık
 control_matrix.camelot_extraction ile Camelot'un tabloyu nasıl okuyacağını tarif et.
 
 Matrix yoksa present=false yap ama yapıyı yine geçerli şekilde döndür.
+
+control_matrix.present=true yapmadan önce kontrol et: kesişim hücrelerindeki değerler, o sistemin control_items.result_patterns içinde tanımladığın AYNI sonuç kelimeleriyle (U/UD/N/G gibi) mi eşleşiyor? Eşleşmiyorsa (marka adı, ölçü, konum gibi ekipman özellik değerleriyse) bu bir control_matrix DEĞİLDİR — düz bir ekipman envanter/özellik tablosudur. Bu durumda equipment[].table_structure altında tarif et, control_matrix.present=false bırak.
 
 7. TEKİL EKİPMAN TABLOLARI
 Örneğin bir ekipman bölümünde sol tarafta "Soru / Kriter", sağ tarafta değerlerin bulunduğu iki kolonlu veya tekrarlanan bir tablo olabilir.
@@ -212,9 +217,11 @@ AI semantic'in gerçek veri kısmı yalnızca findings'tir.
     "template_version": "1.0",
     "report_information": {
       "fields": [
+        {"key": "report_no", "label_patterns": []},
         {"key": "company_title", "label_patterns": []},
         {"key": "address", "label_patterns": []},
         {"key": "report_date", "label_patterns": []},
+        {"key": "control_date", "label_patterns": []},
         {"key": "validity_date", "label_patterns": []}
       ]
     },

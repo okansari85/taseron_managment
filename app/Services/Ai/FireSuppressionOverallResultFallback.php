@@ -16,9 +16,7 @@ class FireSuppressionOverallResultFallback
     public function extract(string $pdfPath): array
     {
         $payload = $this->camelot->extract($pdfPath);
-        $parts = [];
-        $active = false;
-        $status = null;
+        $lines = [];
 
         foreach ((array) ($payload['tables'] ?? []) as $table) {
             if (!is_array($table)) {
@@ -34,27 +32,55 @@ class FireSuppressionOverallResultFallback
                     continue;
                 }
 
-                $text = trim(implode(' ', $row));
-                if ($this->isStart($text)) {
-                    $active = true;
-                    continue;
-                }
+                $lines[] = trim(implode(' ', $row));
+            }
+        }
 
-                if (!$active) {
-                    continue;
-                }
+        $result = $this->scanLines($lines);
 
-                if ($this->isEnd($text)) {
-                    break 2;
-                }
+        // Some reports print the conclusion as a free paragraph on its own page,
+        // never inside a Camelot-detected table at all (no ruled borders, no
+        // stream-detected column structure) - the table scan above then has
+        // nothing to find no matter how it's written. Fall back to the PDF's
+        // raw text layer (pdftotext) in that case, scanning it the same way.
+        if ($result === [] && $this->pdftotextAvailable()) {
+            $rawText = $this->readRawText($pdfPath);
+            if ($rawText !== null) {
+                $lines = preg_split('/\r\n|\r|\n/u', $rawText) ?: [];
+                $lines = array_values(array_filter(array_map('trim', $lines), static fn (string $l): bool => $l !== ''));
+                $result = $this->scanLines($lines);
+            }
+        }
 
-                $parts[] = $text;
+        return $result;
+    }
 
-                if (preg_match('/UYGUN\s+DEĞİLDİR|UYGUN\s+DEGILDIR/iu', $text, $match) === 1) {
-                    $status = trim($match[0]);
-                } elseif ($status === null && preg_match('/\bUYGUNDUR\b/iu', $text, $match) === 1) {
-                    $status = trim($match[0]);
-                }
+    private function scanLines(array $lines): array
+    {
+        $parts = [];
+        $active = false;
+        $status = null;
+
+        foreach ($lines as $text) {
+            if ($this->isStart($text)) {
+                $active = true;
+                continue;
+            }
+
+            if (!$active) {
+                continue;
+            }
+
+            if ($this->isEnd($text)) {
+                break;
+            }
+
+            $parts[] = $text;
+
+            if (preg_match('/UYGUN\s+DEĞİLDİR|UYGUN\s+DEGILDIR/iu', $text, $match) === 1) {
+                $status = trim($match[0]);
+            } elseif ($status === null && preg_match('/\bUYGUNDUR\b/iu', $text, $match) === 1) {
+                $status = trim($match[0]);
             }
         }
 
@@ -72,6 +98,24 @@ class FireSuppressionOverallResultFallback
         }
 
         return $result;
+    }
+
+    private function pdftotextAvailable(): bool
+    {
+        static $available = null;
+        if ($available === null) {
+            $which = @shell_exec('command -v pdftotext 2>/dev/null') ?: @shell_exec('where pdftotext 2>NUL');
+            $available = trim((string) $which) !== '';
+        }
+        return $available;
+    }
+
+    private function readRawText(string $pdfPath): ?string
+    {
+        $escaped = escapeshellarg($pdfPath);
+        $output = @shell_exec("pdftotext -layout {$escaped} - 2>NUL") ?: @shell_exec("pdftotext -layout {$escaped} - 2>/dev/null");
+        $output = is_string($output) ? trim($output) : '';
+        return $output === '' ? null : $output;
     }
 
     private function isStart(string $text): bool

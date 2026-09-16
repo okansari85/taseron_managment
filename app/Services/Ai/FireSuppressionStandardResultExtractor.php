@@ -199,11 +199,22 @@ class FireSuppressionStandardResultExtractor
                 continue;
             }
 
-            if ($this->normalizeCode($value) === $this->normalizeCode($pattern)) {
+            // normalizeCode() extracts the first "\d+\.\d+"-looking substring
+            // from whatever it's given - fine for a plain value like "5.24", but
+            // applied to a REGEX pattern like "^5\.2[4-5]$" it wrongly extracts
+            // "5.2" (the digits before the character class), making "5.2" look
+            // like an exact match for a pattern that actually means 24 or 25
+            // only. Only use this shortcut for a pattern with no regex syntax.
+            $isRegexPattern = preg_match('/[\^\$\[\]()|\\\\]/', $pattern) === 1;
+            if (!$isRegexPattern && $this->normalizeCode($value) === $this->normalizeCode($pattern)) {
                 return $value;
             }
 
-            $regex = '~(?:^|\s)(' . $pattern . ')(?=\s|$)~iu';
+            // Strip the pattern's own anchors before wrapping it - otherwise its
+            // own "$" blocks matching when the code shares a cell with trailing
+            // criterion text (e.g. "5.12 Dizel pompa UD").
+            $core = preg_replace('/^\^|\$$/u', '', $pattern) ?? $pattern;
+            $regex = '~(?:^|\s)(' . $core . ')(?=\s|$)~iu';
             if (@preg_match($regex, $value, $match) === 1) {
                 return $match[1];
             }

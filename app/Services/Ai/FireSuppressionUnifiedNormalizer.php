@@ -651,6 +651,11 @@ class FireSuppressionUnifiedNormalizer
             : $semantic;
 
         $report = is_array($data['report'] ?? null) ? $data['report'] : [];
+        // Report metadata (report_no, company, dates) is extracted by the base
+        // extractor under 'report_information' (real Camelot-driven field values),
+        // not 'report' - 'report' only ever carries overall_result (set by the
+        // merger). Read both so neither source is silently ignored.
+        $reportInfo = is_array($data['report_information'] ?? null) ? $data['report_information'] : [];
         $systems = is_array($data['systems'] ?? null)
             ? $data['systems']
             : (is_array($data['fire_systems'] ?? null) ? $data['fire_systems'] : []);
@@ -666,7 +671,7 @@ class FireSuppressionUnifiedNormalizer
             $name = $this->stringOrNull($system['name'] ?? $system['system_name'] ?? null);
             if ($name === null) continue;
 
-            $category = $this->normalizeCategory($system['category'] ?? null);
+            $category = $this->normalizeCategory($system['category'] ?? null, $name);
             $components = $this->normalizeComponents(
                 (array) ($system['components'] ?? $system['equipment'] ?? [])
             );
@@ -691,7 +696,7 @@ class FireSuppressionUnifiedNormalizer
             $controlCount += count($controls);
         }
 
-        $normalizedFindings = $this->normalizeFindings($findings);
+        $normalizedFindings = $this->normalizeFindings($findings, $normalizedSystems);
         $coveredCategories = array_values(array_unique(array_filter(array_map(
             static fn (array $system) => $system['category'] ?? null,
             $normalizedSystems
@@ -699,10 +704,10 @@ class FireSuppressionUnifiedNormalizer
 
         return [
             'report' => [
-                'report_no' => $this->stringOrNull($report['report_no'] ?? null),
-                'company_name' => $this->stringOrNull($report['company_name'] ?? null),
-                'control_date' => $this->dateOrNull($report['control_date'] ?? null),
-                'next_control_date' => $this->dateOrNull($report['next_control_date'] ?? null),
+                'report_no' => $this->stringOrNull($report['report_no'] ?? $reportInfo['report_no'] ?? null),
+                'company_name' => $this->stringOrNull($report['company_name'] ?? $reportInfo['company_title'] ?? null),
+                'control_date' => $this->dateOrNull($report['control_date'] ?? $reportInfo['control_date'] ?? null),
+                'next_control_date' => $this->dateOrNull($report['next_control_date'] ?? $reportInfo['validity_date'] ?? null),
                 'overall_result' => $this->normalizeResult(
                     $report['overall_result'] ?? ($data['overall_result'] ?? null)
                 ),
@@ -731,7 +736,6 @@ class FireSuppressionUnifiedNormalizer
     private function normalizeComponents(array $components): array
     {
         $out = [];
-        $seen = [];
 
         foreach ($components as $component) {
             if (!is_array($component)) continue;
@@ -740,10 +744,15 @@ class FireSuppressionUnifiedNormalizer
             $name = $this->stringOrNull($component['name'] ?? null);
             if ($code === null && $name === null) continue;
 
-            $key = mb_strtoupper(trim((string) ($code ?? $name)), 'UTF-8');
-            if ($key !== '' && isset($seen[$key])) continue;
-            if ($key !== '') $seen[$key] = true;
-
+            // Equipment codes are NOT a reliable identity by themselves - numbering
+            // legitimately restarts per building/location, and two genuinely
+            // different items can even end up with identical property text by
+            // coincidence (same brand, same measurement). Deduping here on
+            // code (or code+properties) risks silently merging distinct real
+            // occurrences. The extraction layer already scopes each occurrence to
+            // its own block/table position, so trust that and pass every
+            // occurrence through as its own record rather than re-deriving
+            // "sameness" from content here.
             $out[] = [
                 'code' => $code,
                 'name' => $name,
@@ -837,8 +846,38 @@ class FireSuppressionUnifiedNormalizer
         return $out;
     }
 
-    private function normalizeFindings(array $findings): array
+    private function naturalEquipmentOrder(string $code): array
     {
+        preg_match('/^(\D*)(\d*)(.*)$/u', $code, $m);
+        return [$m[1] ?? $code, isset($m[2]) && $m[2] !== '' ? (int) $m[2] : -1, $m[3] ?? ''];
+    }
+
+    private function normalizeFindings(array $findings, array $normalizedSystems = []): array
+    {
+        // Gemini deliberately never fills affected_equipment (the prompt tells it
+        // not to - equipment codes just stay inline in the description text). Find
+        // them here instead, by matching the description against the REAL equipment
+        // codes already extracted for that finding's own system - never a generic
+        // pattern - so this only ever reports a code we've actually confirmed
+        // exists, rather than guessing from arbitrary numbers in the text.
+        $codesBySystem = [];
+        foreach ($normalizedSystems as $system) {
+            if (!is_array($system)) continue;
+            $systemKey = $this->normalizeLabel((string) ($system['name'] ?? ''));
+            if ($systemKey === '') continue;
+            $codes = [];
+            foreach ((array) ($system['components'] ?? []) as $component) {
+                $code = trim((string) ($component['code'] ?? ''));
+                if ($code !== '') $codes[] = $code;
+            }
+            // Longest first, and skip short pure-digit codes ("1", "2") - too likely
+            // to coincidentally appear inside an unrelated control-code reference
+            // like "5.2)" in the same finding text.
+            $codes = array_values(array_filter($codes, static fn (string $c) => mb_strlen($c) >= 2 || !ctype_digit($c)));
+            usort($codes, static fn (string $a, string $b) => mb_strlen($b) <=> mb_strlen($a));
+            $codesBySystem[$systemKey] = $codes;
+        }
+
         $out = [];
 
         foreach ($findings as $index => $finding) {
@@ -847,14 +886,28 @@ class FireSuppressionUnifiedNormalizer
             $description = trim((string) ($finding['description'] ?? ''));
             if ($description === '') continue;
 
+            $systemName = $this->stringOrNull($finding['system_name'] ?? null);
+            $affected = array_values(array_unique(array_filter(array_map(
+                'strval',
+                (array) ($finding['affected_equipment'] ?? [])
+            ))));
+
+            if ($systemName !== null) {
+                $candidateCodes = $codesBySystem[$this->normalizeLabel($systemName)] ?? [];
+                foreach ($candidateCodes as $code) {
+                    if (preg_match('/\b' . preg_quote($code, '/') . '\b/ui', $description) === 1) {
+                        $affected[] = $code;
+                    }
+                }
+                $affected = array_values(array_unique($affected));
+                usort($affected, fn (string $a, string $b) => $this->naturalEquipmentOrder($a) <=> $this->naturalEquipmentOrder($b));
+            }
+
             $out[] = [
                 'id' => $this->stringOrNull($finding['id'] ?? null) ?? 'finding-' . ($index + 1),
-                'system_name' => $this->stringOrNull($finding['system_name'] ?? null),
+                'system_name' => $systemName,
                 'description' => $description,
-                'affected_equipment' => array_values(array_unique(array_filter(array_map(
-                    'strval',
-                    (array) ($finding['affected_equipment'] ?? [])
-                )))),
+                'affected_equipment' => $affected,
                 'source_pages' => $this->pages($finding['source_pages'] ?? []),
             ];
         }
@@ -889,7 +942,7 @@ class FireSuppressionUnifiedNormalizer
         )));
     }
 
-    private function normalizeCategory(mixed $category): string
+    private function normalizeCategory(mixed $category, ?string $systemName = null): string
     {
         $value = mb_strtolower(trim((string) $category), 'UTF-8');
         $allowed = [
@@ -904,7 +957,41 @@ class FireSuppressionUnifiedNormalizer
             'diger',
         ];
 
-        return in_array($value, $allowed, true) ? $value : 'diger';
+        if (in_array($value, $allowed, true)) return $value;
+
+        // No explicit category is ever set upstream - nothing in the extraction
+        // pipeline produces one. Derive it from the (real, Camelot-read) system
+        // name instead of always falling back to 'diger', using the standard
+        // Turkish fire-safety terminology rather than any one vendor's exact
+        // wording, so this holds across different companies' reports.
+        return $this->categoryFromSystemName($systemName ?? '');
+    }
+
+    private function categoryFromSystemName(string $systemName): string
+    {
+        $normalized = strtr(mb_strtolower(trim($systemName), 'UTF-8'), [
+            'ı' => 'i', 'ğ' => 'g', 'ü' => 'u', 'ş' => 's', 'ö' => 'o', 'ç' => 'c',
+        ]);
+        if ($normalized === '') return 'diger';
+
+        $keywordsByCategory = [
+            'yangin_dolabi' => ['dolab', 'dolap'],
+            'hidrant' => ['hidrant'],
+            'sprinkler' => ['yagmurlama', 'sprinkler'],
+            'su_alma_verme' => ['su alma', 'su verme'],
+            'yangin_pompasi' => ['pompa'],
+            'su_deposu' => ['su deposu', 'su tank'],
+            'sabit_boru_tesisati' => ['boru', 'kolektor'],
+            'gazli_sondurme' => ['gazli', 'gaz sondurme'],
+        ];
+
+        foreach ($keywordsByCategory as $category => $keywords) {
+            foreach ($keywords as $keyword) {
+                if (str_contains($normalized, $keyword)) return $category;
+            }
+        }
+
+        return 'diger';
     }
 
     private function normalizeCode(mixed $value): string

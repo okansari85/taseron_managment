@@ -74,9 +74,29 @@ class TemplateDrivenFireSuppressionExtractor
         array $currentSectionPatterns = [],
         array $allSystemSectionPatterns = []
     ): array {
-        $headerPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? []))));
-        $labelPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['left_column_patterns'] ?? $template['table_structure']['left_column']['label_patterns'] ?? []))));
+        // camelot_extraction.equipment_header_patterns is sometimes filled with the
+        // SECTION heading (e.g. "7.1. YANGIN DOLABI LİSTESİ") instead of the actual
+        // in-table column header that introduces the equipment codes (e.g. "Dolap
+        // No") - that never matches any table row, so no header row is ever found
+        // and every row gets silently skipped. equipment_identity.header_patterns is
+        // meant for exactly this and has proven reliable across different reports,
+        // so merge it in as a fallback/complement rather than trusting only one field.
+        $headerPatterns = array_values(array_unique(array_merge(
+            array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? [])))),
+            array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['header_patterns'] ?? [])))),
+        )));
+        // Same reliability gap as above: camelot_extraction.left_column_patterns can
+        // be an incomplete subset of table_structure.left_column.label_patterns (a
+        // real label missing from one but present in the other) - merge both rather
+        // than picking one via ?? and silently losing whichever labels only the
+        // other one has.
+        $labelPatterns = array_values(array_unique(array_merge(
+            array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['left_column_patterns'] ?? [])))),
+            array_values(array_filter(array_map('strval', (array) ($template['table_structure']['left_column']['label_patterns'] ?? []))))
+        )));
         if (!$headerPatterns || !$labelPatterns) return [];
+
+        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
 
         $controlCodePatterns = [];
         foreach ($controlTemplates as $control) {
@@ -90,6 +110,12 @@ class TemplateDrivenFireSuppressionExtractor
 
         $items = [];
         $currentHeader = [];
+        // Equipment numbering can legitimately restart at 1 in a new block (e.g.
+        // a new building/location section) - codes are NOT guaranteed unique
+        // across the whole document. Key items by (block, code) internally so a
+        // later block's "1" doesn't silently overwrite an earlier block's "1";
+        // the output 'code' field itself stays the plain, unprefixed value.
+        $blockIndex = 0;
         foreach ($tables as $table) {
             foreach ($this->matrix($table) as $row) {
                 if (!$row) continue;
@@ -111,20 +137,47 @@ class TemplateDrivenFireSuppressionExtractor
                 $headerColumn = $this->findPatternColumn($row, $headerPatterns);
                 if ($headerColumn !== null) {
                     $header = $this->headerFromRow($row, $headerColumn, $template);
-                    if ($header) $currentHeader = $header;
-                    continue;
+                    // A genuine repeating-block header always establishes several
+                    // equipment codes at once (5 typically, at least 2 for a
+                    // trailing partial block) - a header candidate with only ONE
+                    // matching column is too fragile to trust (e.g. a location cell
+                    // that happens to be nothing but "1", coincidentally short
+                    // enough to pass the word-count check above) and is more likely
+                    // a coincidence than a real header row.
+                    if (count($header) >= 2) { $currentHeader = $header; $blockIndex++; continue; }
+                    // A pattern meant to flag the header row can, in some reports,
+                    // ALSO legitimately label a genuine per-item data row (e.g.
+                    // "Bulunduğu Yer" both marks context and holds real location
+                    // text per item). If no equipment identity codes were actually
+                    // found here, this wasn't really a header row - fall through and
+                    // process it as data instead of silently discarding it.
                 }
+
                 if (!$currentHeader) continue;
 
                 $labelColumn = $this->findPatternColumn($row, $labelPatterns);
                 if ($labelColumn === null) continue;
+
+                // A row whose own data values ALL look like equipment identity
+                // codes themselves (e.g. a repeating "Soru / Kriter" sub-header
+                // whose "values" are a meaningless running row counter, not real
+                // per-item content) is a structural/duplicate artifact, not
+                // genuine data - skip it rather than recording those numbers as a
+                // bogus property. A real property (brand, location, a measurement)
+                // won't look like a set of equipment codes.
+                if ($this->rowLooksLikeIdentityCodes($row, $currentHeader, $labelColumn, $identityPatterns)) continue;
                 $label = $this->cleanValue((string) $row[$labelColumn]);
                 foreach ($currentHeader as $column => $codes) {
                     if ($column <= $labelColumn) continue;
                     $value = trim((string) ($row[$column] ?? ''));
                     if ($value === '' || $value === '-') continue;
+                    // A header cell can list the SAME code twice as two distinct
+                    // physical columns (a real data-entry duplicate in the source,
+                    // e.g. "...17 18 18 19..." - two separate dolaplar both marked
+                    // "18"). Key by column position too, not just block+code, so
+                    // two same-valued columns in the same block never collide.
                     foreach ($codes as $code) {
-                        $key = $this->itemKey($template, $code);
+                        $key = $this->itemKey($template, $blockIndex . '#' . $column . '#' . $code);
                         $items[$key]['code'] = $code;
                         $items[$key]['name'] = $this->string($template['equipment_name'] ?? null);
                         $items[$key]['system_name'] = $this->string($template['system_name'] ?? null);
@@ -175,15 +228,20 @@ class TemplateDrivenFireSuppressionExtractor
             // A table can coincidentally start with one of our labels (e.g. a
             // diesel-pump fuel-tank table also has "Marka" as its first row) without
             // actually being one of this equipment's blocks - require most of the
-            // declared labels to actually show up in the block before accepting it.
+            // declared LEFT (label) column patterns to actually show up in the
+            // block before accepting it. Deliberately checked against $leftLabels
+            // only, not the merged $valueLabels: the right column's patterns are
+            // often a bare wildcard (".*", matching any value cell by design), and
+            // counting against that would count every row as "matched" regardless
+            // of whether it's really this equipment's own label.
             $matchedLabels = 0;
             foreach ($rows as $row) {
                 for ($column = 0; $column + 1 < count($row); $column += 2) {
                     $label = $this->cleanValue((string) ($row[$column] ?? ''));
-                    if ($label !== '' && $this->matchesAny($label, $valueLabels)) $matchedLabels++;
+                    if ($label !== '' && $this->matchesAny($label, $leftLabels)) $matchedLabels++;
                 }
             }
-            if ($matchedLabels < max(2, (int) ceil(count($valueLabels) / 2))) continue;
+            if ($matchedLabels < max(2, (int) ceil(count($leftLabels) / 2))) continue;
 
             $blocks[] = ['table' => $table, 'rows' => $rows, 'y' => (float) ($table['bbox'][1] ?? 0)];
         }
@@ -207,7 +265,11 @@ class TemplateDrivenFireSuppressionExtractor
         $codes = [];
         foreach ($identityPatterns as $pattern) {
             if (preg_match('/(\d+)/u', $pattern, $match) === 1) { $codes[] = $match[1]; continue; }
-            $remaining = mb_strtoupper($pattern, 'UTF-8');
+            // Gemini may express the identity pattern as a self-anchored regex
+            // (e.g. "^Jokey$") rather than a literal phrase - strip the anchors
+            // before treating what's left as the code, or they leak into the
+            // final output verbatim.
+            $remaining = mb_strtoupper(preg_replace('/^\^|\$$/u', '', $pattern) ?? $pattern, 'UTF-8');
             foreach ($equipmentNameTokens as $token) {
                 $remaining = trim(preg_replace('/\b' . preg_quote($token, '/') . '\b/ui', '', $remaining) ?? $remaining);
             }
@@ -239,12 +301,34 @@ class TemplateDrivenFireSuppressionExtractor
         return $items;
     }
 
+    private function rowLooksLikeIdentityCodes(array $row, array $currentHeader, int $labelColumn, array $identityPatterns): bool
+    {
+        if (!$identityPatterns) return false;
+        $checked = 0;
+        foreach ($currentHeader as $column => $codes) {
+            if ($column <= $labelColumn) continue;
+            $value = trim((string) ($row[$column] ?? ''));
+            if ($value === '' || $value === '-') continue;
+            $checked++;
+            if (!$this->matchesAny($value, $identityPatterns)) return false;
+        }
+        return $checked > 0;
+    }
+
     private function headerFromRow(array $row, int $headerColumn, array $template): array
     {
         $header = [];
         $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
         foreach ($row as $column => $value) {
             if ((int) $column <= $headerColumn) continue;
+            // A genuine identity cell IS the code (maybe with a short prefix, e.g.
+            // "62-63-...-74" or "YD 5") - reject a cell that's really a multi-word
+            // sentence with a number merely embedded in it (e.g. "TV FABRİKA E 5
+            // GİRİŞ TARAFI", "SOLAR BİNA KAT 1" - a location mentioning a floor or
+            // door number). Otherwise property/location rows get mistaken for a
+            // fresh header row and wrongly reset the real one mid-block.
+            $wordCount = count(preg_split('/\s+/u', trim((string) $value)) ?: []);
+            if ($wordCount > 2) continue;
             $tokens = $this->expandEquipmentCodes((string) $value, $identityPatterns);
             if ($tokens) $header[(int) $column] = $tokens;
         }
@@ -339,16 +423,21 @@ private function extractControls(array $tables, array $controlTemplates): array
 
                     $result = null;
 
-                    foreach ($row as $resultIndex => $candidate) {
+                    // Scan forward from this code's own column only - a row can hold
+                    // more than one code/criterion/result group side by side (e.g.
+                    // "5.19 | Borular | U | 5.37 ... | | N"), and scanning the whole
+                    // row from index 0 would grab a NEIGHBORING code's result instead
+                    // of this one's. Stop as soon as another cell looks like a control
+                    // code itself - that means we've crossed into the next group
+                    // without finding this code's own result.
+                    for ($resultIndex = (int) $columnIndex + 1; $resultIndex < count($row); $resultIndex++) {
+                        $candidate = (string) ($row[$resultIndex] ?? '');
 
-                        if ((int) $resultIndex === (int) $columnIndex) {
-                            continue;
+                        if ($this->matchControlCode($candidate, $codePatterns) !== null) {
+                            break;
                         }
 
-                        $matched = $this->matchResultValue(
-                            (string) $candidate,
-                            $resultPatterns
-                        );
+                        $matched = $this->matchResultValue($candidate, $resultPatterns);
 
                         if ($matched !== null) {
                             $result = $matched;
@@ -726,6 +815,14 @@ private function findCriterionFromCells(
         if ($value === '') return null;
         $normalizedValue = $this->normalizeCode($value);
 
+        $extractPrefix = static function (string $text): ?string {
+            if (preg_match('/^\s*([A-Za-zÇĞİÖŞÜ]{0,8}[ .\-]?\d+(?:[.\-]\d+)*)\b/u', $text, $matches) === 1) {
+                return trim($matches[1]);
+            }
+            return null;
+        };
+        $valueCode = $extractPrefix($value);
+
         foreach ($patterns as $pattern) {
             $pattern = trim($pattern);
             if ($pattern === '') continue;
@@ -734,10 +831,23 @@ private function findCriterionFromCells(
 
             if ($normalizedPattern === $normalizedValue) return $value;
 
-            if (
-                (str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '['))
-                && @preg_match('~^(?:' . $pattern . ')[.:\)]?$~iu', $value) === 1
-            ) return rtrim($value, '.:)');
+            $isRegexPattern = str_contains($pattern, '^') || str_contains($pattern, '$') || str_contains($pattern, '\\') || str_contains($pattern, '[');
+            if (!$isRegexPattern) continue;
+
+            // Gemini's pattern may already be self-anchored (e.g. "^A\.[1-9]$").
+            // Strip its own ^/$ before wrapping it in ours below, otherwise the
+            // pattern's own "$" blocks matching anything after it - including our
+            // own optional trailing punctuation - even when the code itself matches.
+            $core = preg_replace('/^\^|\$$/u', '', $pattern) ?? $pattern;
+
+            // Code alone in its own cell (with optional trailing punctuation).
+            if (@preg_match('~^(?:' . $core . ')[.:\)]?$~iu', $value) === 1) return rtrim($value, '.:)');
+
+            // Code + criterion combined in one cell (e.g. "5.12 Dizel pompa") - the
+            // whole-cell check above fails since there is trailing criterion text
+            // after the code. Validate just the extracted leading code against the
+            // same declared pattern.
+            if ($valueCode !== null && $valueCode !== $value && @preg_match('~^(?:' . $core . ')$~iu', $valueCode) === 1) return $valueCode;
         }
 
         return null;
@@ -781,9 +891,12 @@ private function findCriterionFromCells(
 
     private function extractReportInformation(array $tables, array $fieldTemplates): array
     {
+        // Report header info (Rapor No, Ünvanı, ...) lives in a 'stream' table for
+        // some reports but in a ruled 'lattice' table for others (report-specific
+        // layout, not a rule) - scan both rather than assuming one flavor, or the
+        // whole block silently comes back empty for reports that use the other one.
         $result = [];
         foreach ($tables as $table) {
-            if (($table['flavor'] ?? '') !== 'stream') continue;
             foreach ($this->matrix($table) as $row) {
                 foreach ($fieldTemplates as $field) {
                     if (!is_array($field)) continue;
@@ -793,6 +906,7 @@ private function findCriterionFromCells(
                     $labelColumn = $this->findPatternColumn($row, $patterns, true);
                     if ($labelColumn === null) continue;
                     $value = $this->nextNonEmpty($row, $labelColumn + 1);
+                    if ($value === null) $value = $this->valueFromSameCell((string) ($row[$labelColumn] ?? ''), $patterns);
                     if ($value !== null) $result[$key] = $this->cleanValue($value);
                 }
             }
@@ -806,8 +920,9 @@ private function findCriterionFromCells(
         $sectionPatterns = array_values(array_filter(array_map('strval', (array) ($template['section_heading_patterns'] ?? []))));
         $fields = (array) ($template['fields'] ?? []);
         $sectionFound = !$sectionPatterns;
+        // Same reasoning as extractReportInformation() - don't assume one table
+        // flavor holds this section.
         foreach ($tables as $table) {
-            if (($table['flavor'] ?? '') !== 'stream') continue;
             foreach ($this->matrix($table) as $row) {
                 $text = $this->rowText($row);
                 if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $sectionFound = true; continue; }
@@ -820,11 +935,41 @@ private function findCriterionFromCells(
                     $labelColumn = $this->findPatternColumn($row, $patterns, true);
                     if ($labelColumn === null) continue;
                     $value = $this->nextNonEmpty($row, $labelColumn + 1);
+                    if ($value === null) $value = $this->valueFromSameCell((string) ($row[$labelColumn] ?? ''), $patterns);
                     if ($value !== null) $result[$key] = $this->cleanValue($value);
                 }
             }
         }
         return $result;
+    }
+
+    /**
+     * A label and its value can be printed in the same cell, e.g. "Rapor No:
+     * PK.239.00026.01" with nothing but blank cells after it - nextNonEmpty()
+     * never finds a value in a later column in that case. Strip the matched
+     * label pattern (with optional trailing punctuation) as a prefix instead.
+     */
+    private function valueFromSameCell(string $cellText, array $patterns): ?string
+    {
+        $cellText = trim($cellText);
+        if ($cellText === '') return null;
+
+        foreach ($patterns as $pattern) {
+            $pattern = trim($pattern);
+            if ($pattern === '') continue;
+
+            $remaining = preg_replace(
+                '/^\s*' . preg_quote($pattern, '/') . '\s*[:.\-]?\s*/iu',
+                '',
+                $cellText
+            );
+
+            if ($remaining !== null && $remaining !== '' && $remaining !== $cellText) {
+                return trim($remaining);
+            }
+        }
+
+        return null;
     }
 
     private function extractOverallResult(array $tables, array $template): array
