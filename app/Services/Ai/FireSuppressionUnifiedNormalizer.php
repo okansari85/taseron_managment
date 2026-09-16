@@ -19,6 +19,7 @@ class FireSuppressionUnifiedNormalizer
         private readonly FireSuppressionStandardResultExtractor $standardResultExtractor,
         private readonly FireSuppressionResultMerger $merger,
         private readonly FireSuppressionOverallResultFallback $overallFallback,
+        private readonly CamelotPdfTableExtractor $camelotExtractor,
     ) {
     }
 
@@ -26,7 +27,8 @@ class FireSuppressionUnifiedNormalizer
     {
         $this->validateGeminiTemplate($semantic);
 
-        // Keep the original Gemini template intact for the existing extraction chain.
+        // Existing extraction chain stays intact: Gemini template -> Camelot
+        // matrix/result extraction -> standard-result correction -> merger.
         $camelotResult = $this->matrixExtractor->extract($pdfPath, $semantic);
         $camelotResult = $this->standardResultExtractor->apply($pdfPath, $semantic, $camelotResult);
         $extracted = $this->merger->merge($camelotResult, $semantic);
@@ -40,7 +42,7 @@ class FireSuppressionUnifiedNormalizer
             }
         }
 
-        // Concrete criteria are resolved independently from Camelot geometry.
+        // Side-car geometry pass: only concrete criterion text is added.
         $criterionData = $this->extractConcreteCriteria($pdfPath, $semantic);
         $extracted = $this->applyConcreteCriteria($extracted, $criterionData);
 
@@ -57,9 +59,9 @@ class FireSuppressionUnifiedNormalizer
         $usableSystems = 0;
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
-
             $codes = [];
             $results = [];
+
             foreach ((array) ($system['control_items'] ?? []) as $control) {
                 if (!is_array($control)) continue;
                 $codes = array_merge($codes, (array) ($control['control_code_patterns'] ?? []));
@@ -70,9 +72,7 @@ class FireSuppressionUnifiedNormalizer
             $codes = array_merge($codes, (array) ($camelot['control_code_patterns'] ?? []));
             $results = array_merge($results, (array) ($camelot['result_cell_patterns'] ?? []));
 
-            if ($this->hasPatterns($codes) && $this->hasPatterns($results)) {
-                $usableSystems++;
-            }
+            if ($this->hasPatterns($codes) && $this->hasPatterns($results)) $usableSystems++;
         }
 
         if ($usableSystems === 0) {
@@ -82,23 +82,19 @@ class FireSuppressionUnifiedNormalizer
         }
     }
 
-    /**
-     * Camelot side-car extraction for concrete criterion text.
-     * It never mutates the original Gemini template used by the main merger.
-     */
+    /** Resolve concrete criterion text from Camelot cell geometry. */
     private function extractConcreteCriteria(string $pdfPath, array $semantic): array
     {
         $systems = (array) ($semantic['template']['fire_systems']['systems'] ?? []);
         if ($systems === []) return $semantic;
 
-        $camelot = (new CamelotPdfTableExtractor())->extract($pdfPath);
+        $camelot = $this->camelotExtractor->extract($pdfPath);
         $tables = array_values(array_filter(
             (array) ($camelot['tables'] ?? []),
             static fn ($table): bool => is_array($table)
                 && !empty($table['cells'])
                 && in_array(($table['flavor'] ?? ''), ['lattice', 'stream'], true)
         ));
-
         if ($tables === []) return $semantic;
 
         foreach ($systems as $systemIndex => $system) {
@@ -108,7 +104,6 @@ class FireSuppressionUnifiedNormalizer
                 $semantic['template']['fire_systems']['systems'][$systemIndex]['control_items'] = $controls;
             }
         }
-
         return $semantic;
     }
 
@@ -297,7 +292,6 @@ class FireSuppressionUnifiedNormalizer
                 return $valueCode ?? $pattern;
             }
         }
-
         return null;
     }
 
@@ -305,18 +299,13 @@ class FireSuppressionUnifiedNormalizer
     {
         $value = $this->clean($value);
         if ($value === null) return null;
-
         foreach ($patterns as $pattern) {
             $pattern = trim((string) $pattern);
             if ($pattern === '') continue;
-
-            // Result cells are normally atomic U / UD / N values. Prefer exact
-            // cell matches and only use regex when Gemini supplied one.
             if ($this->normalizeLabel($value) === $this->normalizeLabel($pattern)) return $value;
-            if (@preg_match($pattern, $value) === 1 && $this->isAtomicResult($value)) return $value;
-            if (@preg_match('~' . $pattern . '~iu', $value) === 1 && $this->isAtomicResult($value)) return $value;
+            if ($this->isAtomicResult($value) && @preg_match($pattern, $value) === 1) return $value;
+            if ($this->isAtomicResult($value) && @preg_match('~' . $pattern . '~iu', $value) === 1) return $value;
         }
-
         return null;
     }
 
@@ -334,23 +323,6 @@ class FireSuppressionUnifiedNormalizer
             trim($value)
         ) ?? $value);
         return $value !== '' ? $value : null;
-    }
-
-    private function patterns(mixed $patterns): array
-    {
-        return array_values(array_filter(array_map(
-            static fn ($value): string => trim((string) $value),
-            (array) $patterns
-        ), static fn (string $value): bool => $value !== ''));
-    }
-
-    private function clean(mixed $value): ?string
-    {
-        if ($value === null) return null;
-        $value = str_replace(["\r", "\n"], ' ', (string) $value);
-        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
-        $value = trim($value, " \t\n\r\0\x0B|:");
-        return $value === '' ? null : $value;
     }
 
     private function applyConcreteCriteria(array $extracted, array $criterionSemantic): array
@@ -384,7 +356,6 @@ class FireSuppressionUnifiedNormalizer
                     if (!is_array($control)) continue;
                     $code = $this->normalizeCode($control['code'] ?? null);
                     if ($code === '' || !isset($criteriaByCode[$code])) continue;
-
                     $criterion = $criteriaByCode[$code];
                     if (!empty($criterion['criterion'])) $control['criterion'] = $criterion['criterion'];
                     if (!empty($criterion['source_pages'])) $control['source_pages'] = $criterion['source_pages'];
@@ -393,7 +364,6 @@ class FireSuppressionUnifiedNormalizer
             }
         }
         unset($targetSystem);
-
         return $extracted;
     }
 
@@ -501,9 +471,6 @@ class FireSuppressionUnifiedNormalizer
             }
         }
 
-        // If there is no equipment-level matrix evidence, findings become the
-        // source of equipment non-compliance. Explicit affected_equipment wins;
-        // otherwise a finding mentioning a known equipment code is considered a match.
         if (!$matrixEvidence) {
             foreach ($findings as $finding) {
                 if (!is_array($finding)) continue;
@@ -514,14 +481,12 @@ class FireSuppressionUnifiedNormalizer
                     fn ($value) => $this->normalizeCode($value),
                     (array) ($finding['affected_equipment'] ?? [])
                 )));
+                $description = $this->normalizeCode($finding['description'] ?? '');
 
                 foreach ($byCode as $code => $index) {
-                    $matched = in_array($code, $affected, true);
-                    if (!$matched) {
-                        $description = $this->normalizeCode($finding['description'] ?? '');
-                        $matched = $description !== '' && str_contains($description, $code);
+                    if (in_array($code, $affected, true) || ($description !== '' && str_contains($description, $code))) {
+                        $components[$index]['compliance_status'] = 'uygun_degil';
                     }
-                    if ($matched) $components[$index]['compliance_status'] = 'uygun_degil';
                 }
             }
         }
@@ -533,7 +498,6 @@ class FireSuppressionUnifiedNormalizer
             'unknown' => 0,
             'source' => $matrixEvidence ? 'equipment_matrix' : 'findings',
         ];
-
         foreach ($components as $component) {
             $status = $component['compliance_status'] ?? 'unknown';
             if (isset($summary[$status])) $summary[$status]++;
@@ -551,7 +515,6 @@ class FireSuppressionUnifiedNormalizer
             $code = $this->stringOrNull($component['code'] ?? null);
             $name = $this->stringOrNull($component['name'] ?? null);
             if ($code === null && $name === null) continue;
-
             $key = mb_strtoupper(trim((string) ($code ?? $name)), 'UTF-8');
             if ($key !== '' && isset($seen[$key])) continue;
             if ($key !== '') $seen[$key] = true;
@@ -587,10 +550,11 @@ class FireSuppressionUnifiedNormalizer
             $equipment = trim((string) ($control['equipment'] ?? ''));
             if ($scope === 'system') $equipment = '';
 
+            $criterion = $this->stringOrNull($control['criterion'] ?? $control['description'] ?? null);
             $out[] = [
                 'code' => $code,
-                'description' => $this->stringOrNull($control['criterion'] ?? $control['description'] ?? null),
-                'criterion' => $this->stringOrNull($control['criterion'] ?? $control['description'] ?? null),
+                'description' => $criterion,
+                'criterion' => $criterion,
                 'scope' => $scope,
                 'equipment' => $equipment,
                 'results' => $this->normalizeResults((array) ($control['results'] ?? [])),
@@ -701,18 +665,20 @@ class FireSuppressionUnifiedNormalizer
         return false;
     }
 
-    private function stringOrNull(mixed $value): ?string
+    private function patterns(mixed $patterns): array
     {
-        if ($value === null) return null;
-        $value = trim((string) $value);
-        return $value === '' ? null : $value;
+        return array_values(array_filter(array_map(
+            static fn ($value): string => trim((string) $value),
+            (array) $patterns
+        ), static fn (string $value): bool => $value !== ''));
     }
 
-    private function dateOrNull(mixed $value): ?string
+    private function clean(mixed $value): ?string
     {
-        $value = $this->stringOrNull($value);
         if ($value === null) return null;
-        $timestamp = strtotime($value);
-        return $timestamp === false ? $value : date('Y-m-d', $timestamp);
+        $value = str_replace(["\r", "\n"], ' ', (string) $value);
+        $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
+        $value = trim($value, " \t\n\r\0\x0B|:");
+        return $value === '' ? null : $value;
     }
 }
