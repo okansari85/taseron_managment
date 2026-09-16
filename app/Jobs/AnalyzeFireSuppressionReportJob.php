@@ -29,10 +29,17 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
     public function __construct(
         private readonly string $analysisId,
-        private readonly string $storedFilePath,
-        private readonly string $originalFileName,
+        private readonly ?string $storedFilePath,
+        private readonly ?string $originalFileName,
         private readonly int $locationBusinessEntityId,
         private readonly int $tenantId,
+        // Test/geliştirme modu: dolu olduğunda Gemini'ye tekrar istek atmak
+        // yerine daha önce kaydedilmiş bir fixture'ın semantic çıktısı ve
+        // (fixture ile birlikte saklanan) PDF'i kullanılır - bkz.
+        // FireSuppressionReportController::analyze() "analyze_from_fixture".
+        // Token harcamadan Camelot/eşleştirme akışını tekrar tekrar test
+        // edebilmek için eklendi.
+        private readonly ?string $fixtureId = null,
     ) {}
 
     public function handle(
@@ -49,16 +56,32 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
         $branch = LocationBusinessEntity::query()->findOrFail($this->locationBusinessEntityId);
 
         try {
-            $absolutePath = Storage::disk('local')->path($this->storedFilePath);
-            $file = new UploadedFile($absolutePath, $this->originalFileName, null, null, true);
+            if ($this->fixtureId !== null) {
+                $fixturePath = "fire-suppression-gemini-fixtures/{$this->fixtureId}.json";
+                if (!Storage::disk('local')->exists($fixturePath)) {
+                    throw new \RuntimeException('Gemini fixture bulunamadı.');
+                }
+                $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+                $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$this->fixtureId}.pdf");
+                if (!Storage::disk('local')->exists($pdfPath)) {
+                    throw new \RuntimeException('Bu fixture için kayıtlı PDF bulunamadı.');
+                }
+                $absolutePath = Storage::disk('local')->path($pdfPath);
+                $semantic = (array) ($fixture['semantic'] ?? []);
 
-            $progress->stage($this->analysisId, 'extracting', 'PDF metni çıkarılıyor');
-            $pages = $extractor->extractPages($file);
+                $progress->stage($this->analysisId, 'ai', 'Kayıtlı Gemini fixture kullanılıyor (test modu, Gemini çağrılmadı)');
+            } else {
+                $absolutePath = Storage::disk('local')->path($this->storedFilePath);
+                $file = new UploadedFile($absolutePath, $this->originalFileName, null, null, true);
 
-            $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
-            $semantic = $analyzer->analyze($pages);
+                $progress->stage($this->analysisId, 'extracting', 'PDF metni çıkarılıyor');
+                $pages = $extractor->extractPages($file);
 
-            $progress->stage($this->analysisId, 'tables', 'Gemini template + Camelot verileri birleştiriliyor');
+                $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
+                $semantic = $analyzer->analyze($pages);
+            }
+
+            $progress->stage($this->analysisId, 'tables', 'Gemini şablonu + Camelot tablo verileri birleştiriliyor (bu adım biraz sürebilir)');
             $tables = $normalizer->normalize($absolutePath, $semantic);
 
             $progress->stage($this->analysisId, 'ai_result', 'Template Discovery çıktısı hazır', null, [
@@ -135,6 +158,9 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
     private function cleanup(): void
     {
+        if ($this->storedFilePath === null) {
+            return;
+        }
         try {
             Storage::disk('local')->delete($this->storedFilePath);
         } catch (Throwable) {

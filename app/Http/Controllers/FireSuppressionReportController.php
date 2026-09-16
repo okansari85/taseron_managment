@@ -112,6 +112,21 @@ class FireSuppressionReportController extends Controller
             return response()->json(['message' => 'Gemini fixture silindi.']);
         }
 
+        // Test/geliştirme modu: gerçek dosya yükleyip Gemini'ye tekrar tekrar
+        // istek atmak yerine, daha önce kaydedilmiş bir fixture'ın semantic
+        // çıktısı ve PDF'i kullanılarak aynı job/progress/eşleştirme akışı
+        // çalıştırılır - bkz. AnalyzeFireSuppressionReportJob $fixtureId.
+        if ($request->boolean('analyze_from_fixture')) {
+            $fixtureId = trim((string) $request->input('fixture_id'));
+            abort_unless($fixtureId !== '' && preg_match('/^[0-9a-f-]{36}$/i', $fixtureId), 422, 'Geçersiz fixture ID.');
+            abort_unless(Storage::disk('local')->exists("fire-suppression-gemini-fixtures/{$fixtureId}.json"), 404, 'Gemini fixture bulunamadı.');
+
+            $analysisId = (string) ($request->header('X-Analysis-Id') ?: Str::uuid());
+            $progress->start($analysisId, 0);
+            AnalyzeFireSuppressionReportJob::dispatch($analysisId, null, null, $locationBusinessEntity->id, $tenantContext->id(), $fixtureId);
+            return response()->json(['analysis_id' => $analysisId], 202);
+        }
+
         $analysisId = (string) ($request->header('X-Analysis-Id') ?: Str::uuid());
         $file = $request->file('file');
         $storedPath = $file->store('fire-suppression-analysis-tmp', 'local');
