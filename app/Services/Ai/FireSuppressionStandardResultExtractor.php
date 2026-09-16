@@ -18,7 +18,7 @@ class FireSuppressionStandardResultExtractor
         $systems = (array) ($semantic['template']['fire_systems']['systems'] ?? []);
         $resultSystems = (array) ($camelotResult['extracted_data']['fire_systems'] ?? []);
 
-        foreach ($systems as $systemIndex => $system) {
+        foreach ($systems as $system) {
             if (!is_array($system)) {
                 continue;
             }
@@ -103,12 +103,22 @@ class FireSuppressionStandardResultExtractor
                 $count = count($row);
 
                 for ($column = 0; $column < $count; $column++) {
-                    $code = $this->matchCode($row[$column], $patterns);
+                    $cellValue = $row[$column] ?? '';
+                    $code = $this->matchCode($cellValue, $patterns);
                     if ($code === null) {
                         continue;
                     }
 
-                    $result = $this->nearestResultToRight($row, $column);
+                    // Camelot can return a whole control as one merged cell,
+                    // e.g. "5.12 Dizel pompa UD". In that case the result is
+                    // in the same cell and must be bound to this code before
+                    // looking at cells to the right.
+                    $result = $this->resultForCodeInCell($cellValue, $code);
+
+                    if ($result === null) {
+                        $result = $this->nearestResultToRight($row, $column);
+                    }
+
                     if ($result === null) {
                         continue;
                     }
@@ -128,6 +138,36 @@ class FireSuppressionStandardResultExtractor
         }
 
         return array_values($out);
+    }
+
+    private function resultForCodeInCell(string $cell, string $code): ?string
+    {
+        $cell = trim($cell);
+        if ($cell === '') {
+            return null;
+        }
+
+        $normalizedCode = preg_quote($this->normalizeCode($code), '/');
+
+        // Stop before the next numbered control if two controls share a cell.
+        $pattern = '/(?:^|\s)' . $normalizedCode . '(?=\s|$)(.*?)(?=\s+\d+\.\d+\b|$)/isu';
+        if (preg_match($pattern, $cell, $match) !== 1) {
+            return null;
+        }
+
+        $segment = trim((string) ($match[1] ?? ''));
+        if ($segment === '') {
+            return null;
+        }
+
+        // Only accept an exact U/UD/N token. This prevents criterion text
+        // containing arbitrary letters from becoming a result.
+        if (preg_match_all('/(?<![A-Za-zÇĞİÖŞÜçğıöşü])(UD|U|N)(?![A-Za-zÇĞİÖŞÜçğıöşü])/iu', $segment, $matches) > 0) {
+            $last = end($matches[1]);
+            return mb_strtoupper((string) $last, 'UTF-8');
+        }
+
+        return null;
     }
 
     private function nearestResultToRight(array $row, int $column): ?string
@@ -163,12 +203,9 @@ class FireSuppressionStandardResultExtractor
                 return $value;
             }
 
-            $regex = '~^(?:' . $pattern . ')$~iu';
-            if (@preg_match($regex, $value) === 1) {
-                if (preg_match('/\b5\.\d+\b/u', $value, $match) === 1) {
-                    return $match[0];
-                }
-                return $value;
+            $regex = '~(?:^|\s)(' . $pattern . ')(?=\s|$)~iu';
+            if (@preg_match($regex, $value, $match) === 1) {
+                return $match[1];
             }
         }
 
