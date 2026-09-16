@@ -1023,7 +1023,19 @@ private function findCriterionFromCells(
     private function extractOverallResult(array $tables, array $template): array
     {
         $sectionPatterns = array_values(array_filter(array_map('strval', (array) ($template['section_heading_patterns'] ?? $template['camelot_extraction']['section_patterns'] ?? []))));
-        $textPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['text_patterns'] ?? $template['overall_text']['text_boundary_patterns'] ?? []))));
+        // These two pattern lists serve different purposes and must stay separate:
+        // - boundaryPatterns mark where the conclusion text ENDS (the next section's
+        //   heading/label, e.g. "9. ONAY").
+        // - extractionPatterns identify the status SENTENCE itself (e.g. ".*UYGUN
+        //   DEĞİLDİR.*"), used only after collecting all candidate rows, to trim the
+        //   collected text down to the relevant portion.
+        // Previously both were read into one variable, with extractionPatterns taking
+        // priority via ??. Since extractionPatterns matches the row that contains the
+        // real status text, that row was mistaken for the START of the next section
+        // and the scan broke before ever appending it - silently truncating the
+        // collected text to whatever came just before the actual conclusion.
+        $boundaryPatterns = array_values(array_filter(array_map('strval', (array) ($template['overall_text']['text_boundary_patterns'] ?? []))));
+        $extractionPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['text_patterns'] ?? []))));
         $statusPatterns = array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['status_patterns'] ?? $template['overall_status']['status_patterns'] ?? []))));
         $active = !$sectionPatterns;
         $textParts = [];
@@ -1034,15 +1046,15 @@ private function findCriterionFromCells(
                 $text = $this->rowText($row);
                 if ($sectionPatterns && $this->matchesAny($text, $sectionPatterns)) { $active = true; continue; }
                 if (!$active) continue;
-                if ($this->isOverallEndBoundary($text, $textPatterns)) break 2;
+                if ($this->isOverallEndBoundary($text, $boundaryPatterns)) break 2;
                 if ($text !== '') $textParts[] = $text;
                 $matchedStatus = $this->matchResultValue($text, $statusPatterns);
                 if ($matchedStatus !== null) $status = $matchedStatus;
             }
         }
         $fullText = trim(implode(' ', $textParts));
-        if ($textPatterns) {
-            foreach ($textPatterns as $pattern) {
+        if ($extractionPatterns) {
+            foreach ($extractionPatterns as $pattern) {
                 $match = @preg_match('~' . $pattern . '~iu', $fullText, $m);
                 if ($match === 1 && !empty($m[0])) { $fullText = trim($m[0]); break; }
             }

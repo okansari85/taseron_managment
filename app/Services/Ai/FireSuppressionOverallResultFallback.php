@@ -89,11 +89,12 @@ class FireSuppressionOverallResultFallback
 
             // The same dropped-character issue can strip "ğ"/"İ" from "DEĞİLDİR"
             // (-> "DEILDIR" or similar) - match loosely rather than requiring the
-            // exact accented spelling.
-            if (preg_match('/UYGUN\s+DE.{0,2}LD.R/iu', $text, $match) === 1) {
-                $status = trim($match[0]);
-            } elseif ($status === null && preg_match('/\bUYGUNDUR\b/iu', $text, $match) === 1) {
-                $status = trim($match[0]);
+            // exact accented spelling, and record the correct spelling as the
+            // status (not whatever mangled fragment was actually matched).
+            if (preg_match('/UYGUN\s+DE.{0,2}LD.R/iu', $text) === 1) {
+                $status = 'Uygun Değildir';
+            } elseif ($status === null && preg_match('/\bUYGUNDUR\b/iu', $text) === 1) {
+                $status = 'Uygundur';
             }
         }
 

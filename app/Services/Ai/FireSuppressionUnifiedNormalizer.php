@@ -44,11 +44,17 @@ class FireSuppressionUnifiedNormalizer
         $camelotResult = $this->standardResultExtractor->apply($pdfPath, $semantic, $camelotResult);
         $extracted = $this->merger->merge($camelotResult, $semantic);
 
-        // Overall result mevcut extraction'da yoksa yalnızca son çare olarak PDF'den al.
+        // Overall result mevcut extraction'da yoksa YA DA net bir uygun/değil
+        // durumu içermiyorsa (tablo parçalanması yüzünden cümle "8. SONUÇ VE
+        // KANAAT" dışındaki başka bir bölümden - örn. genel NOTLAR metninden -
+        // yanlışlıkla alınmış ve asıl karar cümlesine hiç ulaşmamış olabilir),
+        // son çare olarak PDF'in ham metninden (pdftotext) al - o zaten güvenilir
+        // çalışıyor.
         $overall = $extracted['extracted_data']['overall_result'] ?? null;
-        if ($overall === null || $overall === [] || $overall === '') {
+        $hasStatus = is_array($overall) && trim((string) ($overall['status'] ?? '')) !== '';
+        if ($overall === null || $overall === [] || $overall === '' || !$hasStatus) {
             $fallback = $this->overallFallback->extract($pdfPath);
-            if ($fallback !== []) {
+            if ($fallback !== [] && trim((string) ($fallback['status'] ?? '')) !== '') {
                 $extracted['extracted_data']['overall_result'] = $fallback;
                 $extracted['extracted_data']['report']['overall_result'] = $fallback;
             }
@@ -1093,10 +1099,16 @@ class FireSuppressionUnifiedNormalizer
         $value = mb_strtolower(trim((string) $value), 'UTF-8');
         if ($value === '') return null;
 
-        if (in_array($value, ['uygun', 'u', 'ok'], true)) return 'uygun';
+        if (in_array($value, ['uygun', 'u', 'ok', 'uygundur'], true)) return 'uygun';
         if (in_array($value, ['uygun_degil', 'uygun değil', 'ud', 'uygunsuz'], true)) {
             return 'uygun_degil';
         }
+        // A longer status sentence ("... kullanımı uygun değildir.") or one
+        // missing a diacritic from the same encoding glitch seen elsewhere
+        // ("uygun deildir") - match "değil"/"degil" appearing at all, since
+        // Turkish only ever uses that word for the negative status.
+        if (preg_match('/uygun\s+de.{0,2}ld/u', $value) === 1) return 'uygun_degil';
+        if (preg_match('/\buygun\w*\b/u', $value) === 1) return 'uygun';
 
         return $value;
     }
