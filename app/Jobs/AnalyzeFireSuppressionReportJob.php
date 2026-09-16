@@ -6,7 +6,7 @@ use App\Models\FireSuppressionInventoryItem;
 use App\Models\LocationBusinessEntity;
 use App\Models\Tenant;
 use App\Services\Ai\FireSuppressionAnalysisProgress;
-use App\Services\Ai\GeminiCriterionNormalizer;
+use App\Services\Ai\CamelotCriterionNormalizer;
 use App\Services\Ai\PdfTextExtractor;
 use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\Ai\TemplateDiscoveryReportNormalizer;
@@ -40,7 +40,7 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
     public function handle(
         PdfTextExtractor $extractor,
         TemplateDiscoveryFireSuppressionAnalyzer $analyzer,
-        GeminiCriterionNormalizer $criterionNormalizer,
+        CamelotCriterionNormalizer $criterionNormalizer,
         TemplateDiscoveryReportNormalizer $normalizer,
         TemplateDrivenFireSuppressionCriterionExtractor $reportExtractor,
         MatchingEngine $matchingEngine,
@@ -62,9 +62,9 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId, 'ai', 'Template Discovery ile rapor yapısı analiz ediliyor');
             $semantic = $analyzer->analyze($pages);
 
-            // Only Gemini criterion metadata is normalized here.
-            // The existing Camelot/extraction/merge pipeline remains unchanged.
-            $semantic = $criterionNormalizer->normalize($semantic);
+            // Gemini supplies the discovered code/result patterns.
+            // Camelot resolves concrete criteria from cell coordinates.
+            $semantic = $criterionNormalizer->normalize($semantic, $absolutePath);
 
             // Tek extraction pipeline:
             // Gemini semantic -> code/criterion metadata
