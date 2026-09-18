@@ -21,6 +21,7 @@ class FireSuppressionInventoryItem extends Model
         'sabit_boru',
         'su_alma_verme',
         'gazli_sondurme',
+        'yangin_algilama',
         'diger',
     ];
 

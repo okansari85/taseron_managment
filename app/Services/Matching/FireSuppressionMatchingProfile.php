@@ -24,6 +24,7 @@ class FireSuppressionMatchingProfile implements MatchingProfileInterface
         'su_alma_verme' => ['brand', 'model', 'location_note'],
         'sprinkler' => ['brand', 'model', 'location_note'],
         'su_deposu' => ['brand', 'model', 'location_note'],
+        'yangin_algilama' => ['brand', 'model', 'serial_no', 'location_note'],
         'diger' => ['brand', 'model', 'location_note'],
     ];
 

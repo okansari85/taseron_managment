@@ -216,7 +216,14 @@ class FireSuppressionStandardResultExtractor
             $core = preg_replace('/^\^|\$$/u', '', $pattern) ?? $pattern;
             $regex = '~(?:^|\s)(' . $core . ')(?=\s|$)~iu';
             if (@preg_match($regex, $value, $match) === 1) {
-                return $match[1];
+                // The pattern itself may include the cell's own trailing
+                // punctuation (e.g. "^A\.1\.$" matching "A.1."), so the
+                // capture can carry a trailing dot that the code's other
+                // representations (from the matrix-stage extraction) don't -
+                // strip it so this class's own code value, not just its
+                // normalizeCode() key, stays consistent with the rest of the
+                // pipeline instead of producing a second, dot-suffixed code.
+                return rtrim($match[1], '.');
             }
         }
 
@@ -243,7 +250,13 @@ class FireSuppressionStandardResultExtractor
         if (preg_match('/\b(\d+\.\d+)\b/u', $value, $match) === 1) {
             return $match[1];
         }
-        return $value;
+        // The digit.digit shortcut above only covers pure numeric codes
+        // (e.g. "5.24"). A letter-prefixed code (e.g. "A.1") falls through
+        // to here - without stripping its own trailing dot and case, this
+        // class's key for the same code no longer matches the already-clean
+        // code the matrix-stage extraction produced, and the two survive as
+        // separate, duplicated control_items entries downstream.
+        return mb_strtoupper(rtrim($value, '.'), 'UTF-8');
     }
 
     private function normalizeLabel(string $value): string

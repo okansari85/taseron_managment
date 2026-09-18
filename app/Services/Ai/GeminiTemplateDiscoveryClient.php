@@ -476,9 +476,37 @@ class GeminiTemplateDiscoveryClient
                                     'code' => $nullableString,
                                     'properties' => ['type' => 'array', 'items' => $extractedField],
                                     'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                                    // This equipment's OWN inspection checklist,
+                                    // when the report's control list is clearly
+                                    // an assessment of THIS one machine (e.g. a
+                                    // single-equipment report like a forklift/
+                                    // transpalet - "KONTROL KRİTERLERİ VE
+                                    // TESTLER" IS that machine's inspection, not
+                                    // a separate facility checklist). Read the
+                                    // REAL per-item results directly here rather
+                                    // than leaving Camelot to pattern-match a
+                                    // plain checklist it has no equipment to
+                                    // link to. Leave empty ([]) when this
+                                    // equipment has no such list of its own (the
+                                    // common dolap/hidrant case - those still go
+                                    // through table_shape/control_matrix, NEVER
+                                    // here, since they can run into the
+                                    // hundreds).
+                                    'control_items' => [
+                                        'type' => 'array',
+                                        'items' => [
+                                            'type' => 'object',
+                                            'properties' => [
+                                                'code' => ['type' => 'string'],
+                                                'criterion' => $nullableString,
+                                                'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                                            ],
+                                            'required' => ['code', 'criterion', 'result'],
+                                        ],
+                                    ],
                                     'source_pages' => $integerArray,
                                 ],
-                                'required' => ['system_name', 'equipment_name', 'code', 'properties', 'result', 'source_pages'],
+                                'required' => ['system_name', 'equipment_name', 'code', 'properties', 'result', 'control_items', 'source_pages'],
                             ],
                         ],
                     ],

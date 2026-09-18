@@ -39,6 +39,23 @@ class TemplateDrivenFireSuppressionExtractor
                 if ($propertyKey === null || $propertyValue === null) continue;
                 $properties[$propertyKey] = $this->cleanValue($propertyValue);
             }
+            // This equipment's OWN inspection checklist, when Gemini read one
+            // directly (a single-equipment report, e.g. a forklift/transpalet -
+            // the whole "KONTROL KRİTERLERİ" list IS this one machine's
+            // inspection). Empty for the common case (dolap/pompa etc, which
+            // has at most one aggregate 'result', not a per-criterion list).
+            $directControlItems = [];
+            foreach ((array) ($directItem['control_items'] ?? []) as $controlEntry) {
+                if (!is_array($controlEntry)) continue;
+                $controlCode = $this->string($controlEntry['code'] ?? null);
+                if ($controlCode === null) continue;
+                $directControlItems[] = [
+                    'code' => $controlCode,
+                    'criterion' => $this->string($controlEntry['criterion'] ?? null),
+                    'result' => $this->string($controlEntry['result'] ?? null),
+                ];
+            }
+
             $directEquipmentBySystem[$directSystemName][] = [
                 'code' => $this->string($directItem['code'] ?? null),
                 'name' => $this->string($directItem['equipment_name'] ?? null),
@@ -46,6 +63,7 @@ class TemplateDrivenFireSuppressionExtractor
                 'properties' => $properties,
                 'result' => $this->string($directItem['result'] ?? null),
                 'note' => null,
+                'direct_control_items' => $directControlItems,
                 'source_pages' => array_values(array_unique(array_filter(array_map('intval', (array) ($directItem['source_pages'] ?? []))))),
             ];
         }
@@ -100,8 +118,52 @@ class TemplateDrivenFireSuppressionExtractor
             // (undercounting control_items). Suffix only on an actual repeat
             // so the common, non-duplicated case keeps the clean 'EQP-<code>'.
             $codeOccurrences = [];
-            foreach ($equipment as $item) {
+            foreach ($equipment as &$item) {
                 $code = $item['code'] ?? null;
+                // Direct-read equipment (extracted_data.equipment) can carry
+                // its OWN full per-criterion checklist (e.g. a single-
+                // equipment report's real inspection list) - synthesize ONE
+                // equipment-scoped control_item per criterion instead of the
+                // single-aggregate-result fallback below, so each criterion
+                // keeps its own code/text/result rather than collapsing into
+                // one overall mark.
+                $directControlItems = $item['direct_control_items'] ?? [];
+                unset($item['direct_control_items']);
+                if ($code !== null && $directControlItems) {
+                    foreach ($directControlItems as $controlEntry) {
+                        $controlCode = 'EQP-' . $code . '-' . $controlEntry['code'];
+                        $occurrence = $codeOccurrences[$controlCode] ?? 0;
+                        $codeOccurrences[$controlCode] = $occurrence + 1;
+                        if ($occurrence > 0) $controlCode .= '#' . ($occurrence + 1);
+
+                        $controlItems[] = [
+                            'code' => $controlCode,
+                            'criterion' => $controlEntry['criterion'],
+                            'scope' => 'equipment',
+                            'equipment' => $code,
+                            'result' => $controlEntry['result'],
+                            'source_pages' => $item['source_pages'] ?? [],
+                        ];
+                    }
+                    continue;
+                }
+
+                // extractRowBasedEquipment() carries each row's OWN result (a
+                // per-equipment aggregate judgment, e.g. one dolap = one U/U.D./
+                // N.U. mark) rather than a separate per-criterion control_items
+                // section - synthesize one equipment-scoped control_item per such
+                // result so it flows through the SAME compliance pipeline as
+                // every other equipment (buildEquipmentEntry() matches on
+                // scope=equipment + equipment=code) instead of a parallel path.
+                //
+                // A source report can (data-entry mistake) reuse the same
+                // identity code for two different pieces of equipment (e.g. the
+                // same "Tüp No" printed on two different extinguisher rows) -
+                // a plain 'EQP-<code>' control code would then collide and
+                // FireSuppressionUnifiedNormalizer::normalizeControls() dedupes
+                // by code, silently DROPPING the second occurrence entirely
+                // (undercounting control_items). Suffix only on an actual repeat
+                // so the common, non-duplicated case keeps the clean 'EQP-<code>'.
                 $result = $item['result'] ?? null;
                 if ($code === null || $result === null) continue;
 
@@ -118,6 +180,7 @@ class TemplateDrivenFireSuppressionExtractor
                     'source_pages' => $item['source_pages'] ?? [],
                 ];
             }
+            unset($item);
 
             $extractedSystems[] = [
                 'system_name' => $systemName,

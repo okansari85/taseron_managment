@@ -14,7 +14,7 @@ return new class extends Migration
             $table->foreignId('location_business_entity_id')
                 ->constrained('location_business_entities', 'id', 'fsi_items_lbe_foreign')
                 ->cascadeOnDelete();
-            // yangin_dolabi | sprinkler | hidrant | yangin_pompasi | su_deposu | gazli_sondurme | diger
+            // yangin_dolabi | sprinkler | hidrant | yangin_pompasi | su_deposu | gazli_sondurme | yangin_algilama | diger
             $table->string('category');
             $table->string('code')->nullable();
             $table->string('location_note')->nullable();

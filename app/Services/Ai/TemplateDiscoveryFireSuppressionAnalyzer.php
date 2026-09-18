@@ -104,6 +104,8 @@ Her sistemin altında o sisteme ait kontrol maddelerinin patternlerini keşfet.
 Kontrol kodlarını örneklerden üretme.
 Sonuç aliaslarını da varsayma.
 
+İSTİSNA — TEK EKİPMANLI RAPORLAR: Eğer rapor TEK bir ekipmanı konu alıyorsa (örn. bir forklift/transpalet raporunda "KONTROL KRİTERLERİ VE TESTLER" listesi ayrı bir tesis checklist'i değil, doğrudan o TEK makinenin muayenesidir), bu maddeleri BURADA (template.control_items) pattern olarak tarif ETME — bunun yerine bölüm 5'teki extracted_data.equipment[].control_items ile GERÇEK değerleri SEN oku (kod, kriter metni, sonuç). Az sayıda madde için ucuzdur ve Camelot'un bağlayacağı bir ekipmanı olmayan "asılı" bir checklist üretmekten çok daha güvenilirdir.
+
 Kontrol kodu pattern'i birden fazla basamağı kapsayan bir sayı aralığını (örn. 38-52) tek regex ile ifade edecekse DİKKAT: onlar basamağını sabitleyip birler basamağına aralık verme — örn. [4-5][0-2] YANLIŞTIR, sadece 40,41,42,50,51,52'yi eşler, 43-49'u tamamen KAÇIRIR. Onluk sınırı aşan aralıkları basamak gruplarına böl: 38-52 için doğrusu ^5\.(?:3[8-9]|4[0-9]|5[0-2])$ (38-39 | 40-49 | 50-52) şeklindedir.
 Yazdığın control_code_patterns'ın gerçekte eşleştirdiği kod sayısı, aynı control_items içindeki control_text_patterns listesinin eleman sayısıyla eşit olmalıdır — kendi yazdığın pattern'i bu şekilde kontrol et, eşleşmiyorsa düzelt.
 
@@ -113,7 +115,8 @@ Her ekipmanın hangi sisteme ait olduğunu açıkça system_name alanında belir
 ÖNCE KARAR VER: bu ekipman grubu SINIRLI SAYIDA mı (rahatça sayabildiğin, tek haneli - iki haneli başında birkaç örnek, örn. bir pompa dairesindeki 2-4 pompa) yoksa SINIRSIZ/ÇOK OLABİLİR mi (dolap, hidrant, sprinkler başlığı gibi - 5 de olabilir 300 de, sayfalarca sürebilir)?
 
 - SINIRSIZ/ÇOK OLABİLİR → gerçek değerleri extracted_data'ya YAZMA. Sadece template.equipment[].table_shape ile YAPIYI tarif et (aşağıdaki 5b), Camelot gerçek verileri okuyacak. Bu, rapor uzunluğundan bağımsız SABİT boyutlu bir çıktı sağlar.
-- SINIRLI SAYIDA (özellikle tablo düzeni tuhafsa - örn. "Proje Değeri / Uygulama Değeri" gibi ikiye bölünmüş sütunlar, birleştirilmiş hücreler, sabit bir kolon-rol şemasıyla genelleştirmesi zor bir yapı) → bu durumda GERÇEK değerleri SEN oku ve extracted_data.equipment içine yaz (her örnek için: system_name, equipment_name, code, properties: [{key,value},...], result, source_pages). Bu az sayıda öğe için ucuzdur ve senin okuma yeteneğin (örn. "Proje Değeri" sütununu görmezden gel, sadece "Uygulama Değeri"ni al) hiçbir sabit kod şemasının yakalayamayacağı bir esneklik sağlar. Bu durumda o ekipman için table_shape'i boş/ilgisiz bırakabilirsin (yine de required alan olduğu için instance_axis'i uygun bir değerle, columns[] boş dizi olarak doldur).
+- SINIRLI SAYIDA (özellikle tablo düzeni tuhafsa - örn. "Proje Değeri / Uygulama Değeri" gibi ikiye bölünmüş sütunlar, birleştirilmiş hücreler, sabit bir kolon-rol şemasıyla genelleştirmesi zor bir yapı) → bu durumda GERÇEK değerleri SEN oku ve extracted_data.equipment içine yaz (her örnek için: system_name, equipment_name, code, properties: [{key,value},...], result, control_items: [{code,criterion,result},...], source_pages). Bu az sayıda öğe için ucuzdur ve senin okuma yeteneğin (örn. "Proje Değeri" sütununu görmezden gel, sadece "Uygulama Değeri"ni al) hiçbir sabit kod şemasının yakalayamayacağı bir esneklik sağlar. Bu durumda o ekipman için table_shape'i boş/ilgisiz bırakabilirsin (yine de required alan olduğu için instance_axis'i uygun bir değerle, columns[] boş dizi olarak doldur).
+  - Bu ekipmanın KENDİ muayene/kontrol listesi varsa (rapor TEK bir ekipmanı konu alıyorsa - örn. forklift/transpalet raporundaki "KONTROL KRİTERLERİ VE TESTLER"), o listeyi de BURADA control_items içine GERÇEK kod/kriter/sonuç değerleriyle yaz - template.control_items'a pattern olarak YAZMA (bkz. bölüm 4'teki istisna). Bu ekipmanın kendi checklist'i yoksa (çoğu durumda) control_items: [] bırak.
 
 Ekipman için keşfet:
 - equipment_name
@@ -345,12 +348,27 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
           {"key": "Debi (m3/h)", "value": "..."}
         ],
         "result": null,
+        "control_items": [],
+        "source_pages": [1]
+      },
+      {
+        "system_name": "Transpalet",
+        "equipment_name": "Transpalet",
+        "code": "MT24",
+        "properties": [
+          {"key": "Markası", "value": "..."}
+        ],
+        "result": null,
+        "control_items": [
+          {"code": "1", "criterion": "Sicil kartı, bakım defteri...", "result": "uygun"},
+          {"code": "2", "criterion": "Azami kaldırma kapasitesi...", "result": "uygun"}
+        ],
         "source_pages": [1]
       }
     ]
   }
 }
-(equipment dizisi SADECE sınırlı sayıda ekipman grupları için doludur - dolap/hidrant gibi grupları buraya YAZMA, boş bırak, onlar table_shape'ten gelir.)
+(equipment dizisi SADECE sınırlı sayıda ekipman grupları için doludur - dolap/hidrant gibi grupları buraya YAZMA, boş bırak, onlar table_shape'ten gelir. control_items alt-dizisi de SADECE bu ekipmanın kendi muayene listesi varsa doludur - yukarıdaki pompa örneğinde olduğu gibi çoğu ekipmanda boş [] kalır.)
 
 SADECE geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
 PROMPT;

@@ -79,9 +79,30 @@ class FireSuppressionUnifiedNormalizer
             throw new RuntimeException('Gemini Template yetersiz: fire_systems.systems bulunamadı.');
         }
 
+        // A system's compliance data can ALSO come entirely from Gemini's own
+        // direct-read equipment (extracted_data.equipment[].control_items) -
+        // a single-equipment report (e.g. a forklift/transpalet) has no
+        // Camelot code/result pattern at all by design, since the whole
+        // checklist was read directly instead. Collect which system_names
+        // have such a group so those count as usable too.
+        $directReadSystemNames = [];
+        foreach ((array) ($semantic['extracted_data']['equipment'] ?? []) as $directItem) {
+            if (!is_array($directItem)) continue;
+            $name = trim((string) ($directItem['system_name'] ?? ''));
+            if ($name !== '' && (array) ($directItem['control_items'] ?? [])) {
+                $directReadSystemNames[$name] = true;
+            }
+        }
+
         $usableSystems = 0;
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
+
+            $systemName = trim((string) ($system['system_name'] ?? ''));
+            if ($systemName !== '' && isset($directReadSystemNames[$systemName])) {
+                $usableSystems++;
+                continue;
+            }
 
             $codes = [];
             $results = [];
@@ -103,7 +124,7 @@ class FireSuppressionUnifiedNormalizer
 
         if ($usableSystems === 0) {
             throw new RuntimeException(
-                'Gemini Template yetersiz: hiçbir yangın sistemi için kontrol kodu ve sonuç hücresi patterni birlikte keşfedilemedi.'
+                'Gemini Template yetersiz: hiçbir yangın sistemi için kontrol kodu ve sonuç hücresi patterni (veya doğrudan okunan ekipman checklist\'i) birlikte keşfedilemedi.'
             );
         }
     }
@@ -723,6 +744,7 @@ class FireSuppressionUnifiedNormalizer
             'report' => [
                 'report_no' => $this->stringOrNull($report['report_no'] ?? $reportInfo['report_no'] ?? null),
                 'company_name' => $this->stringOrNull($report['company_name'] ?? $reportInfo['company_title'] ?? null),
+                'report_date' => $this->dateOrNull($report['report_date'] ?? $reportInfo['report_date'] ?? null),
                 'control_date' => $this->dateOrNull($report['control_date'] ?? $reportInfo['control_date'] ?? null),
                 'next_control_date' => $this->dateOrNull($report['next_control_date'] ?? $reportInfo['validity_date'] ?? null),
                 'overall_result' => $this->normalizeResult(
@@ -1110,6 +1132,7 @@ class FireSuppressionUnifiedNormalizer
             'sabit_boru',
             'su_alma_verme',
             'gazli_sondurme',
+            'yangin_algilama',
             'diger',
         ];
 
@@ -1147,6 +1170,7 @@ class FireSuppressionUnifiedNormalizer
             'sabit_boru' => ['boru', 'kolektor'],
             'su_alma_verme' => ['su alma', 'su verme'],
             'gazli_sondurme' => ['gazli', 'gaz sondurme'],
+            'yangin_algilama' => ['algilama', 'alarm sistem', 'dedektor', 'ihbar sistem'],
         ];
 
         foreach ($keywordsByCategory as $category => $keywords) {
