@@ -668,6 +668,13 @@ class FireSuppressionUnifiedNormalizer
         $findings = is_array($data['findings'] ?? null) ? $data['findings'] : [];
 
         $normalizedSystems = [];
+        // Flat, top-level equipment list — the frontend's matching/eşleştirme
+        // UI and per-equipment control-item review (Onayla adımı) read this
+        // (draft.equipment[]), NOT systems[].components[]. That top-level
+        // field never existed before, so the matching table always rendered
+        // empty ("Bileşenler: 0") and control items never populated,
+        // regardless of how much data the systems actually carried.
+        $equipment = [];
         $equipmentCount = 0;
         $controlCount = 0;
 
@@ -698,6 +705,10 @@ class FireSuppressionUnifiedNormalizer
                 'control_items' => $controls,
             ];
 
+            foreach ($components as $component) {
+                $equipment[] = $this->buildEquipmentEntry($component, $category, $controls);
+            }
+
             $equipmentCount += count($components);
             $controlCount += count($controls);
         }
@@ -720,6 +731,7 @@ class FireSuppressionUnifiedNormalizer
             ],
             'covered_categories' => $coveredCategories,
             'systems' => $normalizedSystems,
+            'equipment' => $equipment,
             'findings' => $normalizedFindings,
             'matched_inventory_items' => (array) ($data['matched_inventory_items'] ?? []),
             'candidate_inventory_items' => (array) ($data['candidate_inventory_items'] ?? []),
@@ -775,6 +787,74 @@ class FireSuppressionUnifiedNormalizer
         }
 
         return $out;
+    }
+
+    // Builds one flat top-level equipment[] entry from a component + the
+    // system's already-normalized control_items - linking each control back
+    // to THIS equipment by matching either a single-scope control
+    // (scope=equipment, equipment=code) or a matrix control's per-equipment
+    // results[] entry (equipment_code=code). Field names here (category,
+    // location_note) deliberately match FireSuppressionMatchingProfile's
+    // CANDIDATE_FIELDS, since the matching engine reads directly from this
+    // array - the old raw component shape ('location', no 'category') meant
+    // the matching engine's category/location filters were always silently
+    // empty.
+    private function buildEquipmentEntry(array $component, string $category, array $controls): array
+    {
+        $code = $component['code'] ?? null;
+        $items = [];
+        $hasNonconforming = false;
+        $hasConforming = false;
+
+        foreach ($controls as $control) {
+            $status = null;
+
+            if ($code !== null && ($control['scope'] ?? '') === 'equipment' && ($control['equipment'] ?? '') === $code) {
+                $status = $control['result_normalized'] ?? null;
+            } elseif ($code !== null) {
+                foreach ((array) ($control['results'] ?? []) as $result) {
+                    if (($result['equipment_code'] ?? null) === $code) {
+                        $status = $this->normalizeResult($result['result'] ?? null);
+                        break;
+                    }
+                }
+            }
+
+            if ($status === null) continue;
+
+            $items[] = [
+                'code' => $control['code'] ?? null,
+                'title' => $control['criterion'] ?? $control['code'] ?? '',
+                'status' => $status,
+                // Kontrol maddesinin kendi bir "tespit/açıklama" metni yok -
+                // sadece kriter (yukarıdaki title) + sonuç var. Burayı da
+                // criterion ile doldurmak title'ın birebir tekrarına yol
+                // açıyordu (frontend'de aynı metin hem başlıkta hem altındaki
+                // kutuda görünüyordu). Boş bırakılır - kullanıcı isterse
+                // kendi tespitini yazar.
+                'description' => null,
+            ];
+
+            if ($status === 'uygun_degil') $hasNonconforming = true;
+            elseif ($status === 'uygun') $hasConforming = true;
+        }
+
+        return [
+            'code' => $code,
+            'category' => $category,
+            'location_note' => $component['location'] ?? null,
+            'brand' => $component['brand'] ?? null,
+            'model' => $component['model'] ?? null,
+            'serial_no' => $component['serial_no'] ?? null,
+            'result' => $hasNonconforming ? 'uygun_degil' : ($hasConforming ? 'uygun' : null),
+            'note' => null,
+            // Serbest formattaki ekipman özellikleri (örn. "Ölçülen Basınç",
+            // "Hortum Uzunluğu") - components[].properties'te zaten çıkarılmış
+            // durumdaydı ama bu equipment[] düzleştirmesine hiç aktarılmıyordu,
+            // bu yüzden rapor kaydedilirken tamamen kayboluyordu.
+            'properties' => is_array($component['properties'] ?? null) ? $component['properties'] : [],
+            'control_items' => $items,
+        ];
     }
 
     private function normalizeControls(array $controls): array
@@ -1017,14 +1097,18 @@ class FireSuppressionUnifiedNormalizer
     private function normalizeCategory(mixed $category, ?string $systemName = null): string
     {
         $value = mb_strtolower(trim((string) $category), 'UTF-8');
+        // Bu liste FireSuppressionInventoryItem::CATEGORIES ile BİREBİR aynı
+        // olmak zorunda - burada üretilen bir kategori, daha sonra envantere
+        // eklenirken/control_items'e bağlanırken AYNI whitelist'e karşı
+        // (Rule::in(CATEGORIES)) doğrulanıyor.
         $allowed = [
             'yangin_dolabi',
             'yangin_pompasi',
             'hidrant',
             'sprinkler',
-            'su_alma_verme',
             'su_deposu',
-            'sabit_boru_tesisati',
+            'sabit_boru',
+            'su_alma_verme',
             'gazli_sondurme',
             'diger',
         ];
@@ -1046,14 +1130,22 @@ class FireSuppressionUnifiedNormalizer
         ]);
         if ($normalized === '') return 'diger';
 
+        // NOT: raporda AYRI bir bölüm/sistem olan bir şeyi sırf sabit kategori
+        // listesinde tam karşılığı yok diye başka bir kategoriye GÖMMÜYORUZ -
+        // rapordaki ayrımı yok sayıp yanlış/karışık verecekti. "İtfaiye Su
+        // Alma Ve Verme Ağızları" bu yüzden artık kendi gerçek kategorisi
+        // (su_alma_verme, bkz. FireSuppressionInventoryItem::CATEGORIES).
+        // Hâlâ hiç eşleşmeyen sistemler 'diger'e düşer, kullanıcı "Yeni
+        // Sistemler" adımındaki modalde bunu KENDİ ayrı kategorisiyle çözer
+        // (bkz. upload.vue applyCategoryOverridesAndContinue).
         $keywordsByCategory = [
             'yangin_dolabi' => ['dolab', 'dolap'],
             'hidrant' => ['hidrant'],
             'sprinkler' => ['yagmurlama', 'sprinkler'],
-            'su_alma_verme' => ['su alma', 'su verme'],
             'yangin_pompasi' => ['pompa'],
             'su_deposu' => ['su deposu', 'su tank'],
-            'sabit_boru_tesisati' => ['boru', 'kolektor'],
+            'sabit_boru' => ['boru', 'kolektor'],
+            'su_alma_verme' => ['su alma', 'su verme'],
             'gazli_sondurme' => ['gazli', 'gaz sondurme'],
         ];
 
@@ -1099,9 +1191,27 @@ class FireSuppressionUnifiedNormalizer
         $value = mb_strtolower(trim((string) $value), 'UTF-8');
         if ($value === '') return null;
 
-        if (in_array($value, ['uygun', 'u', 'ok', 'uygundur'], true)) return 'uygun';
-        if (in_array($value, ['uygun_degil', 'uygun değil', 'ud', 'uygunsuz'], true)) {
+        // Tek/çift harfli kısaltmalar farklı raporlarda nokta/eğik çizgi/tire
+        // ile de yazılabiliyor ("U.D", "U/D", "U-D", "N/A") - kısaltma
+        // karşılaştırmasını bunlardan arındırılmış bir kopya üzerinden
+        // yapıyoruz. Cümle/kelime bazlı eşleşmeler (aşağıdaki regex'ler)
+        // boşluğa ihtiyaç duyduğu için ORİJİNAL $value üzerinden kalır. Bu
+        // olmadan örn. "U.D" hiçbir statüye eşleşmiyor, ham haliyle geçip
+        // frontend'deki 3 durum butonundan hiçbiri seçili görünmüyordu.
+        $compact = preg_replace('/[.\/\-\s]+/u', '', $value) ?? $value;
+
+        if (in_array($compact, ['uygun', 'u', 'ok', 'uygundur'], true)) return 'uygun';
+        if (in_array($compact, ['uygundegil', 'ud', 'uygunsuz'], true)) {
             return 'uygun_degil';
+        }
+        // Raporlarda üçüncü bir kısaltma olarak "N" (N/A) veya "U.Y" da
+        // kullanılıyor - ikisi de "uygulanamıyor" (kontrol maddesi bu
+        // ekipman/sistem için anlamsız). "U.Y" için kanıt: NETA fixture'ında
+        // bu kodu taşıyan TÜM maddelerin kriter metni bu tesise uygulanamaz
+        // koşullu senaryolar ("LPG ikmal istasyonlarında...", "...su
+        // sistemine bağlı ise..." gibi) - "Uy(gulanamıyor)" kısaltması.
+        if (in_array($compact, ['n', 'na', 'uy', 'uygulanamaz', 'uygulanamıyor', 'uygulanamiyor'], true)) {
+            return 'uygulanamiyor';
         }
         // A longer status sentence ("... kullanımı uygun değildir.") or one
         // missing a diacritic from the same encoding glitch seen elsewhere
@@ -1110,7 +1220,18 @@ class FireSuppressionUnifiedNormalizer
         if (preg_match('/uygun\s+de.{0,2}ld/u', $value) === 1) return 'uygun_degil';
         if (preg_match('/\buygun\w*\b/u', $value) === 1) return 'uygun';
 
-        return $value;
+        // Bu noktaya gelen değer, yukarıdaki hiçbir bilinen "uygun" ifadesine
+        // uymuyor ama yine de Gemini'nin BU RAPOR İÇİN keşfettiği
+        // result_patterns'e uyduğu için buraya kadar geldi (bkz. matchResultValue) -
+        // yani gerçek bir sonuç kodu, sadece Türkçe "uygun/uygun değil" kelime
+        // kalıplarımızın dışında bir kısaltma (raporlar arasında bu kısaltmalar
+        // HİÇ sabit değil - "yav her raporda pattern değişir"). Böyle bir
+        // durumda değeri ham haliyle geçirip frontend'de HİÇBİR durum
+        // butonunun seçili görünmemesine (sessizce kaybolmasına) izin vermek
+        // yerine, güvenlik önceliğiyle "uygun_degil" (incelemesi gereken)
+        // sayıyoruz - net biçimde "uygun" olduğu tespit edilemeyen hiçbir
+        // madde sessizce atlanmaz.
+        return 'uygun_degil';
     }
 
     private function hasPatterns(array $patterns): bool

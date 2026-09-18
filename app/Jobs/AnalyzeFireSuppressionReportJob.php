@@ -90,17 +90,22 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
 
             $progress->stage($this->analysisId, 'matching', 'Ekipman eşleştirmesine hazırlanıyor');
 
+            // Eşleştirme artık normalizer'ın ürettiği DÜZ (flat) tables['equipment']
+            // üzerinden çalışıyor - eskiden systems[].components[] doğrudan
+            // kullanılıyordu, ama o şekilde 'category'/'location_note' alanları hiç
+            // yoktu (bkz. FireSuppressionMatchingProfile::CANDIDATE_FIELDS), bu
+            // yüzden kategori/konum filtresi sessizce hep boş geçiyordu. match()
+            // sonucu her equipment kaydına doğrudan yazılıyor ki frontend'in
+            // draft.equipment[].match alanı (eşleştirme/kontrol maddeleri UI'ı)
+            // dolabilsin.
             $candidateIds = [];
             $matchedIds = [];
-            $matches = [];
 
-            foreach ($tables['systems'] ?? [] as $systemIndex => $system) {
-                foreach ($system['components'] ?? [] as $componentIndex => $equipment) {
-                    $match = $matchingEngine->match($matchingProfile, $branch, $equipment);
-                    $matches[$systemIndex][$componentIndex] = $match;
-                    $candidateIds = array_merge($candidateIds, $match['candidate_ids'] ?? []);
-                    if (!empty($match['matched_id'])) $matchedIds[] = $match['matched_id'];
-                }
+            foreach ($tables['equipment'] ?? [] as $index => $equipment) {
+                $match = $matchingEngine->match($matchingProfile, $branch, $equipment);
+                $tables['equipment'][$index]['match'] = $match;
+                $candidateIds = array_merge($candidateIds, $match['candidate_ids'] ?? []);
+                if (!empty($match['matched_id'])) $matchedIds[] = $match['matched_id'];
             }
 
             $candidateIds = array_values(array_unique(array_map('intval', $candidateIds)));
@@ -112,25 +117,23 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $candidateInventory = [];
             $unmatched = [];
 
-            foreach ($tables['systems'] ?? [] as $systemIndex => $system) {
-                foreach ($system['components'] ?? [] as $componentIndex => $equipment) {
-                    $match = $matches[$systemIndex][$componentIndex] ?? [
-                        'status' => 'new',
-                        'matched_id' => null,
-                        'candidate_ids' => [],
-                    ];
+            foreach ($tables['equipment'] ?? [] as $equipment) {
+                $match = $equipment['match'] ?? [
+                    'status' => 'new',
+                    'matched_id' => null,
+                    'candidate_ids' => [],
+                ];
 
-                    if (($match['status'] ?? '') === 'exact' && isset($match['matched_id'])) {
-                        $matchedInventory[] = $matchedMap->get($match['matched_id']);
-                    } elseif (($match['status'] ?? '') === 'candidate_single' && isset($match['candidate_ids'][0])) {
-                        $matchedInventory[] = $candidateMap->get($match['candidate_ids'][0]);
-                    } elseif (($match['status'] ?? '') === 'candidate_multiple') {
-                        foreach ($match['candidate_ids'] ?? [] as $id) {
-                            if ($candidateMap->has($id)) $candidateInventory[] = $candidateMap->get($id);
-                        }
-                    } elseif (!empty($equipment['code'])) {
-                        $unmatched[] = $equipment['code'];
+                if (($match['status'] ?? '') === 'exact' && isset($match['matched_id'])) {
+                    $matchedInventory[] = $matchedMap->get($match['matched_id']);
+                } elseif (($match['status'] ?? '') === 'candidate_single' && isset($match['candidate_ids'][0])) {
+                    $matchedInventory[] = $candidateMap->get($match['candidate_ids'][0]);
+                } elseif (($match['status'] ?? '') === 'candidate_multiple') {
+                    foreach ($match['candidate_ids'] ?? [] as $id) {
+                        if ($candidateMap->has($id)) $candidateInventory[] = $candidateMap->get($id);
                     }
+                } elseif (!empty($equipment['code'])) {
+                    $unmatched[] = $equipment['code'];
                 }
             }
 

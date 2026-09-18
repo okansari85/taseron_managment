@@ -15,6 +15,7 @@ use App\Services\Ai\TemplateDiscoveryFireSuppressionAnalyzer;
 use App\Services\FireSuppressionReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -162,8 +163,27 @@ class FireSuppressionReportController extends Controller
                 'description' => $entry['description'] ?? null,
             ]
         )->all();
-        $report = $this->service->create($locationBusinessEntity, $validated, $request->file('file'), $request->user(), $additionalFiles);
+        $file = $request->hasFile('file') ? $request->file('file') : $this->uploadedFileFromFixture((string) $validated['fixture_id']);
+        $report = $this->service->create($locationBusinessEntity, $validated, $file, $request->user(), $additionalFiles);
         return response()->json(['message' => 'Rapor başarıyla yüklendi.', 'data' => $report], 201);
+    }
+
+    // Test modu: gerçek dosya yerine kayıtlı bir Gemini fixture'ının zaten
+    // sunucuda duran PDF'i kullanılır - AnalyzeFireSuppressionReportJob'daki
+    // AYNI teknikle (dosyayı gerçek bir HTTP upload'ıymış gibi UploadedFile'a
+    // sarmak) sahte bir tarayıcı yükleme turu (indir + tekrar yükle)
+    // gerektirmeden FireSuppressionReportService::create()'e aynen geçilir.
+    private function uploadedFileFromFixture(string $fixtureId): UploadedFile
+    {
+        abort_unless(preg_match('/^[0-9a-f-]{36}$/i', $fixtureId) === 1, 422, 'Geçersiz fixture ID.');
+        $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
+        abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
+        $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+        $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
+        abort_unless(Storage::disk('local')->exists($pdfPath), 404, 'Bu fixture için kayıtlı PDF yok.');
+        $fileName = (string) ($fixture['original_file_name'] ?? 'rapor.pdf');
+
+        return new UploadedFile(Storage::disk('local')->path($pdfPath), $fileName, 'application/pdf', null, true);
     }
 
     public function controlItemTemplates(Request $request): JsonResponse

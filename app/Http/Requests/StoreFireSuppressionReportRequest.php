@@ -24,7 +24,7 @@ class StoreFireSuppressionReportRequest extends FormRequest
     // değişmeden aynı şekilde çalışmaya devam ediyor.
     protected function prepareForValidation(): void
     {
-        foreach (['findings', 'control_items'] as $field) {
+        foreach (['findings', 'control_items', 'equipment'] as $field) {
             $value = $this->input($field);
 
             if (is_string($value)) {
@@ -44,7 +44,11 @@ class StoreFireSuppressionReportRequest extends FormRequest
             'covered_categories' => ['nullable', 'array'],
             'covered_categories.*' => [Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
             'overall_result' => ['nullable', 'string', Rule::in(FireSuppressionInventoryItem::COMPLIANCE_STATUSES)],
-            'file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
+            // Test modu: gerçek bir dosya yerine kayıtlı bir Gemini fixture'ının
+            // PDF'i kullanılabilir (bkz. FireSuppressionReportController::store()) -
+            // bu durumda 'file' HİÇ gönderilmez, 'fixture_id' gelir.
+            'file' => ['required_without:fixture_id', 'file', 'mimes:pdf', 'max:20480'],
+            'fixture_id' => ['nullable', 'uuid', 'required_without:file'],
             'notes' => ['nullable', 'string', 'max:2000'],
 
             'findings' => ['nullable', 'array'],
@@ -55,6 +59,11 @@ class StoreFireSuppressionReportRequest extends FormRequest
             'findings.*.area_note' => ['nullable', 'string', 'max:255'],
             'findings.*.affected_item_ids' => ['nullable', 'array'],
             'findings.*.affected_item_ids.*' => ['integer', 'exists:fire_suppression_inventory_items,id'],
+            // Raporun kendi ekipman kodları (AI'ın bulguda tespit ettiği,
+            // henüz envanterde kayıtlı olmayabilecek kodlar) - bkz.
+            // FireSuppressionReportService::resolveFindingScope().
+            'findings.*.equipment_codes' => ['nullable', 'array'],
+            'findings.*.equipment_codes.*' => ['string', 'max:100'],
 
             'covered_inventory_item_ids' => ['nullable', 'array'],
             'covered_inventory_item_ids.*' => ['integer', 'exists:fire_suppression_inventory_items,id'],
@@ -65,6 +74,24 @@ class StoreFireSuppressionReportRequest extends FormRequest
             // whole_unit Sistem Bileşeni otomatik açılmaz).
             'approved_new_categories' => ['nullable', 'array'],
             'approved_new_categories.*' => [Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
+
+            // Raporun TÜM ekipmanları (kontrol maddesi/matris olsun olmasın -
+            // örn. Pompa Dairesi'ndeki tek tek pompalar hiç equipment-seviyeli
+            // control_item taşımayabilir ama yine de birer Sistem Bileşeni
+            // kaydı olarak envantere girmesi/marka-model-seri no/özellik
+            // bilgisiyle kaydedilmesi gerekir). Eskiden ekipman kaydı SADECE
+            // control_items üzerinden (dolaylı olarak) tetikleniyordu -
+            // matrissiz ekipmanlar hiç DB'ye gitmiyordu.
+            'equipment' => ['nullable', 'array'],
+            'equipment.*.code' => ['nullable', 'string', 'max:100'],
+            'equipment.*.category' => ['required_with:equipment.*.code', 'nullable', 'string', Rule::in(FireSuppressionInventoryItem::CATEGORIES)],
+            'equipment.*.inventory_item_id' => ['nullable', 'integer', 'exists:fire_suppression_inventory_items,id'],
+            'equipment.*.brand' => ['nullable', 'string', 'max:255'],
+            'equipment.*.model' => ['nullable', 'string', 'max:255'],
+            'equipment.*.serial_no' => ['nullable', 'string', 'max:255'],
+            'equipment.*.location_note' => ['nullable', 'string', 'max:255'],
+            'equipment.*.properties' => ['nullable', 'array'],
+            'equipment.*.approved' => ['nullable', 'boolean'],
 
             'control_items' => ['nullable', 'array'],
             'control_items.*.template_id' => ['nullable', 'integer', 'exists:fire_suppression_control_item_templates,id'],

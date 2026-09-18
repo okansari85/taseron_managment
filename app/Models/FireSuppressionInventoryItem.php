@@ -19,11 +19,24 @@ class FireSuppressionInventoryItem extends Model
         'yangin_pompasi',
         'su_deposu',
         'sabit_boru',
+        'su_alma_verme',
         'gazli_sondurme',
         'diger',
     ];
 
     public const COMPLIANCE_STATUSES = ['uygun', 'uygun_degil'];
+
+    // Program şu an sadece yangın söndürme ekipmanlarını kapsıyor, ama
+    // ilerleyen zamanlarda kaldırma-iletme ekipmanları/basınçlı kaplar gibi
+    // başka periyodik kontrol (PK) alanlarına da açılacak — equipment_domain
+    // kolonu bu ayrımı şimdiden taşır (bkz. ilgili migration). CATEGORIES
+    // listesi hâlâ sadece yangın söndürme kategorilerini içerir; yeni bir
+    // domain eklendiğinde kendi kategori kümesi ayrıca tanımlanacaktır.
+    public const DOMAIN_FIRE_SUPPRESSION = 'yangin_sondurme';
+
+    public const DOMAINS = [
+        self::DOMAIN_FIRE_SUPPRESSION,
+    ];
 
     // per_unit: tek tek sayılan bileşen (Yangın Dolabı, Hidrant — kendi kodu
     // ve kendi matris satırı var). whole_unit: bütün olarak değerlendirilen
@@ -35,6 +48,7 @@ class FireSuppressionInventoryItem extends Model
         'tenant_id',
         'location_business_entity_id',
         'category',
+        'equipment_domain',
         'unit_scope',
         'code',
         'display_name',
@@ -48,6 +62,7 @@ class FireSuppressionInventoryItem extends Model
         'compliance_status',
         'open_nonconformity_count',
         'notes',
+        'properties',
     ];
 
     protected $casts = [
@@ -55,6 +70,7 @@ class FireSuppressionInventoryItem extends Model
         'last_control_date' => 'date',
         'next_control_date' => 'date',
         'open_nonconformity_count' => 'integer',
+        'properties' => 'array',
     ];
 
     protected static function booted(): void

@@ -95,6 +95,7 @@ class FireSuppressionReportService
         $tenantId = $this->tenantContext->id();
         $findingsInput = $data['findings'] ?? [];
         $controlItemsInput = $data['control_items'] ?? [];
+        $equipmentInput = $data['equipment'] ?? [];
         $coveredInventoryItemIds = array_map('intval', $data['covered_inventory_item_ids'] ?? []);
         // Su Deposu / Sabit Boru gibi whole_unit kategoriler için kullanıcının
         // Eşleştirme adımında AÇIKÇA "envanterime ekle" dediği kategori
@@ -122,7 +123,7 @@ class FireSuppressionReportService
         $staleAdditionalPaths = [];
 
         try {
-            $report = DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $coveredInventoryItemIds, $approvedNewCategories, $tenantId, $file, $additionalFiles, $existingReportId, &$filePath, &$storedAdditionalPaths, &$staleFilePath, &$staleAdditionalPaths) {
+            $report = DB::transaction(function () use ($locationBusinessEntity, $data, $actingUser, $findingsInput, $controlItemsInput, $equipmentInput, $coveredInventoryItemIds, $approvedNewCategories, $tenantId, $file, $additionalFiles, $existingReportId, &$filePath, &$storedAdditionalPaths, &$staleFilePath, &$staleAdditionalPaths) {
                 $filePath = $file->store(self::FILE_DIRECTORY, 'public');
 
                 $attributes = [
@@ -210,7 +211,8 @@ class FireSuppressionReportService
                     ->get(['id', 'category', 'code'])
                     ->mapWithKeys(fn (FireSuppressionInventoryItem $item) => [
                         $item->category . '|' . mb_strtolower(trim($item->code), 'UTF-8') => $item->id,
-                    ]);
+                    ])
+                    ->all();
 
                 // Su Deposu / Sabit Boru gibi whole_unit kategorilerde equipment_code
                 // hiç OLMAZ (bkz. FireSuppressionInventoryItem::UNIT_SCOPES notu —
@@ -229,27 +231,90 @@ class FireSuppressionReportService
 
                 $touchedInventoryItemIds = [];
 
+                // Raporun TÜM ekipmanları (kontrol maddesi/matris olsun
+                // olmasın) - marka/model/seri no/konum/serbest özellikler
+                // (properties) burada kalıcı hale gelir. Eskiden bir ekipman
+                // SADECE kendi equipment-seviyeli control_item'ı varsa
+                // (matriste yer alıyorsa) DB'ye giriyordu - örn. Pompa
+                // Dairesi'ndeki tek tek pompaların equipment-seviyeli control
+                // item'ı hiç yoktu (sadece sistem-seviyeli maddeler vardı),
+                // bu yüzden hiçbiri envantere hiç eklenmiyordu. Bu döngü
+                // control_items döngüsünden ÖNCE çalışır ki (aşağıdaki)
+                // control_items zaten burada oluşturulmuş/güncellenmiş kaydı
+                // bulsun, tekrar bare (özelliksiz) bir kayıt açmasın.
+                foreach ($equipmentInput as $equipmentItem) {
+                    // "approved" sadece henüz kayıtlı olmayan (yeni) per_unit
+                    // kalemler için anlamlı - frontend zaten sadece onaylı
+                    // yeni ekipmanları bu listeye dahil ediyor (bkz.
+                    // upload.vue isNewItemApproved), burada savunmacı olarak
+                    // da kontrol ediyoruz. Rapor tek başına envanter için
+                    // kaynak sayılamaz.
+                    if (($equipmentItem['approved'] ?? true) === false) continue;
+
+                    $inventoryItemId = $equipmentItem['inventory_item_id'] ?? null;
+                    $code = $equipmentItem['code'] ?? null;
+                    $category = $equipmentItem['category'] ?? null;
+                    if ($category === null) continue;
+
+                    $attributes = array_filter([
+                        'brand' => $equipmentItem['brand'] ?? null,
+                        'model' => $equipmentItem['model'] ?? null,
+                        'serial_no' => $equipmentItem['serial_no'] ?? null,
+                        'location_note' => $equipmentItem['location_note'] ?? null,
+                        'properties' => (array) ($equipmentItem['properties'] ?? []) ?: null,
+                    ], static fn ($value) => $value !== null && $value !== []);
+
+                    if ($inventoryItemId === null && $code !== null) {
+                        $inventoryItemId = $this->resolveOrCreatePerUnitComponent(
+                            $tenantId,
+                            $locationBusinessEntity,
+                            $category,
+                            $code,
+                            $componentIdByKey,
+                            $attributes
+                        );
+                    } elseif ($inventoryItemId === null && $code === null) {
+                        $inventoryItemId = $wholeUnitIdByCategory[$category] ?? null;
+
+                        if ($inventoryItemId === null && in_array($category, $approvedNewCategories, true)) {
+                            $newComponent = FireSuppressionInventoryItem::query()->create(array_merge([
+                                'tenant_id' => $tenantId,
+                                'location_business_entity_id' => $locationBusinessEntity->id,
+                                'category' => $category,
+                                'unit_scope' => 'whole_unit',
+                                'code' => null,
+                            ], $attributes));
+
+                            $inventoryItemId = $newComponent->id;
+                            $wholeUnitIdByCategory[$category] = $inventoryItemId;
+                        } elseif ($inventoryItemId !== null && $attributes !== []) {
+                            FireSuppressionInventoryItem::query()->whereKey($inventoryItemId)->update($attributes);
+                        }
+                    } elseif ($inventoryItemId !== null && $attributes !== []) {
+                        // Zaten kayıtlı/eşleşmiş bir kaleme ait - gelen yeni
+                        // bilgilerle güncellenir (marka/model raporlar
+                        // arasında değişmiş/eklenmiş olabilir).
+                        FireSuppressionInventoryItem::query()->whereKey($inventoryItemId)->update($attributes);
+                    }
+
+                    if ($inventoryItemId !== null) {
+                        $touchedInventoryItemIds[] = $inventoryItemId;
+                    }
+                }
+
                 foreach ($controlItemsInput as $index => $controlItem) {
                     $inventoryItemId = $controlItem['inventory_item_id'] ?? null;
                     $equipmentCode = $controlItem['equipment_code'] ?? null;
                     $category = $controlItem['category'] ?? null;
 
                     if ($inventoryItemId === null && $equipmentCode !== null && $category !== null) {
-                        $key = $category . '|' . mb_strtolower(trim($equipmentCode), 'UTF-8');
-                        $inventoryItemId = $componentIdByKey[$key] ?? null;
-
-                        if ($inventoryItemId === null) {
-                            $newComponent = FireSuppressionInventoryItem::query()->create([
-                                'tenant_id' => $tenantId,
-                                'location_business_entity_id' => $locationBusinessEntity->id,
-                                'category' => $category,
-                                'unit_scope' => 'per_unit',
-                                'code' => $equipmentCode,
-                            ]);
-
-                            $inventoryItemId = $newComponent->id;
-                            $componentIdByKey[$key] = $inventoryItemId;
-                        }
+                        $inventoryItemId = $this->resolveOrCreatePerUnitComponent(
+                            $tenantId,
+                            $locationBusinessEntity,
+                            $category,
+                            $equipmentCode,
+                            $componentIdByKey
+                        );
                     } elseif ($inventoryItemId === null && $equipmentCode === null && $category !== null) {
                         $inventoryItemId = $wholeUnitIdByCategory[$category] ?? null;
 
@@ -319,7 +384,13 @@ class FireSuppressionReportService
                         'status' => 'open',
                     ]);
 
-                    $resolvedIds = $this->resolveFindingScope($locationBusinessEntity, $finding, $findingData);
+                    $resolvedIds = $this->resolveFindingScope(
+                        $locationBusinessEntity,
+                        $finding,
+                        $findingData,
+                        $tenantId,
+                        $componentIdByKey
+                    );
 
                     if ($resolvedIds !== []) {
                         // NOT: affectedItems sync'i sadece "Uygunsuzluklar"
@@ -332,7 +403,18 @@ class FireSuppressionReportService
                     }
                 }
 
-                foreach ($coveredInventoryItemIds as $itemId) {
+                // Rapora "kapsanan ekipman" olarak bağlanacak (pivot +
+                // applyControlResult ile son kontrol/geçerlilik tarihi)
+                // kalemler SADECE frontend'in covered_inventory_item_ids'te
+                // açıkça listelediği (o an ZATEN kayıtlı) kalemlerle sınırlı
+                // DEĞİL — kontrol maddelerinin (control_items) dokunduğu
+                // (touchedInventoryItemIds, yeni oluşturulanlar dahil) HER
+                // kalem de aynı şekilde bağlanır. Bu olmadan, henüz hiç
+                // envanter kaydı olmayan bir şube için ilk rapor yüklendiğinde
+                // (tüm ekipman bu raporda YENİ oluşuyor) hiçbir şey rapora
+                // bağlanmıyordu — "Bu Raporda Kontrol Edilen Ekipmanlar"
+                // listesi ve rapor detayındaki envanter ilişkisi boş kalıyordu.
+                foreach (array_unique([...$coveredInventoryItemIds, ...$touchedInventoryItemIds]) as $itemId) {
                     $item = FireSuppressionInventoryItem::query()->find($itemId);
                     if ($item) {
                         $report->inventoryItems()->syncWithoutDetaching([$itemId]);
@@ -404,14 +486,44 @@ class FireSuppressionReportService
         }
     }
 
-    // scope='specific' → data'dan gelen id'ler; scope='all' → aynı şube +
-    // aynı kategorideki tüm aktif kalemler; scope='area'/'unknown' → section
-    // 18/19 gereği HİÇBİR kalem otomatik etkilenmez, kullanıcı sonradan elle
-    // bağlar (bu ekran henüz o adımı içermiyor, veri modeli hazır).
-    private function resolveFindingScope(LocationBusinessEntity $locationBusinessEntity, FireSuppressionReportFinding $finding, array $findingData): array
-    {
+    // scope='specific' → data'dan gelen id'ler (zaten envanterde kayıtlı,
+    // kullanıcının elle seçtiği kalemler) BİRLEŞTİRİLİR raporun kendi
+    // equipment_codes'undan (AI'ın bulguda tespit ettiği kodlar - bkz.
+    // upload.vue) çözümlenen kalemlerle: her kod, control_items'te KULLANILAN
+    // AYNI mantıkla (bkz. resolveOrCreatePerUnitComponent) kategori+kod
+    // eşleşmesi varsa BAĞLANIR, yoksa YENİ bir Sistem Bileşeni olarak açılır.
+    // Eskiden equipment_codes hiç desteklenmiyordu - bulgudaki bir ekipman
+    // henüz envanterde kayıtlı değilse "Ekipman Seç" listesi boş kalıyordu
+    // ve o ekipman ne envantere ekleniyor ne de bulguya bağlanabiliyordu.
+    // scope='all' → aynı şube + aynı kategorideki tüm aktif kalemler;
+    // scope='area'/'unknown' → section 18/19 gereği HİÇBİR kalem otomatik
+    // etkilenmez, kullanıcı sonradan elle bağlar.
+    private function resolveFindingScope(
+        LocationBusinessEntity $locationBusinessEntity,
+        FireSuppressionReportFinding $finding,
+        array $findingData,
+        string $tenantId,
+        array &$componentIdByKey
+    ): array {
         if ($finding->scope === 'specific') {
-            return array_map('intval', $findingData['affected_item_ids'] ?? []);
+            $ids = array_map('intval', $findingData['affected_item_ids'] ?? []);
+
+            $category = $finding->category;
+            if ($category !== null) {
+                foreach ((array) ($findingData['equipment_codes'] ?? []) as $code) {
+                    $code = trim((string) $code);
+                    if ($code === '') continue;
+                    $ids[] = $this->resolveOrCreatePerUnitComponent(
+                        $tenantId,
+                        $locationBusinessEntity,
+                        $category,
+                        $code,
+                        $componentIdByKey
+                    );
+                }
+            }
+
+            return array_values(array_unique($ids));
         }
 
         if ($finding->scope === 'all' && $finding->category) {
@@ -424,6 +536,46 @@ class FireSuppressionReportService
         }
 
         return [];
+    }
+
+    // control_items VE findings tarafından paylaşılan, kategori+kod'a göre
+    // mevcut bir Sistem Bileşeni'ni bulan ya da yoksa yenisini açan tek
+    // kaynak - $componentIdByKey her iki çağrı sırasında da güncellenir,
+    // böylece AYNI kod ikinci kez geldiğinde (örn. hem bir control_item hem
+    // bir finding aynı YD14'e değiniyorsa) tekrar oluşturulmaz.
+    // $attributes: brand/model/serial_no/location_note/properties gibi ek
+    // alanlar - control_items döngüsü bunu HİÇ vermez (bare kayıt), equipment
+    // döngüsü (bkz. create() içindeki $equipmentInput bloğu) verir. Kayıt
+    // ZATEN varsa (daha önce bu döngüde ya da önceki bir raporda açılmışsa)
+    // ve yeni $attributes geldiyse GÜNCELLENİR - marka/model/özellikler
+    // raporlar arasında değişmiş/eklenmiş olabilir.
+    private function resolveOrCreatePerUnitComponent(
+        string $tenantId,
+        LocationBusinessEntity $locationBusinessEntity,
+        string $category,
+        string $code,
+        array &$componentIdByKey,
+        array $attributes = []
+    ): int {
+        $key = $category . '|' . mb_strtolower(trim($code), 'UTF-8');
+        $inventoryItemId = $componentIdByKey[$key] ?? null;
+
+        if ($inventoryItemId === null) {
+            $newComponent = FireSuppressionInventoryItem::query()->create(array_merge([
+                'tenant_id' => $tenantId,
+                'location_business_entity_id' => $locationBusinessEntity->id,
+                'category' => $category,
+                'unit_scope' => 'per_unit',
+                'code' => $code,
+            ], $attributes));
+
+            $inventoryItemId = $newComponent->id;
+            $componentIdByKey[$key] = $inventoryItemId;
+        } elseif ($attributes !== []) {
+            FireSuppressionInventoryItem::query()->whereKey($inventoryItemId)->update($attributes);
+        }
+
+        return $inventoryItemId;
     }
 
     private function assertItemsBelongToBranch(LocationBusinessEntity $locationBusinessEntity, array $itemIds): void
