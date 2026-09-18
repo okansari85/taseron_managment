@@ -1235,6 +1235,16 @@ class FireSuppressionUnifiedNormalizer
         // the wrong status.
         if (in_array($value, ['uygun', 'uygun_degil', 'uygulanamiyor'], true)) return $value;
 
+        // Checkbox-style glyph marks (e.g. AKTAŞ's "✔"/"✘" legend) instead of
+        // a text abbreviation - checked BEFORE the dash-stripping $compact
+        // step below, since a lone "-"/"–" mark would otherwise be stripped
+        // down to an empty string and fall through to the "unrecognized"
+        // safety default (uygun_degil), wrongly flagging an actual "✔" (or
+        // "not applicable" dash) result as non-compliant.
+        if (in_array($value, ['✔', '✓'], true)) return 'uygun';
+        if (in_array($value, ['✘', '✗', '×'], true)) return 'uygun_degil';
+        if (in_array($value, ['–', '-', '—'], true)) return 'uygulanamiyor';
+
         // Tek/çift harfli kısaltmalar farklı raporlarda nokta/eğik çizgi/tire
         // ile de yazılabiliyor ("U.D", "U/D", "U-D", "N/A") - kısaltma
         // karşılaştırmasını bunlardan arındırılmış bir kopya üzerinden
@@ -1259,12 +1269,17 @@ class FireSuppressionUnifiedNormalizer
         if (in_array($compact, ['n', 'na', 'nu', 'uy', 'uygulanamaz', 'uygulanamıyor', 'uygulanamiyor'], true)) {
             return 'uygulanamiyor';
         }
-        // A longer status sentence ("... kullanımı uygun değildir.") or one
-        // missing a diacritic from the same encoding glitch seen elsewhere
-        // ("uygun deildir") - match "değil"/"degil" appearing at all, since
-        // Turkish only ever uses that word for the negative status.
-        if (preg_match('/uygun\s+de.{0,2}ld/u', $value) === 1) return 'uygun_degil';
-        if (preg_match('/\buygun\w*\b/u', $value) === 1) return 'uygun';
+        // A longer status sentence ("... kullanımı uygun değildir.") OR the
+        // bare word on its own ("UYGUN DEĞİL", no "-dir" suffix - e.g. a
+        // table cell's terse DEĞERLENDİRME value rather than a narrative
+        // sentence) - plain substring search (no regex), covering both the
+        // normal spelling and the plain-g fallback some sources use.
+        // "değil" alone (not "değildir") used to be missed here (the old
+        // regex required a literal "ld" tail, which bare "değil" never has),
+        // silently falling through to the bare "uygun" check below and
+        // reporting the OPPOSITE compliance result.
+        if (str_contains($value, 'değil') || str_contains($value, 'degil')) return 'uygun_degil';
+        if (str_contains($value, 'uygun')) return 'uygun';
 
         // Bu noktaya gelen değer, yukarıdaki hiçbir bilinen "uygun" ifadesine
         // uymuyor ama yine de Gemini'nin BU RAPOR İÇİN keşfettiği

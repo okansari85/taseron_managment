@@ -405,6 +405,28 @@ class GeminiTemplateDiscoveryClient
                 'extracted_data' => [
                     'type' => 'object',
                     'properties' => [
+                        // Which of the 4 known report shapes this PDF actually
+                        // is - decided ONCE, up front, so the save step (not
+                        // this extraction schema) can route the SAME
+                        // extracted data to the right target system without
+                        // the user picking a separate upload screen per type:
+                        //  - tekli_ekipman: ONE piece of equipment, whole
+                        //    report is its own inspection (forklift,
+                        //    transpalet, vinç, basınçlı kap...).
+                        //  - ysc: taşınabilir yangın söndürücü (tüp) report -
+                        //    can run into the hundreds of tüp, always needs
+                        //    table_shape (never a flat AI-read list).
+                        //  - yangin_tesisati: fire-suppression INSTALLATION
+                        //    report with multiple systems (dolap, pompa,
+                        //    hidrant, sprinkler, gazlı söndürme...).
+                        //  - yangin_algilama: fire detection/alarm system -
+                        //    its own category, never folded into
+                        //    yangin_tesisati even though it can also use
+                        //    table_shape/control_items.
+                        'report_category' => [
+                            'type' => 'string',
+                            'enum' => ['tekli_ekipman', 'ysc', 'yangin_tesisati', 'yangin_algilama'],
+                        ],
                         'findings' => [
                             'type' => 'array',
                             'items' => [
@@ -510,7 +532,7 @@ class GeminiTemplateDiscoveryClient
                             ],
                         ],
                     ],
-                    'required' => ['findings', 'report_information', 'facility_information', 'overall_result', 'equipment'],
+                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'equipment'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],

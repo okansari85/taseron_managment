@@ -552,9 +552,53 @@ private function extractControls(array $tables, array $controlTemplates, array $
             array_map('strval', (array) ($control['control_code_patterns'] ?? []))
         ));
 
+        $textPatterns = array_values(array_filter(
+            array_map('strval', (array) ($control['control_text_patterns'] ?? []))
+        ));
+
         $resultPatterns = array_values(array_filter(
             array_map('strval', (array) ($control['result_patterns'] ?? []))
         ));
+
+        // A code can be printed fused into the SAME cell as its own question
+        // text ("1. Portatif söndürücülerin ..."), with no cell holding the
+        // bare code "1." on its own anywhere in the table - matchControlCode()
+        // above never fires for these. control_text_patterns already carries
+        // the real question text in the SAME order as control_code_patterns,
+        // so find the cell by that real text (collapseForMatch: plain string
+        // comparison, no regex) and take the code positionally rather than
+        // trying to parse it back out of the cell.
+        if ($textPatterns && $codePatterns) {
+            foreach ($tables as $tableIndex => $table) {
+                $resultColumns = $resultColumnsByTable[$tableIndex] ?? [];
+                foreach ($this->matrix($table) as $row) {
+                    foreach ($row as $columnIndex => $value) {
+                        $textIndex = $this->matchControlText((string) $value, $textPatterns);
+                        if ($textIndex === null || !isset($codePatterns[$textIndex])) continue;
+
+                        $code = $this->displayCodeFromPattern($codePatterns[$textIndex]);
+                        if ($code === '') continue;
+
+                        $criterion = $this->stripLeadingCode((string) $value, $code);
+
+                        $result = $resultColumns ? $this->resultFromColumnBlock($row, (int) $columnIndex, $resultColumns) : null;
+                        for ($resultIndex = (int) $columnIndex + 1; $result === null && $resultIndex < count($row); $resultIndex++) {
+                            $candidate = (string) ($row[$resultIndex] ?? '');
+                            if ($this->matchControlText($candidate, $textPatterns) !== null) break;
+                            $matched = $this->matchResultValue($candidate, $resultPatterns);
+                            if ($matched !== null) { $result = $matched; break; }
+                        }
+
+                        $out[$this->normalizeCode($code)] = [
+                            'code' => $code,
+                            'criterion' => $criterion,
+                            'result' => $result,
+                            'source_pages' => array_values(array_unique(array_filter([(int) ($table['page'] ?? 0)]))),
+                        ];
+                    }
+                }
+            }
+        }
 
         if (!$codePatterns) continue;
 
@@ -1353,6 +1397,54 @@ private function findCriterionFromCells(
         $value = str_replace(['\\s*', '\\s+', '\\s'], ' ', $value);
         $value = str_replace(['\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '.'], '', $value);
         return str_replace(' ', '', $this->normalizeLabel($value));
+    }
+
+    // Finds which declared control_text_patterns entry a cell's real text
+    // belongs to - exact match first, then one-directional "cell contains the
+    // (shorter) declared question text" (a code-fused cell like "1. Portatif
+    // söndürücülerin ..." is always longer than the bare declared question).
+    // No preg_match anywhere in this path - same collapseForMatch()-based
+    // plain string comparison as resolveColumnRole() uses for table_shape.
+    private function matchControlText(string $cellValue, array $textPatterns): ?int
+    {
+        $collapsedCell = $this->collapseForMatch($cellValue);
+        if ($collapsedCell === '') return null;
+
+        foreach ($textPatterns as $index => $pattern) {
+            if ($this->collapseForMatch($pattern) === $collapsedCell) return $index;
+        }
+
+        foreach ($textPatterns as $index => $pattern) {
+            $collapsedPattern = $this->collapseForMatch($pattern);
+            if ($collapsedPattern === '' || mb_strlen($collapsedPattern, 'UTF-8') > mb_strlen($collapsedCell, 'UTF-8')) continue;
+            if (str_contains($collapsedCell, $collapsedPattern)) return $index;
+        }
+
+        return null;
+    }
+
+    // Turns a declared control_code_patterns entry (e.g. "^1\.$") into the
+    // plain code it names ("1.") via fixed literal stripping only - no
+    // pattern engine involved, the anchors/backslashes are just characters
+    // this particular declaration style always wraps the code in.
+    private function displayCodeFromPattern(string $pattern): string
+    {
+        $pattern = trim($pattern);
+        $pattern = ltrim($pattern, '^');
+        $pattern = rtrim($pattern, '$');
+        $pattern = str_replace('\\', '', $pattern);
+        return rtrim(trim($pattern), '.');
+    }
+
+    // Removes a code fused into the front of its own cell ("1. Portatif ..."
+    // -> "Portatif ...") via plain substring/ltrim only, so the real question
+    // text (not the code) becomes the stored criterion.
+    private function stripLeadingCode(string $cellText, string $code): string
+    {
+        $cellText = trim($cellText);
+        $code = trim($code);
+        if ($code === '' || !str_starts_with($cellText, $code)) return $cellText;
+        return ltrim(substr($cellText, strlen($code)), " .:)-");
     }
 
     private function matchesAny(string $value, array $patterns): bool

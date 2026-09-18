@@ -45,10 +45,18 @@ PDF'nin gerçek yapısını keşfet. Önceden bildiğin bir firma şablonuna zor
 
 ÇIKTI TAM OLARAK İKİ ANA BÖLÜMDÜR
 1. template: PDF'den keşfedilen yapısal okuma haritası.
-2. extracted_data: findings + report_information + facility_information + overall_result + (SINIRLI sayıda ekipman varsa) equipment (bunlar GERÇEK değerlerdir, aşağıya bak).
+2. extracted_data: report_category + findings + report_information + facility_information + overall_result + (SINIRLI sayıda ekipman varsa) equipment (bunlar GERÇEK değerlerdir, aşağıya bak).
+
+0. RAPOR TİPİ SINIFLANDIRMASI (extracted_data.report_category) — HER ŞEYDEN ÖNCE karar ver
+Bu sistemde 4 farklı rapor tipi var, aynı tek yükleme akışından geçiyorlar ama farklı hedeflere kaydediliyorlar. PDF'in HANGİ tipte olduğunu extracted_data.report_category'ye TAM OLARAK şu 4 değerden biriyle yaz:
+- "tekli_ekipman": Rapor TEK bir makineyi/ekipmanı konu alıyor (forklift, transpalet, vinç, basınçlı kap gibi) — raporun tamamı o TEK ekipmanın muayenesi, tablo/shape'e gerek yok, her şeyi doğrudan sen okursun (bkz. bölüm 5 istisnası).
+- "ysc": Taşınabilir yangın söndürme cihazı (tüp) raporu — onlarca/yüzlerce tüp listeleyen bir tablo formatı (örn. "Cihaz Bazlı Tespit" tablosu, Tüp No/Cihaz Tipi/Dolum Tarihi/Değerlendirme sütunlarıyla). Sayı SINIRSIZ olabileceği için table_shape ŞARTTIR, asla extracted_data.equipment'a tek tek yazma.
+- "yangin_tesisati": Bina/tesisat geneli yangın SÖNDÜRME sistemleri raporu — birden fazla SİSTEM içerir (yangın dolapları, pompa dairesi, hidrant, sprinkler, gazlı söndürme, sabit boru tesisatı gibi), her sistemin kendi kontrol kriterleri ve ekipman listesi olabilir.
+- "yangin_algilama": Yangın ALGILAMA ve uyarı/alarm sistemi raporu (dedektör, alarm paneli, ihbar butonu gibi) — bu "yangin_tesisati" değildir, KENDİ AYRI kategorisidir, tesisata dahil etme.
+Emin olamadığın durumlarda raporun ana konusuna (tek makine mi, tüp listesi mi, çoklu sistem mi, algılama mı) bak ve en uygun olanı seç — bu alan HER ZAMAN doldurulmalı, null bırakılamaz.
 
 KESİN SINIR
-extracted_data içinde findings, report_information, facility_information, overall_result, equipment dışında hiçbir alan bulunamaz.
+extracted_data içinde report_category, findings, report_information, facility_information, overall_result, equipment dışında hiçbir alan bulunamaz.
 AI extracted_data altında systems, components, control_items, results veya inventory verisi çıkarmayacak — bunlar HER RAPORDA satır sayısı büyüyebilen kısımlardır, Camelot template'teki yapı tarifine göre çıkaracaktır.
 report_information, facility_information ve overall_result HER raporda sabit boyutludur (birkaç alan / tek bir sonuç paragrafı) — büyüklüğü rapor uzunluğuyla ARTMAZ, bu yüzden gerçek değerini SEN (AI) doğrudan okuyup yazacaksın; Camelot'un belirsiz hücre-komşuluğu tahminine veya bölüm başlığı varyasyonlarına (SONUÇ: / SONUÇ VE KANAAT gibi) bırakmıyoruz.
 extracted_data.equipment İSTİSNAİDİR ve SADECE o equipment grubu gerçekten SINIRLI sayıda ise (bkz. bölüm 5) kullanılır — dolap/hidrant gibi potansiyel olarak çok sayıda olabilecek gruplar için KESİNLİKLE kullanma, onlar table_shape ile kalır.
@@ -315,6 +323,7 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
     }
   },
   "extracted_data": {
+    "report_category": "yangin_tesisati",
     "findings": [
       {
         "id": "finding-1",

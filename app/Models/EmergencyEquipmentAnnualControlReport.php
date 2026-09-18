@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class EmergencyEquipmentAnnualControlReport extends Model
 {
@@ -64,6 +65,13 @@ class EmergencyEquipmentAnnualControlReport extends Model
             'report_id',
             'location_emergency_equipment_id'
         )->withPivot(['result', 'note'])->withTimestamps();
+    }
+
+    // Rapor genelindeki (tek bir cihaza değil) kriterler - örn. YSC
+    // formunun "Genel Tespit Ve Değerlendirme Soruları" bölümü.
+    public function generalItems(): HasMany
+    {
+        return $this->hasMany(EmergencyEquipmentAnnualControlGeneralItem::class, 'report_id');
     }
 
     public function getFileUrlAttribute(): ?string

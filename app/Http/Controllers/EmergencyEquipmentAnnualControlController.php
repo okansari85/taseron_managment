@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\AnalyzeReportFileRequest;
 use App\Http\Requests\StoreEmergencyEquipmentAnnualControlReportRequest;
+use App\Http\Requests\StoreYscAnnualControlFromAnalysisRequest;
 use App\Models\EmergencyEquipmentAnnualControlReport;
 use App\Models\LocationBusinessEntity;
 use App\Models\LocationEmergencyEquipment;
@@ -12,6 +13,7 @@ use App\Services\Ai\YscReportParser;
 use App\Services\EmergencyEquipmentAnnualControlService;
 use App\Services\Matching\MatchingEngine;
 use App\Services\Matching\YscMatchingProfile;
+use App\Services\YscAnnualControlSaveService;
 use Illuminate\Http\JsonResponse;
 
 class EmergencyEquipmentAnnualControlController extends Controller
@@ -19,6 +21,30 @@ class EmergencyEquipmentAnnualControlController extends Controller
     public function __construct(
         private EmergencyEquipmentAnnualControlService $service
     ) {
+    }
+
+    // Tek upload akışının (fire-suppression analyze/review ekranı) "Kaydet"
+    // adımı: rapor tipi AI tarafından "ysc" olarak sınıflandığında, aynı
+    // table_shape/Camelot çıktısı (equipment + control_items, DÜZ diziler -
+    // bkz. StoreFireSuppressionReportRequest ile AYNI şekil) buraya gelir ve
+    // FireSuppressionReport yerine YSC alan modeline (LocationEmergencyEquipment
+    // + EmergencyEquipmentAnnualControlReport) yazılır.
+    public function storeFromAnalysis(
+        StoreYscAnnualControlFromAnalysisRequest $request,
+        LocationBusinessEntity $locationBusinessEntity,
+        YscAnnualControlSaveService $saveService
+    ): JsonResponse {
+        $report = $saveService->save(
+            $locationBusinessEntity,
+            $request->validated(),
+            $request->file('file'),
+            $request->user()
+        );
+
+        return response()->json([
+            'message' => 'Yıllık kontrol raporu (YSC) kaydedildi.',
+            'data' => $report,
+        ], 201);
     }
 
     // AI destekli ön-analiz — hiçbir şey kaydetmez, sadece taslak döner.

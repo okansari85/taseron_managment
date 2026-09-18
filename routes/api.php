@@ -145,6 +145,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'index']);
             Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls', [EmergencyEquipmentAnnualControlController::class, 'store']);
             Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls/analyze', [EmergencyEquipmentAnnualControlController::class, 'analyze']);
+            Route::post('location-business-entities/{locationBusinessEntity}/emergency-equipment-annual-controls/from-analysis', [EmergencyEquipmentAnnualControlController::class, 'storeFromAnalysis']);
             Route::get('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'show']);
             Route::delete('emergency-equipment-annual-controls/{annualControlReport}', [EmergencyEquipmentAnnualControlController::class, 'destroy']);
             Route::get('location-business-entities/{locationBusinessEntity}/field-findings', [FieldFindingController::class, 'index']);

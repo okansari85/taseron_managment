@@ -84,6 +84,14 @@ class AnalyzeFireSuppressionReportJob implements ShouldQueue
             $progress->stage($this->analysisId, 'tables', 'Gemini şablonu + Camelot tablo verileri birleştiriliyor (bu adım biraz sürebilir)');
             $tables = $normalizer->normalize($absolutePath, $semantic);
 
+            // Gemini'nin bu PDF için belirlediği rapor tipi (tekli_ekipman /
+            // ysc / yangin_tesisati / yangin_algilama) - normalizer'ın kendi
+            // çıktı şeklinden bağımsız olarak burada taşınıyor, çünkü bu
+            // alan bir extraction sonucu değil, frontend'in "Kaydet"
+            // adımında HANGİ backend'e (fire-suppression vs YSC) gideceğine
+            // karar vermesi için bir yönlendirme bilgisi.
+            $tables['report_category'] = $semantic['extracted_data']['report_category'] ?? null;
+
             $progress->stage($this->analysisId, 'ai_result', 'Template Discovery çıktısı hazır', null, [
                 'ai_semantic' => $semantic,
             ]);
