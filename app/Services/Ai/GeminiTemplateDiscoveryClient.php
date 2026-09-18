@@ -93,6 +93,19 @@ class GeminiTemplateDiscoveryClient
             'required' => ['key', 'label_patterns'],
         ];
 
+        // extracted_data.report_information / .facility_information: 'key'
+        // must be one of the keys already declared in the matching
+        // template.*.fields[].key list; 'value' is the REAL text read off
+        // the page for that field (null if genuinely absent/illegible).
+        $extractedField = [
+            'type' => 'object',
+            'properties' => [
+                'key' => ['type' => 'string'],
+                'value' => $nullableString,
+            ],
+            'required' => ['key', 'value'],
+        ];
+
         $controlItem = [
             'type' => 'object',
             'properties' => [
@@ -103,60 +116,94 @@ class GeminiTemplateDiscoveryClient
             'required' => ['control_code_patterns', 'control_text_patterns', 'result_patterns'],
         ];
 
+        // A single, closed vocabulary for "what role does this column/row
+        // play" - unlike table_structure.orientation / camelot_extraction.
+        // block_detection below (plain free-text strings), Gemini has used
+        // DIFFERENT wording for the SAME underlying shape across different
+        // reports ("table_grid" vs "repeating_horizontal_matrix" vs
+        // "table_rows" all meaning "equipment repeats"), which made those
+        // fields unusable as a dispatch key. `enum` here constrains Gemini to
+        // these exact 4 role names, so ONE generic parser can place cells
+        // correctly regardless of the report's own layout - Camelot still
+        // does all the actual cell reading, Gemini only describes the shape,
+        // so its own JSON output stays small even for a 300-row equipment
+        // table (it never lists the equipment itself, only the column plan).
+        $tableShapeColumn = [
+            'type' => 'object',
+            'properties' => [
+                'role' => ['type' => 'string', 'enum' => ['identity', 'property', 'result', 'note']],
+                // The AUTHORITATIVE way to find this column: its 0-based
+                // physical position in the header row, counting every column
+                // left to right (first column = 0). Short header labels like
+                // "U.", "U.D.", "N.U." are text-substrings of each other
+                // (matching "U." against a "U.D." cell would wrongly succeed)
+                // - position never has that ambiguity, so the parser locates
+                // columns by this index FIRST and only falls back to
+                // header_patterns text search when column_index is missing
+                // (older captures).
+                'column_index' => ['type' => 'integer'],
+                'header_patterns' => $stringArray,
+                // property: the key this value should be stored under.
+                // result: which normalized status this column/row stands for.
+                // identity/note: leave both null.
+                'key' => ['type' => ['string', 'null']],
+                // result role only:
+                // - one of the 3 fixed values: this column is its OWN
+                //   dedicated status (checkbox-style, e.g. separate "U." /
+                //   "U.D." / "N.U." columns - a mark anywhere in THIS column
+                //   means that fixed status).
+                // - null: this is the ONLY result column and its cell TEXT
+                //   itself varies per row (e.g. a single "Durum" column
+                //   containing the literal text "U" / "UD" / "N" per row) -
+                //   the parser reads the raw cell text per row instead of a
+                //   fixed value; the existing result-normalizer already
+                //   recognizes these short codes.
+                'value' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                // property only: some reports pack SEVERAL distinct properties
+                // into one compound column header (e.g. "Dolap Bilgileri
+                // (Makarası - Tipi - Makara Bağlantısı - Vana Tipi)" - one
+                // header, one cell per row, but 4 real properties separated by
+                // dashes). List the sub-property names here, in the SAME order
+                // they appear in the header text, and the generic parser splits
+                // each row's cell by its dash/newline separators into that many
+                // parts. Leave empty when the column is a single plain
+                // property (the common case).
+                'sub_keys' => $stringArray,
+            ],
+            'required' => ['role', 'column_index', 'header_patterns', 'key', 'value', 'sub_keys'],
+        ];
+        $tableShape = [
+            'type' => 'object',
+            'properties' => [
+                // rows: one equipment instance per table ROW, named columns.
+                // columns: one equipment instance per table COLUMN (a shared
+                //   header row lists the instances, e.g. several Dolap side by
+                //   side), named rows.
+                // separate_blocks: each instance is its OWN small lattice
+                //   table (e.g. one pump's own label:value grid), not a
+                //   shared table at all.
+                // none: exactly one piece of equipment, no repetition.
+                'instance_axis' => ['type' => 'string', 'enum' => ['rows', 'columns', 'separate_blocks', 'none']],
+                'header_row_patterns' => $stringArray,
+                'columns' => ['type' => 'array', 'items' => $tableShapeColumn],
+            ],
+            'required' => ['instance_axis', 'header_row_patterns', 'columns'],
+        ];
+
+        // equipment_identity / table_structure / camelot_extraction (the
+        // pre-table_shape pattern-guessing fields) were removed once
+        // table_shape (rows/none axis) and extracted_data.equipment
+        // (direct-read, for small/idiosyncratic groups) together proved
+        // sufficient for every report format tested - keeping them around
+        // only cost Gemini output tokens for fields nothing reads anymore.
         $equipment = [
             'type' => 'object',
             'properties' => [
                 'equipment_name' => ['type' => 'string'],
                 'system_name' => ['type' => 'string'],
-                'equipment_identity' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'header_patterns' => $stringArray,
-                        'identity_patterns' => $stringArray,
-                    ],
-                    'required' => ['header_patterns', 'identity_patterns'],
-                ],
-                'table_structure' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'orientation' => ['type' => 'string'],
-                        'repeating_block' => ['type' => 'boolean'],
-                        'left_column' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'header_patterns' => $stringArray,
-                                'label_patterns' => $stringArray,
-                                'cell_patterns' => $stringArray,
-                            ],
-                            'required' => ['header_patterns', 'label_patterns', 'cell_patterns'],
-                        ],
-                        'right_column' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'header_patterns' => $stringArray,
-                                'value_patterns' => $stringArray,
-                                'cell_patterns' => $stringArray,
-                            ],
-                            'required' => ['header_patterns', 'value_patterns', 'cell_patterns'],
-                        ],
-                    ],
-                    'required' => ['orientation', 'repeating_block', 'left_column', 'right_column'],
-                ],
-                'camelot_extraction' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'equipment_header_patterns' => $stringArray,
-                        'system_section_patterns' => $stringArray,
-                        'left_column_patterns' => $stringArray,
-                        'right_column_patterns' => $stringArray,
-                        'value_location' => ['type' => 'string'],
-                        'block_detection' => ['type' => 'string'],
-                        'scope' => ['type' => 'string'],
-                    ],
-                    'required' => ['equipment_header_patterns', 'system_section_patterns', 'left_column_patterns', 'right_column_patterns', 'value_location', 'block_detection', 'scope'],
-                ],
+                'table_shape' => $tableShape,
             ],
-            'required' => ['equipment_name', 'system_name', 'equipment_identity', 'table_structure', 'camelot_extraction'],
+            'required' => ['equipment_name', 'system_name', 'table_shape'],
         ];
 
         $matrix = [
@@ -371,8 +418,71 @@ class GeminiTemplateDiscoveryClient
                                 'required' => ['id', 'system_name', 'description', 'source_pages'],
                             ],
                         ],
+                        // Report/company/facility info is always a handful of
+                        // fixed fields regardless of report length (never grows
+                        // with row count the way equipment/control_items can) -
+                        // safe for Gemini to read and report the REAL value
+                        // directly, instead of only a pattern for Camelot to
+                        // chase through an ambiguous grid (label/value column
+                        // adjacency has proven unreliable there). 'key' must
+                        // match one of the keys already declared in
+                        // template.report_information.fields / .facility_or_
+                        // project_information.fields.
+                        'report_information' => [
+                            'type' => 'array',
+                            'items' => $extractedField,
+                        ],
+                        'facility_information' => [
+                            'type' => 'array',
+                            'items' => $extractedField,
+                        ],
+                        // Same reasoning as report_information above: the
+                        // final verdict is always one short paragraph + one
+                        // status word, never grows with report length - read
+                        // it directly instead of a label/status pattern chase
+                        // through the conclusion table (which has repeatedly
+                        // broken on section-heading variance, e.g. "SONUÇ:"
+                        // vs "SONUÇ VE KANAAT"). 'status' uses the SAME closed
+                        // 3-value vocabulary as table_shape's result role.
+                        'overall_result' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'text' => $nullableString,
+                                'status' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                            ],
+                            'required' => ['text', 'status'],
+                        ],
+                        // Direct read for a SMALL, boundedly-countable equipment
+                        // group (e.g. a pump room with 2-4 pumps) - Gemini
+                        // actually looks at the table and reports the real
+                        // values, the same trust level as report_information
+                        // above. This is NOT for dolap/hidrant-style groups
+                        // that can run into the hundreds - those MUST stay
+                        // structure-only via equipment[].table_shape, or
+                        // Gemini's own output stops being small regardless of
+                        // report length. Use this specifically when a table's
+                        // layout is too idiosyncratic for a generic structural
+                        // rule to generalize (e.g. a "proje değeri / uygulama
+                        // değeri" split column where only one sub-value is
+                        // real) - something an AI reading the page can resolve
+                        // instantly but no fixed column-role scheme can.
+                        'equipment' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'system_name' => ['type' => 'string'],
+                                    'equipment_name' => ['type' => 'string'],
+                                    'code' => $nullableString,
+                                    'properties' => ['type' => 'array', 'items' => $extractedField],
+                                    'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                                    'source_pages' => $integerArray,
+                                ],
+                                'required' => ['system_name', 'equipment_name', 'code', 'properties', 'result', 'source_pages'],
+                            ],
+                        ],
                     ],
-                    'required' => ['findings'],
+                    'required' => ['findings', 'report_information', 'facility_information', 'overall_result', 'equipment'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],

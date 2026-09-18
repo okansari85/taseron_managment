@@ -1189,7 +1189,27 @@ class FireSuppressionUnifiedNormalizer
         }
 
         $value = mb_strtolower(trim((string) $value), 'UTF-8');
+        // Turkish capital "İ" doesn't lowercase to a plain "i" - mb_strtolower
+        // turns it into "i" + a combining dot above (U+0307), TWO codepoints.
+        // That invisible extra character silently breaks any small fixed-
+        // width gap in a regex below (e.g. "DEĞİLDİR" -> "deği̇ldir", where
+        // the combining dot eats one of the 2 characters a ".{0,2}" gap
+        // allows before "ld", so it never reaches "ld" and the whole
+        // "uygun değil" phrase check misses - falling through to the bare
+        // "uygun" check and wrongly reporting the OPPOSITE compliance
+        // result). Strip it right after lowercasing so every check below
+        // sees plain, predictable "i"s regardless of capitalization.
+        $value = preg_replace('/\x{0307}/u', '', $value) ?? $value;
         if ($value === '') return null;
+
+        // Already-canonical output (e.g. from a source that names the status
+        // directly instead of a raw report code, like table_shape's own
+        // "result" columns) must short-circuit here - the phrase regexes
+        // below need whitespace between words ("uygun değil") and would
+        // otherwise treat "uygun_degil"'s underscore as a \w character,
+        // matching the bare "uygun" branch and silently flipping it back to
+        // the wrong status.
+        if (in_array($value, ['uygun', 'uygun_degil', 'uygulanamiyor'], true)) return $value;
 
         // Tek/çift harfli kısaltmalar farklı raporlarda nokta/eğik çizgi/tire
         // ile de yazılabiliyor ("U.D", "U/D", "U-D", "N/A") - kısaltma
@@ -1210,7 +1230,9 @@ class FireSuppressionUnifiedNormalizer
         // bu kodu taşıyan TÜM maddelerin kriter metni bu tesise uygulanamaz
         // koşullu senaryolar ("LPG ikmal istasyonlarında...", "...su
         // sistemine bağlı ise..." gibi) - "Uy(gulanamıyor)" kısaltması.
-        if (in_array($compact, ['n', 'na', 'uy', 'uygulanamaz', 'uygulanamıyor', 'uygulanamiyor'], true)) {
+        // "N.U." (Numuneye Uygulanamaz) gazlı söndürme raporlarında görülen
+        // ayrı bir varyant - aynı bucket.
+        if (in_array($compact, ['n', 'na', 'nu', 'uy', 'uygulanamaz', 'uygulanamıyor', 'uygulanamiyor'], true)) {
             return 'uygulanamiyor';
         }
         // A longer status sentence ("... kullanımı uygun değildir.") or one

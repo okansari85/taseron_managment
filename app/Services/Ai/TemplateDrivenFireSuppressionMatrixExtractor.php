@@ -54,9 +54,6 @@ class TemplateDrivenFireSuppressionMatrixExtractor
         $controlCodePatterns = $this->patterns($camelotTemplate['control_code_patterns'] ?? []);
         $controlLabelPatterns = $this->patterns($camelotTemplate['control_label_patterns'] ?? []);
         $resultPatterns = $this->patterns($camelotTemplate['result_cell_patterns'] ?? []);
-        foreach ((array) ($system['equipment'] ?? []) as $equipment) {
-            if (is_array($equipment)) $equipmentHeaderPatterns = array_merge($equipmentHeaderPatterns, $this->patterns($equipment['camelot_extraction']['equipment_header_patterns'] ?? []));
-        }
         $equipmentHeaderPatterns = array_values(array_unique($equipmentHeaderPatterns));
         if (!$equipmentHeaderPatterns || !$controlCodePatterns || !$resultPatterns) return [];
 

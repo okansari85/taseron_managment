@@ -17,8 +17,38 @@ class TemplateDrivenFireSuppressionExtractor
 
         $template = is_array($semantic['template'] ?? null) ? $semantic['template'] : [];
         $systems = (array) ($template['fire_systems']['systems'] ?? []);
-        $allSystemSectionPatterns = $this->collectSystemSectionPatterns($systems);
         $extractedSystems = [];
+
+        // Gemini-direct equipment (extracted_data.equipment) - real values it
+        // read itself for a SMALL, boundedly-countable group (e.g. 2-4 pumps
+        // with an idiosyncratic "proje değeri / uygulama değeri" split column
+        // no fixed structural rule generalizes well). Grouped by system_name
+        // so a system with a direct-read group skips table_shape/legacy
+        // entirely for it - trust the AI's own reading over a structural
+        // guess when the AI already did the reading.
+        $directEquipmentBySystem = [];
+        foreach ((array) ($semantic['extracted_data']['equipment'] ?? []) as $directItem) {
+            if (!is_array($directItem)) continue;
+            $directSystemName = $this->string($directItem['system_name'] ?? null);
+            if ($directSystemName === null) continue;
+            $properties = [];
+            foreach ((array) ($directItem['properties'] ?? []) as $propertyEntry) {
+                if (!is_array($propertyEntry)) continue;
+                $propertyKey = $this->string($propertyEntry['key'] ?? null);
+                $propertyValue = $this->string($propertyEntry['value'] ?? null);
+                if ($propertyKey === null || $propertyValue === null) continue;
+                $properties[$propertyKey] = $this->cleanValue($propertyValue);
+            }
+            $directEquipmentBySystem[$directSystemName][] = [
+                'code' => $this->string($directItem['code'] ?? null),
+                'name' => $this->string($directItem['equipment_name'] ?? null),
+                'system_name' => $directSystemName,
+                'properties' => $properties,
+                'result' => $this->string($directItem['result'] ?? null),
+                'note' => null,
+                'source_pages' => array_values(array_unique(array_filter(array_map('intval', (array) ($directItem['source_pages'] ?? []))))),
+            ];
+        }
 
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
@@ -27,36 +57,116 @@ class TemplateDrivenFireSuppressionExtractor
 
             $controlTemplates = (array) ($system['control_items'] ?? []);
             $equipment = [];
-            foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
-                if (!is_array($equipmentTemplate)) continue;
-                $orientation = mb_strtolower(trim((string) ($equipmentTemplate['table_structure']['orientation'] ?? '')), 'UTF-8');
-                $extractedEquipment = $orientation === 'vertical_key_value'
-                    ? $this->extractVerticalKeyValueEquipment($latticeTables, $equipmentTemplate)
-                    : $this->extractHorizontalEquipment(
-                        $latticeTables,
-                        $equipmentTemplate,
-                        $controlTemplates,
-                        $system['section_heading_patterns'] ?? [],
-                        $allSystemSectionPatterns
-                    );
-                foreach ($extractedEquipment as $item) {
-                    $equipment[] = $item;
+
+            if (isset($directEquipmentBySystem[$systemName])) {
+                $equipment = $directEquipmentBySystem[$systemName];
+            } else {
+                // table_shape is the sole, authoritative structure
+                // declaration (role: identity/property/result/note) - one
+                // generic reader for any rows/none-axis layout. A bounded,
+                // idiosyncratically-laid-out equipment group (e.g. a pump
+                // room) is expected to arrive via extracted_data.equipment
+                // (the direct-read branch above) instead of here. There is
+                // deliberately no further fallback: an equipment group that
+                // is neither table_shape rows/none NOR direct-read simply
+                // yields no equipment for now, rather than guessing via
+                // heuristics that have repeatedly mismatched across reports.
+                foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
+                    if (!is_array($equipmentTemplate)) continue;
+                    foreach ($this->extractEquipmentFromTableShape($latticeTables, $equipmentTemplate) as $item) {
+                        $equipment[] = $item;
+                    }
                 }
+            }
+
+            $resultAxis = (array) ($system['control_matrix']['axis_detection']['result_axis'] ?? []);
+
+            $controlItems = $this->extractControls($latticeTables, $controlTemplates, $resultAxis);
+
+            // extractRowBasedEquipment() carries each row's OWN result (a
+            // per-equipment aggregate judgment, e.g. one dolap = one U/U.D./
+            // N.U. mark) rather than a separate per-criterion control_items
+            // section - synthesize one equipment-scoped control_item per such
+            // result so it flows through the SAME compliance pipeline as
+            // every other equipment (buildEquipmentEntry() matches on
+            // scope=equipment + equipment=code) instead of a parallel path.
+            //
+            // A source report can (data-entry mistake) reuse the same
+            // identity code for two different pieces of equipment (e.g. the
+            // same "Tüp No" printed on two different extinguisher rows) -
+            // a plain 'EQP-<code>' control code would then collide and
+            // FireSuppressionUnifiedNormalizer::normalizeControls() dedupes
+            // by code, silently DROPPING the second occurrence entirely
+            // (undercounting control_items). Suffix only on an actual repeat
+            // so the common, non-duplicated case keeps the clean 'EQP-<code>'.
+            $codeOccurrences = [];
+            foreach ($equipment as $item) {
+                $code = $item['code'] ?? null;
+                $result = $item['result'] ?? null;
+                if ($code === null || $result === null) continue;
+
+                $occurrence = $codeOccurrences[$code] ?? 0;
+                $codeOccurrences[$code] = $occurrence + 1;
+                $controlCode = 'EQP-' . $code . ($occurrence > 0 ? '#' . ($occurrence + 1) : '');
+
+                $controlItems[] = [
+                    'code' => $controlCode,
+                    'criterion' => $item['note'] ?? null,
+                    'scope' => 'equipment',
+                    'equipment' => $code,
+                    'result' => $result,
+                    'source_pages' => $item['source_pages'] ?? [],
+                ];
             }
 
             $extractedSystems[] = [
                 'system_name' => $systemName,
                 'equipment' => $equipment,
-                'control_items' => $this->extractControls($latticeTables, $controlTemplates),
+                'control_items' => $controlItems,
             ];
+        }
+
+        // report_information / facility_information: Gemini reads these small,
+        // fixed-size sections directly and reports the REAL value (see
+        // GeminiTemplateDiscoveryClient's extracted_data.report_information /
+        // .facility_information) - no Camelot grid/label-adjacency guessing
+        // needed, unlike equipment/control_items which can grow unbounded with
+        // report length. Older fixtures captured before this existed won't
+        // have it, so fall back to the legacy Camelot-pattern extraction only
+        // when Gemini's real-value list is empty.
+        $reportInformation = $this->extractedFieldValues($semantic['extracted_data']['report_information'] ?? []);
+        if (!$reportInformation) {
+            $reportInformation = $this->extractReportInformation($allTables, (array) ($template['report_information']['fields'] ?? []));
+        }
+        $facilityInformation = $this->extractedFieldValues($semantic['extracted_data']['facility_information'] ?? []);
+        if (!$facilityInformation) {
+            $facilityInformation = $this->extractFacilityInformation($allTables, (array) ($template['facility_or_project_information'] ?? []));
+        }
+
+        // Same reasoning as report_information above: Gemini reads the final
+        // verdict paragraph directly (extracted_data.overall_result), which
+        // sidesteps both the Camelot table-boundary heuristics AND the raw-text
+        // regex fallback (FireSuppressionOverallResultFallback) - those stay in
+        // place below/in the normalizer only for older fixtures that don't have
+        // this field. Only trust it when it actually carries a status; a
+        // text-only/empty value isn't useful and should still fall through.
+        $overallResult = (array) ($semantic['extracted_data']['overall_result'] ?? []);
+        $overallStatus = $this->string($overallResult['status'] ?? null);
+        if ($overallStatus === null) {
+            $overallResult = $this->extractOverallResult($allTables, (array) ($template['overall_result'] ?? []));
+        } else {
+            $overallResult = array_filter([
+                'text' => $this->string($overallResult['text'] ?? null),
+                'status' => $overallStatus,
+            ], fn ($value) => $value !== null);
         }
 
         $result = [
             'extracted_data' => [
-                'report_information' => $this->extractReportInformation($allTables, (array) ($template['report_information']['fields'] ?? [])),
-                'facility_or_project_information' => $this->extractFacilityInformation($allTables, (array) ($template['facility_or_project_information'] ?? [])),
+                'report_information' => $reportInformation,
+                'facility_or_project_information' => $facilityInformation,
                 'fire_systems' => $extractedSystems,
-                'overall_result' => $this->extractOverallResult($allTables, (array) ($template['overall_result'] ?? [])),
+                'overall_result' => $overallResult,
                 'findings' => (array) ($semantic['extracted_data']['findings'] ?? []),
             ],
         ];
@@ -67,328 +177,310 @@ class TemplateDrivenFireSuppressionExtractor
         return $result;
     }
 
-    private function extractHorizontalEquipment(
-        array $tables,
-        array $template,
-        array $controlTemplates = [],
-        array $currentSectionPatterns = [],
-        array $allSystemSectionPatterns = []
-    ): array {
-        // camelot_extraction.equipment_header_patterns is sometimes filled with the
-        // SECTION heading (e.g. "7.1. YANGIN DOLABI LİSTESİ") instead of the actual
-        // in-table column header that introduces the equipment codes (e.g. "Dolap
-        // No") - that never matches any table row, so no header row is ever found
-        // and every row gets silently skipped. equipment_identity.header_patterns is
-        // meant for exactly this and has proven reliable across different reports,
-        // so merge it in as a fallback/complement rather than trusting only one field.
-        $headerPatterns = array_values(array_unique(array_merge(
-            array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['equipment_header_patterns'] ?? [])))),
-            array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['header_patterns'] ?? [])))),
-        )));
-        // Same reliability gap as above: camelot_extraction.left_column_patterns can
-        // be an incomplete subset of table_structure.left_column.label_patterns (a
-        // real label missing from one but present in the other) - merge both rather
-        // than picking one via ?? and silently losing whichever labels only the
-        // other one has.
-        $labelPatterns = array_values(array_unique(array_merge(
-            array_values(array_filter(array_map('strval', (array) ($template['camelot_extraction']['left_column_patterns'] ?? [])))),
-            array_values(array_filter(array_map('strval', (array) ($template['table_structure']['left_column']['label_patterns'] ?? []))))
-        )));
-        if (!$headerPatterns || !$labelPatterns) return [];
+    // Reads equipment straight from Gemini's declared table_shape (role:
+    // identity/property/result/note) instead of guessing between several
+    // shape-specific heuristics below. Gemini describes the STRUCTURE only
+    // (fixed-size output regardless of row count); Camelot already supplied
+    // the actual cell text; this method is the "place these cells into the
+    // structure AI described" step - one generic reader for any layout.
+    //
+    // "separate_blocks" (each instance is its own small table) has no
+    // proven real-world case yet and isn't handled - returns [] for now.
+    private function extractEquipmentFromTableShape(array $tables, array $template): array
+    {
+        $shape = (array) ($template['table_shape'] ?? []);
+        $axis = mb_strtolower(trim((string) ($shape['instance_axis'] ?? '')), 'UTF-8');
+        $roleColumns = (array) ($shape['columns'] ?? []);
+        if ($axis === '' || !$roleColumns) return [];
 
-        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
+        if ($axis === 'none') return $this->extractShapeSingle($tables, $roleColumns, $template);
+        if ($axis === 'columns') return $this->extractEquipmentFromColumns($tables, $shape, $roleColumns, $template);
+        if ($axis !== 'rows') return [];
 
-        $controlCodePatterns = [];
-        foreach ($controlTemplates as $control) {
-            foreach ((array) ($control['control_code_patterns'] ?? []) as $pattern) {
-                $pattern = trim((string) $pattern);
-                if ($pattern !== '') $controlCodePatterns[] = $pattern;
-            }
-        }
-        $currentSectionPatterns = array_values(array_filter(array_map('strval', (array) $currentSectionPatterns)));
-        $allSystemSectionPatterns = array_values(array_filter(array_map('strval', (array) $allSystemSectionPatterns)));
+        $headerPatterns = $this->patterns($shape['header_row_patterns'] ?? []);
+        if (!$headerPatterns) return [];
 
         $items = [];
-        $currentHeader = [];
-        // Equipment numbering can legitimately restart at 1 in a new block (e.g.
-        // a new building/location section) - codes are NOT guaranteed unique
-        // across the whole document. Key items by (block, code) internally so a
-        // later block's "1" doesn't silently overwrite an earlier block's "1";
-        // the output 'code' field itself stays the plain, unprefixed value.
-        $blockIndex = 0;
         foreach ($tables as $table) {
-            foreach ($this->matrix($table) as $row) {
-                if (!$row) continue;
-                $rowText = $this->rowText($row);
+            $grid = $this->matrix($table);
+            if (!$grid) continue;
 
-                if ($allSystemSectionPatterns && $this->matchesAny($rowText, $allSystemSectionPatterns)) {
-                    $isCurrentSection = !$currentSectionPatterns || $this->matchesAny($rowText, $currentSectionPatterns);
-                    if (!$isCurrentSection) {
-                        $currentHeader = [];
+            foreach ($grid as $headerRowIndex => $row) {
+                if (!$this->matchesAny($this->rowText($row), $headerPatterns)) continue;
+
+                // Locate each declared column by its POSITION (column_index)
+                // first - exact, unambiguous, immune to the text-overlap trap
+                // where a short header like "U." is literally a substring of
+                // "U.D." and "N.U.". A roleDef missing column_index (older
+                // capture, before this field existed) falls back to
+                // resolveColumnRole()'s collapsed-exact-first matching below.
+                $columnRoles = [];
+                $unresolvedRoleDefs = [];
+                foreach ($roleColumns as $roleDef) {
+                    if (!is_array($roleDef)) continue;
+                    $columnIndex = $roleDef['column_index'] ?? null;
+                    if (is_int($columnIndex) && $columnIndex >= 0 && array_key_exists($columnIndex, $row)) {
+                        $columnRoles[$columnIndex] = $roleDef;
+                    } else {
+                        $unresolvedRoleDefs[] = $roleDef;
+                    }
+                }
+                if ($unresolvedRoleDefs) {
+                    foreach ($row as $column => $cellValue) {
+                        if (array_key_exists($column, $columnRoles)) continue;
+                        $winner = $this->resolveColumnRole((string) $cellValue, $unresolvedRoleDefs);
+                        if ($winner === null) continue;
+                        $columnRoles[(int) $column] = $winner;
+                        $unresolvedRoleDefs = array_values(array_udiff(
+                            $unresolvedRoleDefs,
+                            [$winner],
+                            fn ($a, $b) => $a === $b ? 0 : 1
+                        ));
+                    }
+                }
+
+                $identityColumn = null;
+                $propertyColumns = [];
+                $resultColumns = [];
+                $noteColumn = null;
+                foreach ($columnRoles as $column => $roleDef) {
+                    $role = (string) ($roleDef['role'] ?? '');
+                    if ($role === 'identity' && $identityColumn === null) { $identityColumn = (int) $column; continue; }
+                    if ($role === 'property') {
+                        $propertyColumns[(int) $column] = [
+                            'key' => $this->string($roleDef['key'] ?? null) ?? $this->cleanValue((string) ($row[$column] ?? '')),
+                            'sub_keys' => $this->patterns($roleDef['sub_keys'] ?? []),
+                        ];
                         continue;
                     }
+                    // value===null here is a DELIBERATE dynamic marker (a
+                    // single "Durum"-style column whose cell text varies per
+                    // row, e.g. "U"/"UD"/"N"), not "unset" - the data-row loop
+                    // below reads the raw cell text instead of a fixed value.
+                    if ($role === 'result') { $resultColumns[(int) $column] = $this->string($roleDef['value'] ?? null); continue; }
+                    if ($role === 'note' && $noteColumn === null) { $noteColumn = (int) $column; continue; }
                 }
+                if ($identityColumn === null || (!$propertyColumns && !$resultColumns)) continue;
 
-                if ($controlCodePatterns && $this->rowContainsControlCode($row, $controlCodePatterns)) {
-                    $currentHeader = [];
-                    continue;
-                }
+                $found = false;
+                for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
+                    $dataRow = $grid[$r];
+                    $identityValue = trim((string) ($dataRow[$identityColumn] ?? ''));
+                    if ($identityValue === '' || $identityValue === '-') continue;
+                    if ($this->matchesAny($identityValue, $headerPatterns)) break;
 
-                $headerColumn = $this->findPatternColumn($row, $headerPatterns);
-                if ($headerColumn !== null) {
-                    $header = $this->headerFromRow($row, $headerColumn, $template);
-                    // A genuine repeating-block header always establishes several
-                    // equipment codes at once (5 typically, at least 2 for a
-                    // trailing partial block) - a header candidate with only ONE
-                    // matching column is too fragile to trust (e.g. a location cell
-                    // that happens to be nothing but "1", coincidentally short
-                    // enough to pass the word-count check above) and is more likely
-                    // a coincidence than a real header row.
-                    if (count($header) >= 2) { $currentHeader = $header; $blockIndex++; continue; }
-                    // A pattern meant to flag the header row can, in some reports,
-                    // ALSO legitimately label a genuine per-item data row (e.g.
-                    // "Bulunduğu Yer" both marks context and holds real location
-                    // text per item). If no equipment identity codes were actually
-                    // found here, this wasn't really a header row - fall through and
-                    // process it as data instead of silently discarding it.
-                }
-
-                if (!$currentHeader) continue;
-
-                $labelColumn = $this->findPatternColumn($row, $labelPatterns);
-                if ($labelColumn === null) continue;
-
-                // A row whose own data values ALL look like equipment identity
-                // codes themselves (e.g. a repeating "Soru / Kriter" sub-header
-                // whose "values" are a meaningless running row counter, not real
-                // per-item content) is a structural/duplicate artifact, not
-                // genuine data - skip it rather than recording those numbers as a
-                // bogus property. A real property (brand, location, a measurement)
-                // won't look like a set of equipment codes.
-                if ($this->rowLooksLikeIdentityCodes($row, $currentHeader, $labelColumn, $identityPatterns)) continue;
-                $label = $this->cleanValue((string) $row[$labelColumn]);
-                foreach ($currentHeader as $column => $codes) {
-                    if ($column <= $labelColumn) continue;
-                    $value = trim((string) ($row[$column] ?? ''));
-                    if ($value === '' || $value === '-') continue;
-                    // A header cell can list the SAME code twice as two distinct
-                    // physical columns (a real data-entry duplicate in the source,
-                    // e.g. "...17 18 18 19..." - two separate dolaplar both marked
-                    // "18"). Key by column position too, not just block+code, so
-                    // two same-valued columns in the same block never collide.
-                    foreach ($codes as $code) {
-                        $key = $this->itemKey($template, $blockIndex . '#' . $column . '#' . $code);
-                        $items[$key]['code'] = $code;
-                        $items[$key]['name'] = $this->string($template['equipment_name'] ?? null);
-                        $items[$key]['system_name'] = $this->string($template['system_name'] ?? null);
-                        $items[$key]['properties'][$label] = $this->cleanValue($value);
-                        $items[$key]['source_pages'][] = (int) ($table['page'] ?? 0);
+                    $properties = [];
+                    foreach ($propertyColumns as $column => $propertyDef) {
+                        $value = trim((string) ($dataRow[$column] ?? ''));
+                        if ($value === '' || $value === '-') continue;
+                        $this->assignPropertyValue($properties, $propertyDef['key'], $propertyDef['sub_keys'], $value);
                     }
+
+                    $result = null;
+                    foreach ($resultColumns as $column => $value) {
+                        $cellText = trim((string) ($dataRow[$column] ?? ''));
+                        if ($cellText === '') continue;
+                        // dynamic (value===null): pass the raw per-row code
+                        // through as-is (e.g. "UD") - FireSuppressionUnified
+                        // Normalizer::normalizeResult() downstream already
+                        // recognizes these short U/UD/N-style codes.
+                        $result = $value !== null ? $value : $this->cleanValue($cellText);
+                        break;
+                    }
+
+                    $note = null;
+                    if ($noteColumn !== null) {
+                        $noteValue = trim((string) ($dataRow[$noteColumn] ?? ''));
+                        if ($noteValue !== '' && $noteValue !== '-') $note = $this->cleanValue($noteValue);
+                    }
+
+                    if (!$properties && $result === null && $note === null) continue;
+
+                    $items[] = [
+                        'code' => $this->cleanValue($identityValue),
+                        'name' => $this->string($template['equipment_name'] ?? null),
+                        'system_name' => $this->string($template['system_name'] ?? null),
+                        'properties' => $properties,
+                        'result' => $result,
+                        'note' => $note,
+                        'source_pages' => array_values(array_unique(array_filter([(int) ($table['page'] ?? 0)]))),
+                    ];
+                    $found = true;
                 }
+                if ($found) break;
             }
         }
-        foreach ($items as &$item) $item['source_pages'] = array_values(array_unique(array_filter(array_map('intval', (array) ($item['source_pages'] ?? [])))));
-        unset($item);
-        return array_values($items);
-    }
 
-    /**
-     * "vertical_key_value" orientation: each equipment instance is its own small
-     * lattice table (a paired label:value grid, e.g. "Marka | CLARKE | Tip - Model | DİZEL"
-     * on one row, "Pompa Seri No | 1" on another), not a shared table with one column per
-     * equipment. Gemini's equipment_identity.identity_patterns lists the instances in
-     * reading order (e.g. "1 NUMARALI POMPA", "2 NUMARALI POMPA", "JOKEY POMPA") - each
-     * matching lattice table is paired with the identity pattern at the same position,
-     * in top-to-bottom document order.
-     */
-    private function extractVerticalKeyValueEquipment(array $latticeTables, array $template): array
-    {
-        $leftLabels = array_values(array_filter(array_map('strval', (array) (
-            $template['camelot_extraction']['left_column_patterns']
-            ?? $template['table_structure']['left_column']['label_patterns']
-            ?? []
-        ))));
-        $rightLabels = array_values(array_filter(array_map('strval', (array) (
-            $template['camelot_extraction']['right_column_patterns']
-            ?? $template['table_structure']['right_column']['header_patterns']
-            ?? []
-        ))));
-        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
-        if (!$leftLabels || !$identityPatterns) return [];
-
-        $valueLabels = array_values(array_unique(array_merge($leftLabels, $rightLabels)));
-
-        $blocks = [];
-        foreach ($latticeTables as $table) {
-            $rows = $this->matrix($table);
-            if (!$rows) continue;
-            $firstLabel = $this->cleanValue((string) ($rows[0][0] ?? ''));
-            if (!$this->matchesAny($firstLabel, $leftLabels)) continue;
-
-            // A table can coincidentally start with one of our labels (e.g. a
-            // diesel-pump fuel-tank table also has "Marka" as its first row) without
-            // actually being one of this equipment's blocks - require most of the
-            // declared LEFT (label) column patterns to actually show up in the
-            // block before accepting it. Deliberately checked against $leftLabels
-            // only, not the merged $valueLabels: the right column's patterns are
-            // often a bare wildcard (".*", matching any value cell by design), and
-            // counting against that would count every row as "matched" regardless
-            // of whether it's really this equipment's own label.
-            $matchedLabels = 0;
-            foreach ($rows as $row) {
-                for ($column = 0; $column + 1 < count($row); $column += 2) {
-                    $label = $this->cleanValue((string) ($row[$column] ?? ''));
-                    if ($label !== '' && $this->matchesAny($label, $leftLabels)) $matchedLabels++;
-                }
-            }
-            if ($matchedLabels < max(2, (int) ceil(count($leftLabels) / 2))) continue;
-
-            $blocks[] = ['table' => $table, 'rows' => $rows, 'y' => (float) ($table['bbox'][1] ?? 0)];
-        }
-        if (!$blocks) return [];
-
-        usort($blocks, function (array $a, array $b): int {
-            $pageA = (int) ($a['table']['page'] ?? 0);
-            $pageB = (int) ($b['table']['page'] ?? 0);
-            if ($pageA !== $pageB) return $pageA <=> $pageB;
-            return $b['y'] <=> $a['y']; // higher y = closer to the page top = read first
-        });
-
-        // A non-numeric identity pattern (e.g. "JOKEY POMPA") repeats the equipment's own
-        // name as a word inside it - strip whatever the template calls this equipment
-        // (from equipment_name, not a hardcoded word) to leave just the distinguishing
-        // part ("JOKEY"), so this works for any equipment type/vendor wording.
-        $equipmentNameTokens = array_values(array_filter(
-            preg_split('/\s+/u', mb_strtoupper((string) ($template['equipment_name'] ?? ''), 'UTF-8')) ?: []
-        ));
-
-        $codes = [];
-        foreach ($identityPatterns as $pattern) {
-            if (preg_match('/(\d+)/u', $pattern, $match) === 1) { $codes[] = $match[1]; continue; }
-            // Gemini may express the identity pattern as a self-anchored regex
-            // (e.g. "^Jokey$") rather than a literal phrase - strip the anchors
-            // before treating what's left as the code, or they leak into the
-            // final output verbatim.
-            $remaining = mb_strtoupper(preg_replace('/^\^|\$$/u', '', $pattern) ?? $pattern, 'UTF-8');
-            foreach ($equipmentNameTokens as $token) {
-                $remaining = trim(preg_replace('/\b' . preg_quote($token, '/') . '\b/ui', '', $remaining) ?? $remaining);
-            }
-            $codes[] = $remaining !== '' ? $remaining : trim($pattern);
-        }
-
-        $items = [];
-        foreach ($blocks as $index => $block) {
-            $code = $codes[$index] ?? (string) ($index + 1);
-            $properties = [];
-            foreach ($block['rows'] as $row) {
-                for ($column = 0; $column + 1 < count($row); $column += 2) {
-                    $label = $this->cleanValue((string) ($row[$column] ?? ''));
-                    $value = trim((string) ($row[$column + 1] ?? ''));
-                    if ($label === '' || $value === '' || $value === '-') continue;
-                    if (!$this->matchesAny($label, $valueLabels)) continue;
-                    $properties[$label] = $this->cleanValue($value);
-                }
-            }
-            if (!$properties) continue;
-            $items[] = [
-                'code' => $code,
-                'name' => $this->string($template['equipment_name'] ?? null),
-                'system_name' => $this->string($template['system_name'] ?? null),
-                'properties' => $properties,
-                'source_pages' => array_values(array_unique(array_filter([(int) ($block['table']['page'] ?? 0)]))),
-            ];
-        }
         return $items;
     }
 
-    private function rowLooksLikeIdentityCodes(array $row, array $currentHeader, int $labelColumn, array $identityPatterns): bool
+    // instance_axis=none: a single piece of equipment, declared as
+    // property/note roles only (no identity, no repetition).
+    private function extractShapeSingle(array $tables, array $roleColumns, array $template): array
     {
-        if (!$identityPatterns) return false;
-        $checked = 0;
-        foreach ($currentHeader as $column => $codes) {
-            if ($column <= $labelColumn) continue;
-            $value = trim((string) ($row[$column] ?? ''));
-            if ($value === '' || $value === '-') continue;
-            $checked++;
-            if (!$this->matchesAny($value, $identityPatterns)) return false;
+        $propertyPatterns = [];
+        $notePatterns = [];
+        foreach ($roleColumns as $roleDef) {
+            if (!is_array($roleDef)) continue;
+            $patterns = $this->patterns($roleDef['header_patterns'] ?? []);
+            if (!$patterns) continue;
+            if (($roleDef['role'] ?? '') === 'property') $propertyPatterns[] = ['patterns' => $patterns, 'key' => $this->string($roleDef['key'] ?? null), 'sub_keys' => $this->patterns($roleDef['sub_keys'] ?? [])];
+            elseif (($roleDef['role'] ?? '') === 'note') $notePatterns = array_merge($notePatterns, $patterns);
         }
-        return $checked > 0;
-    }
+        if (!$propertyPatterns) return [];
 
-    private function headerFromRow(array $row, int $headerColumn, array $template): array
-    {
-        $header = [];
-        $identityPatterns = array_values(array_filter(array_map('strval', (array) ($template['equipment_identity']['identity_patterns'] ?? []))));
-        foreach ($row as $column => $value) {
-            if ((int) $column <= $headerColumn) continue;
-            // A genuine identity cell IS the code (maybe with a short prefix, e.g.
-            // "62-63-...-74" or "YD 5") - reject a cell that's really a multi-word
-            // sentence with a number merely embedded in it (e.g. "TV FABRİKA E 5
-            // GİRİŞ TARAFI", "SOLAR BİNA KAT 1" - a location mentioning a floor or
-            // door number). Otherwise property/location rows get mistaken for a
-            // fresh header row and wrongly reset the real one mid-block.
-            $wordCount = count(preg_split('/\s+/u', trim((string) $value)) ?: []);
-            if ($wordCount > 2) continue;
-            $tokens = $this->expandEquipmentCodes((string) $value, $identityPatterns);
-            if ($tokens) $header[(int) $column] = $tokens;
-        }
-        return $header;
-    }
-
-    private function expandEquipmentCodes(string $value, array $identityPatterns = []): array
-    {
-        $value = trim(str_replace(["\n", "\r"], ' ', $value));
-        if ($value === '' || $value === '-') return [];
-        // A dash-joined numeric list/range can be broken across a PDF line-wrap right
-        // after a dash (e.g. "62-63-...-69- 70-71-...-74"); collapse that first so the
-        // whole sequence stays one token instead of two truncated halves.
-        $value = preg_replace('/-\s+/u', '-', $value) ?? $value;
-        $tokens = [];
-        foreach (preg_split('/\s+/u', $value) ?: [] as $token) {
-            $token = trim($token, " ,;");
-            if ($token === '') continue;
-            if ($identityPatterns && $this->matchesAny($token, $identityPatterns)) {
-                foreach ($this->expandNumericCodeSequence($token) as $code) $tokens[] = $code;
-                continue;
-            }
-            if (!$identityPatterns && preg_match('/^\d+(?:-\d+)*$/u', $token)) {
-                foreach ($this->expandNumericCodeSequence($token) as $code) $tokens[] = $code;
+        $properties = [];
+        $note = null;
+        $sourcePages = [];
+        foreach ($tables as $table) {
+            foreach ($this->matrix($table) as $row) {
+                if (!$row) continue;
+                foreach ($row as $labelColumn => $cellValue) {
+                    foreach ($propertyPatterns as $propertyDef) {
+                        if (!$this->matchesAny((string) $cellValue, $propertyDef['patterns'])) continue;
+                        $value = $this->nextNonEmpty($row, (int) $labelColumn + 1);
+                        if ($value === null) break;
+                        $key = $propertyDef['key'] ?? $this->cleanValue((string) $cellValue);
+                        $this->assignPropertyValue($properties, $key, $propertyDef['sub_keys'], $value);
+                        $sourcePages[] = (int) ($table['page'] ?? 0);
+                        break;
+                    }
+                    if ($notePatterns && $this->matchesAny((string) $cellValue, $notePatterns)) {
+                        $value = $this->nextNonEmpty($row, (int) $labelColumn + 1);
+                        if ($value !== null) $note = $this->cleanValue($value);
+                    }
+                }
             }
         }
-        return array_values(array_unique($tokens));
+        if (!$properties) return [];
+
+        return [[
+            'code' => null,
+            'name' => $this->string($template['equipment_name'] ?? null),
+            'system_name' => $this->string($template['system_name'] ?? null),
+            'properties' => $properties,
+            'result' => null,
+            'note' => $note,
+            'source_pages' => array_values(array_unique(array_filter($sourcePages))),
+        ]];
     }
 
-    /**
-     * A token like "62-63-64-...-74" already lists every code (dash used as a
-     * separator between consecutive items) - split it into its numbers as-is. A
-     * token with exactly two dash-joined numbers, e.g. "10-20", is a range
-     * shorthand meaning every code from the first to the second inclusive.
-     * A token without a dash-joined numeric sequence (e.g. "YD1", "Jokey") is
-     * returned unchanged.
-     */
-    private function expandNumericCodeSequence(string $token): array
+    // instance_axis=columns: equipment instances sit side by side across
+    // COLUMNS of a shared table (e.g. "No / Kod | | YD1 | YD2 | ... |
+    // YD10"), with each subsequent ROW being a property/result/note that
+    // applies to every instance at once (e.g. a "Kat" row, a "Marka" row).
+    // The axes are the transpose of instance_axis=rows: here $roleColumns
+    // entries are located by ROW (their own label cell matched via
+    // resolveColumnRole(), no column_index needed - row labels like "Kat"/
+    // "Marka" aren't short overlapping codes the way "U."/"U.D."/"N.U."
+    // column headers are), and each instance's value is read from ITS OWN
+    // column, found once from the header row.
+    private function extractEquipmentFromColumns(array $tables, array $shape, array $roleColumns, array $template): array
     {
-        if (preg_match('/^([A-ZÇĞİÖŞÜa-z]*)(\d+(?:-\d+)+)$/u', $token, $match) !== 1) {
-            return [$token];
-        }
-        $prefix = $match[1];
-        $numbers = array_values(array_filter(explode('-', $match[2]), fn ($part) => $part !== ''));
-        if (count($numbers) < 2) return [$token];
+        $headerPatterns = $this->patterns($shape['header_row_patterns'] ?? []);
+        if (!$headerPatterns) return [];
 
-        if (count($numbers) === 2) {
-            [$start, $end] = array_map('intval', $numbers);
-            if ($start > $end) [$start, $end] = [$end, $start];
-            $expanded = [];
-            for ($number = $start; $number <= $end; $number++) $expanded[] = $prefix . $number;
-            return $expanded;
+        // The header row can repeat multiple times (e.g. a new 5-or-10-wide
+        // block of instances starting fresh on each page) - accumulate every
+        // block found instead of stopping at the first, or later blocks
+        // silently go missing.
+        $allItems = [];
+        foreach ($tables as $table) {
+            $grid = $this->matrix($table);
+            if (!$grid) continue;
+
+            foreach ($grid as $headerRowIndex => $row) {
+                if (!$this->matchesAny($this->rowText($row), $headerPatterns)) continue;
+
+                // The first cell matching header_row_patterns is this row's
+                // OWN label (e.g. "No / Kod"); every OTHER non-empty cell in
+                // the SAME row is one equipment instance's identity, at that
+                // column position.
+                $labelColumn = null;
+                $instanceColumns = [];
+                foreach ($row as $column => $cellValue) {
+                    $cellValue = trim((string) $cellValue);
+                    if ($cellValue === '') continue;
+                    if ($labelColumn === null && $this->matchesAny($cellValue, $headerPatterns)) { $labelColumn = (int) $column; continue; }
+                    $instanceColumns[(int) $column] = $cellValue;
+                }
+                if ($labelColumn === null || !$instanceColumns) continue;
+
+                $items = [];
+                foreach ($instanceColumns as $column => $identity) {
+                    $items[$column] = [
+                        'code' => $this->cleanValue($identity),
+                        'name' => $this->string($template['equipment_name'] ?? null),
+                        'system_name' => $this->string($template['system_name'] ?? null),
+                        'properties' => [],
+                        'result' => null,
+                        'note' => null,
+                        'source_pages' => [(int) ($table['page'] ?? 0)],
+                    ];
+                }
+
+                for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
+                    $dataRow = $grid[$r];
+                    $rowLabel = null;
+                    foreach ($dataRow as $cellValue) {
+                        $cellValue = trim((string) $cellValue);
+                        if ($cellValue !== '') { $rowLabel = $cellValue; break; }
+                    }
+                    if ($rowLabel === null) continue;
+                    // A later occurrence of the header row (a new block, e.g.
+                    // the next page's set of instances) ends this block.
+                    if ($this->matchesAny($rowLabel, $headerPatterns)) break;
+
+                    $roleDef = $this->resolveColumnRole($rowLabel, $roleColumns);
+                    if ($roleDef === null) continue;
+                    $role = (string) ($roleDef['role'] ?? '');
+                    if (!in_array($role, ['property', 'result', 'note'], true)) continue;
+
+                    foreach ($instanceColumns as $column => $identity) {
+                        $value = trim((string) ($dataRow[$column] ?? ''));
+                        if ($value === '' || $value === '-') continue;
+                        if ($role === 'property') {
+                            $key = $this->string($roleDef['key'] ?? null) ?? $rowLabel;
+                            $this->assignPropertyValue($items[$column]['properties'], $key, $this->patterns($roleDef['sub_keys'] ?? []), $value);
+                        } elseif ($role === 'result' && $items[$column]['result'] === null) {
+                            $fixedValue = $this->string($roleDef['value'] ?? null);
+                            $items[$column]['result'] = $fixedValue ?? $this->cleanValue($value);
+                        } elseif ($role === 'note' && $items[$column]['note'] === null) {
+                            $items[$column]['note'] = $this->cleanValue($value);
+                        }
+                    }
+                }
+
+                foreach ($items as $item) {
+                    if ($item['properties'] || $item['result'] !== null || $item['note'] !== null) {
+                        $allItems[] = $item;
+                    }
+                }
+            }
         }
 
-        return array_map(static fn ($number) => $prefix . $number, $numbers);
+        return $allItems;
     }
 
-private function extractControls(array $tables, array $controlTemplates): array
+private function extractControls(array $tables, array $controlTemplates, array $resultAxis = []): array
 {
     $out = [];
+
+    // Some reports mark the result by WHICH of several fixed columns (e.g. "U" /
+    // "U.D" / "N.U.") holds a mark, using the SAME generic glyph (e.g. "✓") in
+    // every column - the glyph itself carries no information about which result
+    // it means, only its column position does. Gemini's result_axis tells us
+    // this is the case (location=columns, patterns=the distinguishing column
+    // labels in left-to-right order) - when so, precompute each table's result
+    // column groups ONCE so the per-code scan below can resolve the real
+    // column-specific label instead of accepting the ambiguous glyph as-is.
+    $columnLabels = array_values(array_filter(array_map('strval', (array) ($resultAxis['patterns'] ?? []))));
+    $resultColumnsByTable = [];
+    if (($resultAxis['location'] ?? null) === 'columns' && count($columnLabels) >= 2) {
+        foreach ($tables as $tableIndex => $table) {
+            $resultColumnsByTable[$tableIndex] = $this->resultColumnBlocks($this->matrix($table), $columnLabels);
+        }
+    }
 
     foreach ($controlTemplates as $control) {
         if (!is_array($control)) continue;
@@ -403,10 +495,11 @@ private function extractControls(array $tables, array $controlTemplates): array
 
         if (!$codePatterns) continue;
 
-        foreach ($tables as $table) {
+        foreach ($tables as $tableIndex => $table) {
 
             // EKLENDİ
             $cells = (array) ($table['cells'] ?? []);
+            $resultColumns = $resultColumnsByTable[$tableIndex] ?? [];
 
             // rowIndex EKLENDİ
             foreach ($this->matrix($table) as $rowIndex => $row) {
@@ -421,7 +514,11 @@ private function extractControls(array $tables, array $controlTemplates): array
 
                     if ($code === null) continue;
 
-                    $result = null;
+                    // Column-position result takes priority over the plain
+                    // rightward text scan below - it disambiguates a shared
+                    // glyph, while the scan below would just grab whichever
+                    // column happens to come first.
+                    $result = $resultColumns ? $this->resultFromColumnBlock($row, (int) $columnIndex, $resultColumns) : null;
 
                     // Scan forward from this code's own column only - a row can hold
                     // more than one code/criterion/result group side by side (e.g.
@@ -430,7 +527,7 @@ private function extractControls(array $tables, array $controlTemplates): array
                     // of this one's. Stop as soon as another cell looks like a control
                     // code itself - that means we've crossed into the next group
                     // without finding this code's own result.
-                    for ($resultIndex = (int) $columnIndex + 1; $resultIndex < count($row); $resultIndex++) {
+                    for ($resultIndex = (int) $columnIndex + 1; $result === null && $resultIndex < count($row); $resultIndex++) {
                         $candidate = (string) ($row[$resultIndex] ?? '');
 
                         if ($this->matchControlCode($candidate, $codePatterns) !== null) {
@@ -478,7 +575,48 @@ private function extractControls(array $tables, array $controlTemplates): array
     return array_values($out);
 }
 
+// Finds every occurrence of a "result columns" header in the grid (a cell
+// whose text is exactly the FIRST column label, e.g. "U") and, from each,
+// claims the next count($columnLabels) columns as that block's result
+// columns in the declared left-to-right order. A report can lay out several
+// such blocks side by side on the same rows (e.g. two checklist halves) -
+// each becomes its own independent block rather than one shared column set.
+private function resultColumnBlocks(array $grid, array $columnLabels): array
+{
+    $blocks = [];
+    $seenStarts = [];
+    foreach ($grid as $row) {
+        foreach ($row as $column => $value) {
+            if ($this->normalizeLabel((string) $value) !== $this->normalizeLabel($columnLabels[0])) continue;
+            if (isset($seenStarts[$column])) continue;
+            $seenStarts[$column] = true;
+            $columns = [];
+            foreach ($columnLabels as $offset => $label) $columns[(int) $column + $offset] = $label;
+            $blocks[] = ['start' => (int) $column, 'columns' => $columns];
+        }
+    }
+    usort($blocks, static fn (array $a, array $b): int => $a['start'] <=> $b['start']);
+    return $blocks;
+}
 
+// Resolves a control code's actual result by picking the block whose result
+// columns sit immediately to the right of the code (the block that row
+// segment belongs to, when several blocks share the same rows) and
+// returning whichever of ITS columns actually holds a mark.
+private function resultFromColumnBlock(array $row, int $codeColumn, array $blocks): ?string
+{
+    $chosen = null;
+    foreach ($blocks as $block) {
+        if ($block['start'] <= $codeColumn) continue;
+        if ($chosen === null || $block['start'] < $chosen['start']) $chosen = $block;
+    }
+    if ($chosen === null) return null;
+
+    foreach ($chosen['columns'] as $column => $label) {
+        if (trim((string) ($row[$column] ?? '')) !== '') return $label;
+    }
+    return null;
+}
 
 private function findCriterionFromCells(
     array $cells,
@@ -876,19 +1014,6 @@ private function findCriterionFromCells(
         return false;
     }
 
-    private function collectSystemSectionPatterns(array $systems): array
-    {
-        $patterns = [];
-        foreach ($systems as $system) {
-            if (!is_array($system)) continue;
-            foreach ((array) ($system['section_heading_patterns'] ?? []) as $pattern) {
-                $pattern = trim((string) $pattern);
-                if ($pattern !== '') $patterns[] = $pattern;
-            }
-        }
-        return array_values(array_unique($patterns));
-    }
-
     private function extractReportInformation(array $tables, array $fieldTemplates): array
     {
         // Report header info (Rapor No, Ünvanı, ...) lives in a 'stream' table for
@@ -1115,6 +1240,58 @@ private function findCriterionFromCells(
         return array_values(array_map(fn ($row) => array_map(fn ($value) => trim((string) $value), (array) $row), (array) ($table['data'] ?? [])));
     }
 
+    // table_shape header-role fallback for a roleDef with no column_index
+    // (older capture). No regex anywhere: both tiers compare plain,
+    // collapsed (regex-escapes and decorative punctuation like the
+    // abbreviation dots in "U." / "U.D." / "N.U." stripped out) text.
+    // Tier 1 - EXACT match - resolves short, mutually-substring-like codes
+    // unambiguously (otherwise "U." would look "contained in" "U.D."/"N.U."
+    // and wrongly bind to whichever is declared first). Only if NO roleDef
+    // exactly matches does tier 2 - plain str_contains() - run, which longer
+    // compound headers (e.g. "Dolap Bilgileri (Makarası - Tipi - ...)"
+    // matched by a shorter declared pattern) still need.
+    private function resolveColumnRole(string $cellValue, array $roleColumns): ?array
+    {
+        $collapsedValue = $this->collapseForMatch($cellValue);
+        if ($collapsedValue === '') return null;
+
+        foreach ($roleColumns as $roleDef) {
+            if (!is_array($roleDef)) continue;
+            foreach ($this->patterns($roleDef['header_patterns'] ?? []) as $pattern) {
+                if ($this->collapseForMatch($pattern) === $collapsedValue) return $roleDef;
+            }
+        }
+        // One direction only: the CELL text contains the (shorter) declared
+        // pattern - the real compound-header case. Never the reverse (a
+        // short cell "containing" a longer pattern is exactly the "U."
+        // inside "U.D."/"N.U." trap tier 1 exists to avoid).
+        foreach ($roleColumns as $roleDef) {
+            if (!is_array($roleDef)) continue;
+            foreach ($this->patterns($roleDef['header_patterns'] ?? []) as $pattern) {
+                $collapsedPattern = $this->collapseForMatch($pattern);
+                if ($collapsedPattern === '' || mb_strlen($collapsedPattern, 'UTF-8') > mb_strlen($collapsedValue, 'UTF-8')) continue;
+                if (str_contains($collapsedValue, $collapsedPattern)) return $roleDef;
+            }
+        }
+        return null;
+    }
+
+    // Reduces a header cell OR its regex-flavored declared pattern down to
+    // its bare comparable letters - no pattern search, only fixed literal
+    // replacement/removal. "\s*"/"\s+"/"\s" stands for a literal space in
+    // the real text (not the letter "s" - stripping just the backslash
+    // would leave a stray "s" with no counterpart in the real cell), so it
+    // is swapped for a space FIRST. Remaining regex escape/metacharacters
+    // and decorative punctuation (the abbreviation dots in "U.D."/"N.U.")
+    // are then removed, and finally ALL whitespace is dropped too, so
+    // "Dolap No." and "Dolap\s*No\." collapse to the identical "dolapno".
+    private function collapseForMatch(string $value): string
+    {
+        $value = str_replace(['\\s*', '\\s+', '\\s'], ' ', $value);
+        $value = str_replace(['\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '.'], '', $value);
+        return str_replace(' ', '', $this->normalizeLabel($value));
+    }
+
     private function matchesAny(string $value, array $patterns): bool
     {
         foreach ($patterns as $pattern) if ($this->regexMatches($pattern, $value)) return true;
@@ -1153,7 +1330,14 @@ private function findCriterionFromCells(
     {
         for ($i = $start; $i < count($row); $i++) {
             $value = trim((string) ($row[$i] ?? ''));
-            if ($value !== '' && $value !== '-') return $value;
+            if ($value === '') continue;
+            // A lone "-" is the report's own explicit "no value recorded" marker
+            // for THIS field - stop here and report no value, rather than
+            // skipping past it into the NEXT field's label/value (e.g. "İmal
+            // Yılı | - | Su Kaynağı | DEPO" wrongly returning "Su Kaynağı" as
+            // the manufacture year).
+            if ($value === '-') return null;
+            return $value;
         }
         return null;
     }
@@ -1191,15 +1375,64 @@ private function findCriterionFromCells(
         return null;
     }
 
-    private function itemKey(array $template, string $code): string
-    {
-        return $this->normalizeLabel((string) ($template['equipment_name'] ?? 'equipment')) . '|' . $code;
-    }
-
     private function string(mixed $value): ?string
     {
         if (!is_string($value)) return null;
         $value = trim($value);
         return $value === '' ? null : $value;
+    }
+
+    private function patterns(mixed $value): array
+    {
+        return array_values(array_filter(array_map('strval', (array) $value)));
+    }
+
+    // property role with declared sub_keys: some reports pack several
+    // distinct properties into ONE compound column (e.g. "Makarası - Tipi -
+    // Makara Bağlantısı - Vana Tipi"). Split the cell text by its
+    // dash/newline separators and assign each part to its sub-key IN
+    // ORDER - but only when the split actually produces exactly as many
+    // non-empty parts as declared; otherwise this particular row's value
+    // doesn't really match the expected shape and forcing a split would
+    // silently scramble it (e.g. a serial number that itself contains a
+    // dash), so keep it as one blob under the base key instead.
+    private function assignPropertyValue(array &$properties, string $key, array $subKeys, string $value): void
+    {
+        if (!$subKeys) {
+            $properties[$key] = $this->cleanValue($value);
+            return;
+        }
+
+        $normalized = preg_replace('/[\r\n]+/u', ' - ', $value) ?? $value;
+        $parts = array_values(array_filter(
+            array_map('trim', preg_split('/\s*[-–—]\s*/u', $normalized) ?: []),
+            fn ($part) => $part !== ''
+        ));
+
+        if (count($parts) !== count($subKeys)) {
+            $properties[$key] = $this->cleanValue($value);
+            return;
+        }
+
+        foreach ($subKeys as $index => $subKey) {
+            $properties[$subKey] = $this->cleanValue($parts[$index]);
+        }
+    }
+
+    // Converts extracted_data.report_information / .facility_information
+    // (an array of {key, value} pairs, Gemini's real-value output) into the
+    // flat assoc array the rest of the pipeline expects. A key with a null
+    // or blank value is dropped, not kept as an empty string.
+    private function extractedFieldValues(mixed $fields): array
+    {
+        $result = [];
+        foreach ((array) $fields as $field) {
+            if (!is_array($field)) continue;
+            $key = $this->string($field['key'] ?? null);
+            $value = $this->string($field['value'] ?? null);
+            if ($key === null || $value === null) continue;
+            $result[$key] = $value;
+        }
+        return $result;
     }
 }
