@@ -740,6 +740,16 @@ class FireSuppressionUnifiedNormalizer
             $normalizedSystems
         ))));
 
+        // AI already reads the report's own real "SONUÇ VE KANAAT" paragraph
+        // (extracted_data.overall_result.text) - normalizeResult() below
+        // reduces the {status, text} pair down to JUST the status for the
+        // compliance enum, which used to silently throw the real sentence
+        // away entirely (never reached the frontend, findings-empty reports
+        // had no verdict text anywhere to show/save). Keep it alongside the
+        // status instead of discarding it.
+        $overallResultRaw = $report['overall_result'] ?? ($data['overall_result'] ?? null);
+        $overallResultText = is_array($overallResultRaw) ? $this->stringOrNull($overallResultRaw['text'] ?? null) : null;
+
         return [
             'report' => [
                 'report_no' => $this->stringOrNull($report['report_no'] ?? $reportInfo['report_no'] ?? null),
@@ -747,9 +757,8 @@ class FireSuppressionUnifiedNormalizer
                 'report_date' => $this->dateOrNull($report['report_date'] ?? $reportInfo['report_date'] ?? null),
                 'control_date' => $this->dateOrNull($report['control_date'] ?? $reportInfo['control_date'] ?? null),
                 'next_control_date' => $this->dateOrNull($report['next_control_date'] ?? $reportInfo['validity_date'] ?? null),
-                'overall_result' => $this->normalizeResult(
-                    $report['overall_result'] ?? ($data['overall_result'] ?? null)
-                ),
+                'overall_result' => $this->normalizeResult($overallResultRaw),
+                'overall_result_text' => $overallResultText,
             ],
             'covered_categories' => $coveredCategories,
             'systems' => $normalizedSystems,

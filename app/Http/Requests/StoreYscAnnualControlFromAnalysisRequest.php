@@ -44,6 +44,14 @@ class StoreYscAnnualControlFromAnalysisRequest extends FormRequest
             'equipment.*.properties' => ['nullable', 'array'],
             'equipment.*.result' => ['nullable', 'string'],
             'equipment.*.note' => ['nullable', 'string'],
+            // Bu ekipmanın KENDİ kriterleri (örn. AKTAŞ'ta her tüp için 7
+            // madde) - FireSuppressionUnifiedNormalizer::buildEquipmentEntry()
+            // çıktısıyla aynı şekil (code/title/status), düz üst seviye
+            // control_items listesinden BAĞIMSIZ, tek gerçek kaynak burasıdır.
+            'equipment.*.control_items' => ['nullable', 'array'],
+            'equipment.*.control_items.*.code' => ['nullable', 'string'],
+            'equipment.*.control_items.*.title' => ['nullable', 'string'],
+            'equipment.*.control_items.*.status' => ['nullable', 'string'],
 
             'control_items' => ['required', 'array'],
             'control_items.*.code' => ['required', 'string'],

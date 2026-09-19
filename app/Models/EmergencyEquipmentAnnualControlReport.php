@@ -74,6 +74,15 @@ class EmergencyEquipmentAnnualControlReport extends Model
         return $this->hasMany(EmergencyEquipmentAnnualControlGeneralItem::class, 'report_id');
     }
 
+    // Tek bir ekipmana (tüpe) ait kriterler - örn. AKTAŞ formunun her tüp
+    // için tekrarlayan 7 sütunu. Pivot'un (equipment() ilişkisi) tek bir
+    // result/note alanı, ekipman başına birden fazla gerçek kriter olunca
+    // yetersiz kalıyor - bu ilişki granüler kırılımı taşır.
+    public function equipmentItems(): HasMany
+    {
+        return $this->hasMany(EmergencyEquipmentAnnualControlEquipmentItem::class, 'report_id');
+    }
+
     public function getFileUrlAttribute(): ?string
     {
         if (! $this->file_path) {

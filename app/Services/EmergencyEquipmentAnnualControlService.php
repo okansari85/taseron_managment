@@ -49,7 +49,7 @@ class EmergencyEquipmentAnnualControlService
     {
         $this->assertOwnership($report);
 
-        return $report->load(['equipment.equipmentType', 'uploadedByUser:id,name', 'generalItems']);
+        return $report->load(['equipment.equipmentType', 'uploadedByUser:id,name', 'generalItems', 'equipmentItems']);
     }
 
     public function create(LocationBusinessEntity $locationBusinessEntity, array $data, UploadedFile $file, ?User $actingUser): EmergencyEquipmentAnnualControlReport

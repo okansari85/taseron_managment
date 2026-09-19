@@ -44,8 +44,8 @@ AMAÇ
 PDF'nin gerçek yapısını keşfet. Önceden bildiğin bir firma şablonuna zorlamadan, Camelot'un sonraki aşamada gerçek rapor verilerini çıkarabilmesi için uygulanabilir bir okuma haritası üret.
 
 ÇIKTI TAM OLARAK İKİ ANA BÖLÜMDÜR
-1. template: PDF'den keşfedilen yapısal okuma haritası.
-2. extracted_data: report_category + findings + report_information + facility_information + overall_result + (SINIRLI sayıda ekipman varsa) equipment (bunlar GERÇEK değerlerdir, aşağıya bak).
+1. template: PDF'den keşfedilen yapısal okuma haritası (SADECE ekipman tabloları için - bkz. bölüm 5/5b).
+2. extracted_data: report_category + findings + report_information + facility_information + overall_result + systems (her sistemin GERÇEK, ekipmana bağlı olmayan kontrol kriterleri) + (SINIRLI sayıda ekipman varsa) equipment (bunlar GERÇEK değerlerdir, aşağıya bak).
 
 0. RAPOR TİPİ SINIFLANDIRMASI (extracted_data.report_category) — HER ŞEYDEN ÖNCE karar ver
 Bu sistemde 4 farklı rapor tipi var, aynı tek yükleme akışından geçiyorlar ama farklı hedeflere kaydediliyorlar. PDF'in HANGİ tipte olduğunu extracted_data.report_category'ye TAM OLARAK şu 4 değerden biriyle yaz:
@@ -56,9 +56,9 @@ Bu sistemde 4 farklı rapor tipi var, aynı tek yükleme akışından geçiyorla
 Emin olamadığın durumlarda raporun ana konusuna (tek makine mi, tüp listesi mi, çoklu sistem mi, algılama mı) bak ve en uygun olanı seç — bu alan HER ZAMAN doldurulmalı, null bırakılamaz.
 
 KESİN SINIR
-extracted_data içinde report_category, findings, report_information, facility_information, overall_result, equipment dışında hiçbir alan bulunamaz.
-AI extracted_data altında systems, components, control_items, results veya inventory verisi çıkarmayacak — bunlar HER RAPORDA satır sayısı büyüyebilen kısımlardır, Camelot template'teki yapı tarifine göre çıkaracaktır.
-report_information, facility_information ve overall_result HER raporda sabit boyutludur (birkaç alan / tek bir sonuç paragrafı) — büyüklüğü rapor uzunluğuyla ARTMAZ, bu yüzden gerçek değerini SEN (AI) doğrudan okuyup yazacaksın; Camelot'un belirsiz hücre-komşuluğu tahminine veya bölüm başlığı varyasyonlarına (SONUÇ: / SONUÇ VE KANAAT gibi) bırakmıyoruz.
+extracted_data içinde report_category, findings, report_information, facility_information, overall_result, systems, equipment dışında hiçbir alan bulunamaz.
+AI extracted_data altında components, results veya inventory verisi çıkarmayacak — bunlar EKİPMANA bağlı, rapor uzunluğuyla (ekipman sayısıyla) BÜYÜYEBİLEN kısımlardır, Camelot template'teki equipment[].table_shape tarifine göre çıkaracaktır (bölüm 5/5b).
+report_information, facility_information, overall_result VE systems[].control_items HER raporda sabit/sınırlı boyutludur (birkaç alan / bir sonuç paragrafı / sistem başına birkaç-birkaç-on kriter — ekipman SAYISIYLA değil sistem SAYISIYLA ölçeklenir) — büyüklüğü rapor uzunluğuyla ARTMAZ, bu yüzden gerçek değerini SEN (AI) doğrudan okuyup yazacaksın; Camelot'un belirsiz hücre-komşuluğu tahminine, pattern eşleştirmesine veya bölüm başlığı varyasyonlarına (SONUÇ: / SONUÇ VE KANAAT gibi) bırakmıyoruz.
 extracted_data.equipment İSTİSNAİDİR ve SADECE o equipment grubu gerçekten SINIRLI sayıda ise (bkz. bölüm 5) kullanılır — dolap/hidrant gibi potansiyel olarak çok sayıda olabilecek gruplar için KESİNLİKLE kullanma, onlar table_shape ile kalır.
 
 TEMPLATE İÇİNDE GERÇEK SİSTEM BAŞLIKLARI VE YAPISAL PATTERNLER BULUNABİLİR. Bunlar veri çıkarımı değil, Camelot'un doğru bölümü ve tabloyu bulması için keşfedilmiş şablon bilgisidir.
@@ -94,28 +94,25 @@ Her sistem için fire_systems.systems içine kayıt koy.
 Her kayıt:
 - system_name: PDF'deki gerçek sistem/bölüm adı
 - section_heading_patterns: o sistemi tanıyan gerçek bölüm başlığı patternleri
-- control_items: o sisteme ait kontrol kriterlerinin yapısı
-- equipment: o sisteme ait ekipmanların yapısı
-- control_matrix: sistemde kontrol x ekipman matrix'i varsa yapısı
+- equipment: o sisteme ait ekipmanların yapısı (SADECE SINIRSIZ/ÇOK OLABİLİR gruplar için table_shape - bkz. bölüm 5)
 - section_detection: sistemin başlangıç, devam ve bitiş patternleri
 
 Sistemleri PDF'de açıkça bulabiliyorsan systems listesini boş bırakma.
 Sistem adı gerçekten yoksa uydurma.
 Aynı sistem birden fazla sayfada devam ediyorsa devam patternlerini belirt.
 
-4. KONTROL MADDELERİ
-Her sistemin altında o sisteme ait kontrol maddelerinin patternlerini keşfet.
-- control_code_patterns: gerçek kontrol kodu patternleri
-- control_text_patterns: gerçek kriter/açıklama patternleri
-- result_patterns: PDF'de gerçekten görülen sonuç gösterimlerinin patternleri
+4. KONTROL MADDELERİ — ARTIK PATTERN DEĞİL, GERÇEK DEĞER
+Her sistemin EKİPMANA BAĞLI OLMAYAN kendi kontrol kriterlerini (örn. "Genel Tespit", "Belge ve Kayıt Kontrolleri" gibi bir bölümün maddeleri) template'e pattern olarak YAZMA — bunun yerine GERÇEK kod/kriter/sonuç değerlerini doğrudan SEN oku ve extracted_data.systems[] içine yaz:
+extracted_data.systems: [{"system_name": "<template'teki AYNI system_name>", "control_items": [{"code": "<PDF'deki gerçek kod>", "criterion": "<PDF'deki gerçek kriter metni, TAM/KISALTILMAMIŞ>", "result": "uygun"|"uygun_degil"|"uygulanamiyor"|null}]}]
 
-Kontrol kodlarını örneklerden üretme.
-Sonuç aliaslarını da varsayma.
+Bu liste HER raporda sabit/sınırlı boyutludur (bir sistemin kriter sayısı ekipman sayısıyla BÜYÜMEZ - 10 madde de olsa 40 madde de olsa senin için okuması aynı derecede ucuzdur), bu yüzden report_information/overall_result ile AYNI güvenle gerçek değeri doğrudan yazıyorsun - pattern/regex YAZMANA gerek YOK, bu da kendi çıktını küçültür.
 
-İSTİSNA — TEK EKİPMANLI RAPORLAR: Eğer rapor TEK bir ekipmanı konu alıyorsa (örn. bir forklift/transpalet raporunda "KONTROL KRİTERLERİ VE TESTLER" listesi ayrı bir tesis checklist'i değil, doğrudan o TEK makinenin muayenesidir), bu maddeleri BURADA (template.control_items) pattern olarak tarif ETME — bunun yerine bölüm 5'teki extracted_data.equipment[].control_items ile GERÇEK değerleri SEN oku (kod, kriter metni, sonuç). Az sayıda madde için ucuzdur ve Camelot'un bağlayacağı bir ekipmanı olmayan "asılı" bir checklist üretmekten çok daha güvenilirdir.
+Kod ve kriter metnini PDF'de GERÇEKTEN yazdığı gibi (kısaltmadan, uydurmadan) al. Sonuç net değilse null bırak, tahmin etme.
+Bir sistemin ekipmana bağlı olmayan kriteri yoksa (örn. sadece equipment[].table_shape ile okunan bir ekipman grubuysa) o sistem için control_items: [] bırak - systems listesinden sistemi ÇIKARMA, sadece control_items boş kalır.
 
-Kontrol kodu pattern'i birden fazla basamağı kapsayan bir sayı aralığını (örn. 38-52) tek regex ile ifade edecekse DİKKAT: onlar basamağını sabitleyip birler basamağına aralık verme — örn. [4-5][0-2] YANLIŞTIR, sadece 40,41,42,50,51,52'yi eşler, 43-49'u tamamen KAÇIRIR. Onluk sınırı aşan aralıkları basamak gruplarına böl: 38-52 için doğrusu ^5\.(?:3[8-9]|4[0-9]|5[0-2])$ (38-39 | 40-49 | 50-52) şeklindedir.
-Yazdığın control_code_patterns'ın gerçekte eşleştirdiği kod sayısı, aynı control_items içindeki control_text_patterns listesinin eleman sayısıyla eşit olmalıdır — kendi yazdığın pattern'i bu şekilde kontrol et, eşleşmiyorsa düzelt.
+ÖNEMLİ AYRIM — bir kriter EKİPMANA BAĞLI MI, SİSTEME Mİ AİT: Eğer bir kriter/sonuç HER TEK EKİPMAN ÖRNEĞİ için ayrı ayrı değerlendiriliyorsa (örn. "her tüpün kendi mühür durumu", "her dolabın kendi hortum durumu" - equipment tablosunun kendi satır/sütununda tekrarlanıyor) bu BURAYA (extracted_data.systems) YAZILMAZ, o equipment[].table_shape'in kendi result sütunlarından gelir (bkz. bölüm 5b). extracted_data.systems SADECE ekipmandan bağımsız, sistemin KENDİSİ için TEK SEFER değerlendirilen kriterleri taşır (örn. "önceki kontrol raporu var mı", "proje onaylı mı" gibi - tüm sistem için bir kez sorulur, ekipman başına tekrarlanmaz).
+
+İSTİSNA — TEK EKİPMANLI RAPORLAR: Eğer rapor TEK bir ekipmanı konu alıyorsa (örn. bir forklift/transpalet raporunda "KONTROL KRİTERLERİ VE TESTLER" listesi ayrı bir tesis checklist'i değil, doğrudan o TEK makinenin muayenesidir), bu maddeleri extracted_data.systems'a DEĞİL, bölüm 5'teki extracted_data.equipment[].control_items içine GERÇEK değerlerle yaz (kod, kriter metni, sonuç).
 
 5. EKİPMANLAR
 Her ekipmanın hangi sisteme ait olduğunu açıkça system_name alanında belirt.
@@ -178,32 +175,11 @@ table_shape: {
 (column_index=0 burada "No." sütunudur — tabloda gerçekten var ama columns listesine dahil edilmemiştir, çünkü kullanılan bir role karşılık gelmiyor. Yine de saymaya 0'dan başlanır, o sütun atlanmaz.)
 Bu SADECE ŞEKLİ gösterir — gerçek sütun sayısı, başlıkları, kaç "result" satırı olduğu ve hangi sütunun bileşik olduğu tamamen PDF'e göre değişir. instance_axis=none ise columns sadece "property"/"note" rolündeki alanları listeler (identity/result olmaz).
 
-6. KONTROL KRİTERİ × EKİPMAN MATRIX
-Bir sistemde kontrol kriterleri ile ekipmanların kesişiminde sonuç/durum hücreleri bulunuyorsa control_matrix.present=true yap.
-
-ÖNEMLİ: Eksen yönünü analiz et.
-- Ekipmanlar kolonlarda, kontrol kriterleri satırlarda olabilir.
-- Ekipmanlar satırlarda, kontrol kriterleri kolonlarda olabilir.
-- Başka bir düzen varsa onu tarif et.
-
-control_matrix.axis_detection altında gerçek yapıyı keşfet:
-- equipment_axis.axis = rows veya columns veya keşfedilen başka yön
-- control_axis.axis = rows veya columns veya keşfedilen başka yön
-- result_axis.location = kesişim/keşfedilen gerçek konum
-- patternleri PDF'den doldur
-
-control_matrix.matrix_relationship ile ekipman/kontrol/sonuç ilişkisini açıkça belirt.
-control_matrix.camelot_extraction ile Camelot'un tabloyu nasıl okuyacağını tarif et.
-
-Matrix yoksa present=false yap ama yapıyı yine geçerli şekilde döndür.
-
-control_matrix.present=true yapmadan önce kontrol et: kesişim hücrelerindeki değerler, o sistemin control_items.result_patterns içinde tanımladığın AYNI sonuç kelimeleriyle (U/UD/N/G gibi) mi eşleşiyor? Eşleşmiyorsa (marka adı, ölçü, konum gibi ekipman özellik değerleriyse) bu bir control_matrix DEĞİLDİR — düz bir ekipman envanter/özellik tablosudur. Bu durumda equipment[].table_shape ile (ya da SINIRLIysa extracted_data.equipment ile) tarif et, control_matrix.present=false bırak.
-
-7. TEKİL EKİPMAN TABLOLARI
+6. TEKİL EKİPMAN TABLOLARI
 Bir ekipman bölümü tek bir örnek içeriyorsa (ör. sol tarafta "Soru / Kriter", sağ tarafta tek bir değerler sütunu) bu, table_shape.instance_axis="none" durumudur — 5b'deki kurallara göre tarif et.
 Ekipmanın bağlı olduğu gerçek sistemi system_name ile yaz.
 
-8. SONUÇ VE KANAAT
+7. SONUÇ VE KANAAT
 template.overall_result bölümünde SADECE pattern/konum tarifini keşfet (section_heading_patterns, overall_text, overall_status, camelot_extraction) — gerçek metni/durumu template'e yazma.
 
 AYRICA: raporun nihai sonuç bölümünü ("SONUÇ VE KANAAT", "SONUÇ:", "8. SONUÇ VE KANAAT" gibi hangi başlıkla geçiyorsa) SEN oku ve extracted_data.overall_result içine gerçek değerleri yaz:
@@ -211,7 +187,7 @@ AYRICA: raporun nihai sonuç bölümünü ("SONUÇ VE KANAAT", "SONUÇ:", "8. SO
 - status: bu metnin ifade ettiği durum, SADECE şu 3 değerden biri: "uygun" | "uygun_degil" | "uygulanamiyor" (net değilse null; başka kelime uydurma)
 Bu, template'teki pattern tarifinden BAĞIMSIZ olarak senin PDF'i okuyup verdiğin gerçek cevaptır — raporun sonuç bölümü hangi başlıkla, hangi sayfa düzeniyle geçerse geçsin doğrudan sen çıkarıyorsun.
 
-9. FINDINGS
+8. FINDINGS
 Findings gerçek anlamsal bulgu/tespit/kusur/eksiklik/not metinlerinden çıkarılır.
 Her finding TAM OLARAK şu alanlara sahip olmalıdır:
 - id
@@ -231,7 +207,7 @@ Aynı bulguyu tekrar ediyorsa deduplicate et.
 U/UD/N veya başka sonuç hücrelerinden tek başına finding üretme.
 source_pages gerçek PDF sayfalarıdır.
 
-10. DİNAMİK TABLO PATTERNLERİ
+9. DİNAMİK TABLO PATTERNLERİ
 table_hints üretirken gerçek PDF'de gördüğün tablo başlıklarını ve kolon başlıklarını keşfet.
 Tablonun:
 - role
@@ -249,7 +225,7 @@ bilgilerini mümkün olduğunca doldur.
 
 Camelot için güvenilir bir bounding box metinden çıkarılamıyorsa uydurma koordinat verme.
 
-11. EVIDENCE
+10. EVIDENCE
 Önemli yapısal kararların dayanağını PDF sayfalarıyla açıkla:
 - sistem başlığı
 - sistem/tablo ilişkisi
@@ -259,11 +235,11 @@ Camelot için güvenilir bir bounding box metinden çıkarılamıyorsa uydurma k
 - tekrar eden blok
 - sayfa devamlılığı
 
-12. ÇIKARIM SINIRI
-Template yapısal keşif içindir.
-Kontrol maddeleri ve control_matrix gibi rapor uzunluğuyla BÜYÜYEBİLEN gerçek değerler Camelot'a bırakılır — bunları template'e sadece pattern olarak yaz.
-Ekipman için de aynı kural GEÇERLİDİR, TEK istisna: sayıca SINIRLI bir ekipman grubuysa (bölüm 5'e bak) gerçek değerlerini extracted_data.equipment'a yazabilirsin.
-AI semantic'in gerçek veri kısmı: findings + report_information + facility_information + overall_result + (sınırlıysa) equipment (bunlar HER raporda sabit boyutlu kısımlardır — birkaç alan ya da birkaç ekipman örneği, satır sayısıyla BÜYÜK ÖLÇÜDE büyümez).
+11. ÇIKARIM SINIRI
+Template SADECE ekipman tablolarının yapısal keşfi içindir (equipment[].table_shape).
+Ekipmana bağlı, rapor uzunluğuyla (ekipman SAYISIYLA) BÜYÜYEBİLEN gerçek değerler Camelot'a bırakılır — equipment[].table_shape ile SADECE yapı tarif edilir, TEK istisna: sayıca SINIRLI bir ekipman grubuysa (bölüm 5'e bak) gerçek değerlerini extracted_data.equipment'a yazabilirsin.
+Sisteme bağlı (ekipmandan bağımsız) kontrol kriterleri ARTIK pattern DEĞİL, gerçek değerdir (bölüm 4) - bunlar sistem SAYISIYLA ölçeklenir, ekipman sayısıyla değil, bu yüzden report_information ile aynı güvenle doğrudan okunur.
+AI semantic'in gerçek veri kısmı: findings + report_information + facility_information + overall_result + systems[].control_items + (sınırlıysa) equipment (bunlar HER raporda sabit/sınırlı boyutlu kısımlardır — ekipman SAYISIYLA BÜYÜK ÖLÇÜDE büyümez).
 
 13. SON JSON SÖZLEŞMESİ
 Çıktının yapısı tam olarak aşağıdaki sözleşmeye uymalıdır:
@@ -347,6 +323,19 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
       "text": "...",
       "status": "uygun"
     },
+    "systems": [
+      {
+        "system_name": "Belge ve Kayıt Kontrolleri",
+        "control_items": [
+          {"code": "5.1", "criterion": "Proje varlığı ve onayı", "result": "uygun"},
+          {"code": "5.2", "criterion": "Önceki periyodik kontrol raporu var mı?", "result": "uygun_degil"}
+        ]
+      },
+      {
+        "system_name": "Yangın Pompaları",
+        "control_items": []
+      }
+    ],
     "equipment": [
       {
         "system_name": "Yangın Pompaları",
@@ -377,7 +366,7 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
     ]
   }
 }
-(equipment dizisi SADECE sınırlı sayıda ekipman grupları için doludur - dolap/hidrant gibi grupları buraya YAZMA, boş bırak, onlar table_shape'ten gelir. control_items alt-dizisi de SADECE bu ekipmanın kendi muayene listesi varsa doludur - yukarıdaki pompa örneğinde olduğu gibi çoğu ekipmanda boş [] kalır.)
+(systems dizisi template.fire_systems.systems'teki HER sistem için bir kayıt içerir - control_items SADECE o sistemin ekipmandan bağımsız kendi kriterleri varsa doludur, yoksa [] kalır (yukarıdaki "Yangın Pompaları" örneğinde olduğu gibi - pompaların kendi ekipman bazlı kriterleri equipment[].control_items'tadır, systems'a YAZILMAZ). equipment dizisi SADECE sınırlı sayıda ekipman grupları için doludur - dolap/hidrant gibi grupları buraya YAZMA, boş bırak, onlar table_shape'ten gelir. control_items alt-dizisi de SADECE bu ekipmanın kendi muayene listesi varsa doludur - yukarıdaki pompa örneğinde olduğu gibi çoğu ekipmanda boş [] kalır.)
 
 SADECE geçerli JSON döndür. Markdown veya JSON dışı metin döndürme.
 PROMPT;

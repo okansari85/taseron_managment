@@ -26,6 +26,59 @@ class TemplateDrivenFireSuppressionExtractor
         // so a system with a direct-read group skips table_shape/legacy
         // entirely for it - trust the AI's own reading over a structural
         // guess when the AI already did the reading.
+        // Cells a table_shape reader has already claimed as an equipment
+        // instance's own identity/property/result/note column (keyed
+        // tableIndex -> row -> column). A system's own control_code_patterns
+        // can be as generic as bare "^1$".."^10$" (real Gemini output seen
+        // for a YSC report) which then ALSO matches an equipment table's
+        // identity column (e.g. "Tüp No" values 1-10) verbatim - without this
+        // guard extractControls() below would misread that equipment table's
+        // OWN cells as bogus "genel kriter" control items (code=Tüp No,
+        // criterion=nearest neighboring cell like "Cihaz Tipi"). Populated
+        // BEFORE extractControls() runs for the same tables.
+        $claimedCells = [];
+
+        // Gemini-direct system-level control items (extracted_data.systems) -
+        // real code/criterion/result values it read itself for a system's
+        // OWN (equipment-independent) checklist, e.g. "Genel Tespit" or
+        // "Belge ve Kayıt Kontrolleri". These are SMALL/BOUNDED per system
+        // (unlike equipment, which can run into the hundreds), so - same
+        // trust level as report_information/overall_result - Gemini reads
+        // the real values directly instead of declaring control_code_
+        // patterns/control_text_patterns for extractControls() below to
+        // pattern-match. This sidesteps a whole class of bugs repeatedly hit
+        // this session (bare-digit code patterns colliding with an unrelated
+        // equipment table's own identity column, code/text pattern COUNT
+        // mismatches producing garbled criteria, etc). Keyed by system_name;
+        // a system missing from this map (older fixture, captured before
+        // this field existed) falls back to the legacy pattern-based
+        // extractControls() path further below - never a hard requirement.
+        $directSystemControlItemsByName = [];
+        foreach ((array) ($semantic['extracted_data']['systems'] ?? []) as $directSystem) {
+            if (!is_array($directSystem)) continue;
+            $directSystemName = $this->string($directSystem['system_name'] ?? null);
+            if ($directSystemName === null) continue;
+            $items = [];
+            foreach ((array) ($directSystem['control_items'] ?? []) as $controlEntry) {
+                if (!is_array($controlEntry)) continue;
+                $controlCode = $this->string($controlEntry['code'] ?? null);
+                $criterion = $this->string($controlEntry['criterion'] ?? null);
+                if ($controlCode === null || $criterion === null) continue;
+                $items[] = [
+                    'code' => $controlCode,
+                    'criterion' => $criterion,
+                    'result' => $this->string($controlEntry['result'] ?? null),
+                    'source_pages' => [],
+                ];
+            }
+            // A system can legitimately have NO equipment-independent
+            // criteria (e.g. a system whose only data is its equipment
+            // table) - still record it (empty array) so the "isset" check
+            // below correctly skips the legacy pattern fallback for it too,
+            // rather than mistaking "AI found nothing" for "AI never looked".
+            $directSystemControlItemsByName[$directSystemName] = $items;
+        }
+
         $directEquipmentBySystem = [];
         foreach ((array) ($semantic['extracted_data']['equipment'] ?? []) as $directItem) {
             if (!is_array($directItem)) continue;
@@ -73,7 +126,6 @@ class TemplateDrivenFireSuppressionExtractor
             $systemName = $this->string($system['system_name'] ?? null);
             if ($systemName === null) continue;
 
-            $controlTemplates = (array) ($system['control_items'] ?? []);
             $equipment = [];
 
             if (isset($directEquipmentBySystem[$systemName])) {
@@ -91,15 +143,41 @@ class TemplateDrivenFireSuppressionExtractor
                 // heuristics that have repeatedly mismatched across reports.
                 foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
                     if (!is_array($equipmentTemplate)) continue;
-                    foreach ($this->extractEquipmentFromTableShape($latticeTables, $equipmentTemplate) as $item) {
+                    foreach ($this->extractEquipmentFromTableShape($latticeTables, $equipmentTemplate, $claimedCells) as $item) {
                         $equipment[] = $item;
                     }
                 }
             }
 
-            $resultAxis = (array) ($system['control_matrix']['axis_detection']['result_axis'] ?? []);
+            if (isset($directSystemControlItemsByName[$systemName])) {
+                $controlItems = $directSystemControlItemsByName[$systemName];
+            } else {
+                // Legacy fallback - older fixtures captured before AI
+                // direct-read system criteria existed still carry their own
+                // template.control_items/control_matrix declarations.
+                $controlTemplates = (array) ($system['control_items'] ?? []);
+                $resultAxis = (array) ($system['control_matrix']['axis_detection']['result_axis'] ?? []);
+                $controlItems = $this->extractControls($latticeTables, $controlTemplates, $resultAxis, $claimedCells);
+            }
 
-            $controlItems = $this->extractControls($latticeTables, $controlTemplates, $resultAxis);
+            // A per-tüp criteria column's own header text is often a short,
+            // physically-truncated excerpt of the real question (the PDF's
+            // 7-column table header has no room for the full sentence) - the
+            // SAME criterion usually also appears with its FULL wording as a
+            // system-level control_item (declared separately in the report's
+            // general checklist section, matched by control_code_patterns/
+            // control_text_patterns above) sharing the SAME leading code
+            // number. Prefer that longer text when synthesizing per-equipment
+            // criteria below, purely as a display improvement - never changes
+            // which result each criterion carries.
+            $fullCriterionByCode = [];
+            foreach ($controlItems as $existingItem) {
+                $normalizedCode = $this->normalizeCode((string) ($existingItem['code'] ?? ''));
+                $existingCriterion = $this->string($existingItem['criterion'] ?? null);
+                if ($normalizedCode === '' || $existingCriterion === null) continue;
+                if (isset($fullCriterionByCode[$normalizedCode]) && mb_strlen($fullCriterionByCode[$normalizedCode], 'UTF-8') >= mb_strlen($existingCriterion, 'UTF-8')) continue;
+                $fullCriterionByCode[$normalizedCode] = $existingCriterion;
+            }
 
             // extractRowBasedEquipment() carries each row's OWN result (a
             // per-equipment aggregate judgment, e.g. one dolap = one U/U.D./
@@ -136,9 +214,13 @@ class TemplateDrivenFireSuppressionExtractor
                         $codeOccurrences[$controlCode] = $occurrence + 1;
                         if ($occurrence > 0) $controlCode .= '#' . ($occurrence + 1);
 
+                        $ownCriterion = $this->string($controlEntry['criterion'] ?? null);
+                        $fullCriterion = $fullCriterionByCode[$this->normalizeCode((string) $controlEntry['code'])] ?? null;
+                        $criterion = ($fullCriterion !== null && ($ownCriterion === null || mb_strlen($fullCriterion, 'UTF-8') > mb_strlen($ownCriterion, 'UTF-8'))) ? $fullCriterion : $ownCriterion;
+
                         $controlItems[] = [
                             'code' => $controlCode,
-                            'criterion' => $controlEntry['criterion'],
+                            'criterion' => $criterion,
                             'scope' => 'equipment',
                             'equipment' => $code,
                             'result' => $controlEntry['result'],
@@ -249,7 +331,7 @@ class TemplateDrivenFireSuppressionExtractor
     //
     // "separate_blocks" (each instance is its own small table) has no
     // proven real-world case yet and isn't handled - returns [] for now.
-    private function extractEquipmentFromTableShape(array $tables, array $template): array
+    private function extractEquipmentFromTableShape(array $tables, array $template, array &$claimedCells = []): array
     {
         $shape = (array) ($template['table_shape'] ?? []);
         $axis = mb_strtolower(trim((string) ($shape['instance_axis'] ?? '')), 'UTF-8');
@@ -264,7 +346,7 @@ class TemplateDrivenFireSuppressionExtractor
         if (!$headerPatterns) return [];
 
         $items = [];
-        foreach ($tables as $table) {
+        foreach ($tables as $tableIndex => $table) {
             $grid = $this->matrix($table);
             if (!$grid) continue;
 
@@ -305,6 +387,7 @@ class TemplateDrivenFireSuppressionExtractor
                 $identityColumn = null;
                 $propertyColumns = [];
                 $resultColumns = [];
+                $resultColumnHeaders = [];
                 $noteColumn = null;
                 foreach ($columnRoles as $column => $roleDef) {
                     $role = (string) ($roleDef['role'] ?? '');
@@ -320,14 +403,50 @@ class TemplateDrivenFireSuppressionExtractor
                     // single "Durum"-style column whose cell text varies per
                     // row, e.g. "U"/"UD"/"N"), not "unset" - the data-row loop
                     // below reads the raw cell text instead of a fixed value.
-                    if ($role === 'result') { $resultColumns[(int) $column] = $this->string($roleDef['value'] ?? null); continue; }
+                    if ($role === 'result') {
+                        $resultColumns[(int) $column] = $this->string($roleDef['value'] ?? null);
+                        $resultColumnHeaders[(int) $column] = $this->patterns($roleDef['header_patterns'] ?? [])[0] ?? null;
+                        continue;
+                    }
                     if ($role === 'note' && $noteColumn === null) { $noteColumn = (int) $column; continue; }
                 }
                 if ($identityColumn === null || (!$propertyColumns && !$resultColumns)) continue;
 
+                // Two genuinely different shapes both declare 2+ "result"
+                // columns with a FIXED (non-null) value, and only the real
+                // report distinguishes them: classic U./U.D./N.U. checkbox
+                // columns each stand for a DIFFERENT outcome of the SAME one
+                // judgment (values differ across columns) - collapse to one
+                // aggregate result per row (existing behaviour below, kept
+                // unchanged). A per-tüp 7-criteria matrix (real AKTAŞ report)
+                // instead declares N columns that ALL share the SAME fixed
+                // value (e.g. every column says "uygun" - a mark in THAT
+                // column means THAT specific criterion, from its own header
+                // text, is compliant) - there is no schema field for "this is
+                // N separate criteria" so Gemini expresses it as N same-value
+                // result columns; the only way to tell them apart from a
+                // genuine 3-way outcome block is that a REAL outcome block's
+                // values are never all identical (uygun/uygun_degil/
+                // uygulanamiyor are mutually exclusive by definition).
+                $fixedCriterionColumns = array_filter($resultColumns, fn ($value) => $value !== null);
+                $distinctFixedValues = array_unique(array_values($fixedCriterionColumns));
+                $isMultiCriterionResultBlock = count($fixedCriterionColumns) >= 2 && count($distinctFixedValues) === 1;
+
                 $found = false;
                 for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
                     $dataRow = $grid[$r];
+
+                    // Claim every declared column for this row UP FRONT
+                    // (before the empty/header-break checks below can skip
+                    // the rest of the loop body) - a control-item scan that
+                    // later walks the SAME tables must never reinterpret this
+                    // equipment table's own identity/property/result/note
+                    // cells as an unrelated system-level control code.
+                    $claimedCells[$tableIndex][$r][$identityColumn] = true;
+                    foreach ($propertyColumns as $propertyColumn => $ignored) $claimedCells[$tableIndex][$r][$propertyColumn] = true;
+                    foreach ($resultColumns as $resultColumnIndex => $ignored) $claimedCells[$tableIndex][$r][$resultColumnIndex] = true;
+                    if ($noteColumn !== null) $claimedCells[$tableIndex][$r][$noteColumn] = true;
+
                     $identityValue = trim((string) ($dataRow[$identityColumn] ?? ''));
                     if ($identityValue === '' || $identityValue === '-') continue;
                     if ($this->matchesAny($identityValue, $headerPatterns)) break;
@@ -357,12 +476,56 @@ class TemplateDrivenFireSuppressionExtractor
                         if ($noteValue !== '' && $noteValue !== '-') $note = $this->cleanValue($noteValue);
                     }
 
-                    if (!$properties && $result === null && $note === null) continue;
+                    // Per-criterion breakdown (only when the same-fixed-value
+                    // signal above says this really is N separate criteria,
+                    // not a 3-way outcome block) - one entry per declared
+                    // result column, code/criterion taken from its OWN header
+                    // text, result = the column's fixed value if this row's
+                    // cell has a mark, 'uygun_degil' if blank (an unmarked
+                    // per-criterion checkbox means that criterion was not
+                    // confirmed compliant for THIS specific tüp/equipment -
+                    // never silently assumed compliant). Reuses the SAME
+                    // direct_control_items → equipment-scoped control_items
+                    // synthesis already built for Gemini-direct-read
+                    // single-equipment checklists (see extract() below) - no
+                    // new downstream plumbing needed.
+                    $criteriaResults = [];
+                    if ($isMultiCriterionResultBlock) {
+                        $criterionPosition = 0;
+                        foreach ($fixedCriterionColumns as $column => $fixedValue) {
+                            $criterionPosition++;
+                            $headerText = $resultColumnHeaders[$column] ?? null;
+                            $code = ($headerText !== null ? $this->leadingNumber($headerText) : null) ?? (string) $criterionPosition;
+                            $criterionText = $headerText !== null ? $this->stripLeadingCode($headerText, $code) : null;
+                            if ($criterionText === null || $criterionText === '') $criterionText = $headerText;
+                            $cellText = trim((string) ($dataRow[$column] ?? ''));
+                            $criteriaResults[] = [
+                                'code' => $code,
+                                'criterion' => $criterionText,
+                                // The column's declared value is only a
+                                // DEFAULT for "this criterion has a mark" -
+                                // it must NOT be applied blindly to any
+                                // non-empty cell. A report can (and does)
+                                // sometimes write the real negative code/glyph
+                                // directly into the SAME column instead of
+                                // leaving it blank (e.g. "UD" printed where a
+                                // ✔ was expected) - read what the cell
+                                // ACTUALLY says first, only fall back to the
+                                // column's fixed value when the mark itself
+                                // carries no information of its own (a plain
+                                // ✔/✓ or any other non-negative mark).
+                                'result' => $this->interpretCriterionCell($cellText, $fixedValue),
+                            ];
+                        }
+                    }
+
+                    if (!$properties && $result === null && $note === null && !$criteriaResults) continue;
 
                     $items[] = [
                         'code' => $this->cleanValue($identityValue),
                         'name' => $this->string($template['equipment_name'] ?? null),
                         'system_name' => $this->string($template['system_name'] ?? null),
+                        'direct_control_items' => $criteriaResults,
                         'properties' => $properties,
                         'result' => $result,
                         'note' => $note,
@@ -443,6 +606,23 @@ class TemplateDrivenFireSuppressionExtractor
         $headerPatterns = $this->patterns($shape['header_row_patterns'] ?? []);
         if (!$headerPatterns) return [];
 
+        // Transpose of the rows-axis case (see extractEquipmentFromTableShape):
+        // there, N criteria sharing the SAME fixed result value show up as N
+        // COLUMNS; here (equipment side-by-side in columns) the same real
+        // shape shows up as N ROWS instead, each row's role still resolved by
+        // its own label text. Same discriminator: a genuine 3-way outcome
+        // block (U/U.D./N.U.-style rows) declares DIFFERENT fixed values per
+        // row - N rows sharing the IDENTICAL fixed value can only mean N
+        // separate criteria, one per row, each independently checked for
+        // EVERY equipment column.
+        $fixedResultRoleDefs = [];
+        foreach ($roleColumns as $roleDef) {
+            if (!is_array($roleDef) || ($roleDef['role'] ?? '') !== 'result') continue;
+            $fixedValue = $this->string($roleDef['value'] ?? null);
+            if ($fixedValue !== null) $fixedResultRoleDefs[] = $fixedValue;
+        }
+        $isMultiCriterionResultBlock = count($fixedResultRoleDefs) >= 2 && count(array_unique($fixedResultRoleDefs)) === 1;
+
         // The header row can repeat multiple times (e.g. a new 5-or-10-wide
         // block of instances starting fresh on each page) - accumulate every
         // block found instead of stopping at the first, or later blocks
@@ -470,6 +650,7 @@ class TemplateDrivenFireSuppressionExtractor
                 if ($labelColumn === null || !$instanceColumns) continue;
 
                 $items = [];
+                $criteriaResults = [];
                 foreach ($instanceColumns as $column => $identity) {
                     $items[$column] = [
                         'code' => $this->cleanValue($identity),
@@ -480,8 +661,10 @@ class TemplateDrivenFireSuppressionExtractor
                         'note' => null,
                         'source_pages' => [(int) ($table['page'] ?? 0)],
                     ];
+                    $criteriaResults[$column] = [];
                 }
 
+                $criterionPosition = 0;
                 for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
                     $dataRow = $grid[$r];
                     $rowLabel = null;
@@ -499,14 +682,39 @@ class TemplateDrivenFireSuppressionExtractor
                     $role = (string) ($roleDef['role'] ?? '');
                     if (!in_array($role, ['property', 'result', 'note'], true)) continue;
 
+                    // One criterion ROW applies to EVERY equipment column at
+                    // once - derive its code/text ONCE per row, not per
+                    // column (same criterion, different equipment answers).
+                    $fixedValue = $role === 'result' ? $this->string($roleDef['value'] ?? null) : null;
+                    $criterionCode = null;
+                    $criterionText = null;
+                    if ($role === 'result' && $isMultiCriterionResultBlock && $fixedValue !== null) {
+                        $criterionPosition++;
+                        $criterionCode = $this->leadingNumber($rowLabel) ?? (string) $criterionPosition;
+                        $criterionText = $this->stripLeadingCode($rowLabel, $criterionCode);
+                        if ($criterionText === '') $criterionText = $rowLabel;
+                    }
+
                     foreach ($instanceColumns as $column => $identity) {
                         $value = trim((string) ($dataRow[$column] ?? ''));
+                        if ($role === 'result' && $isMultiCriterionResultBlock && $fixedValue !== null) {
+                            // Every equipment column gets its OWN answer for
+                            // THIS criterion row, whether marked or blank -
+                            // unlike property/note, silence here is itself
+                            // meaningful (not confirmed compliant), so this
+                            // does not skip on empty like the branch below.
+                            $criteriaResults[$column][] = [
+                                'code' => $criterionCode,
+                                'criterion' => $criterionText,
+                                'result' => $this->interpretCriterionCell($value, $fixedValue),
+                            ];
+                            continue;
+                        }
                         if ($value === '' || $value === '-') continue;
                         if ($role === 'property') {
                             $key = $this->string($roleDef['key'] ?? null) ?? $rowLabel;
                             $this->assignPropertyValue($items[$column]['properties'], $key, $this->patterns($roleDef['sub_keys'] ?? []), $value);
                         } elseif ($role === 'result' && $items[$column]['result'] === null) {
-                            $fixedValue = $this->string($roleDef['value'] ?? null);
                             $items[$column]['result'] = $fixedValue ?? $this->cleanValue($value);
                         } elseif ($role === 'note' && $items[$column]['note'] === null) {
                             $items[$column]['note'] = $this->cleanValue($value);
@@ -514,8 +722,9 @@ class TemplateDrivenFireSuppressionExtractor
                     }
                 }
 
-                foreach ($items as $item) {
-                    if ($item['properties'] || $item['result'] !== null || $item['note'] !== null) {
+                foreach ($items as $column => $item) {
+                    $item['direct_control_items'] = $criteriaResults[$column] ?? [];
+                    if ($item['properties'] || $item['result'] !== null || $item['note'] !== null || $item['direct_control_items']) {
                         $allItems[] = $item;
                     }
                 }
@@ -525,7 +734,7 @@ class TemplateDrivenFireSuppressionExtractor
         return $allItems;
     }
 
-private function extractControls(array $tables, array $controlTemplates, array $resultAxis = []): array
+private function extractControls(array $tables, array $controlTemplates, array $resultAxis = [], array $claimedCells = []): array
 {
     $out = [];
 
@@ -571,8 +780,9 @@ private function extractControls(array $tables, array $controlTemplates, array $
         if ($textPatterns && $codePatterns) {
             foreach ($tables as $tableIndex => $table) {
                 $resultColumns = $resultColumnsByTable[$tableIndex] ?? [];
-                foreach ($this->matrix($table) as $row) {
+                foreach ($this->matrix($table) as $rowIndex => $row) {
                     foreach ($row as $columnIndex => $value) {
+                        if (isset($claimedCells[$tableIndex][$rowIndex][$columnIndex])) continue;
                         $textIndex = $this->matchControlText((string) $value, $textPatterns);
                         if ($textIndex === null || !isset($codePatterns[$textIndex])) continue;
 
@@ -613,6 +823,7 @@ private function extractControls(array $tables, array $controlTemplates, array $
 
                 // columnIndex EKLENDİ
                 foreach ($row as $columnIndex => $value) {
+                    if (isset($claimedCells[$tableIndex][$rowIndex][$columnIndex])) continue;
 
                     $code = $this->matchControlCode(
                         (string) $value,
@@ -1434,6 +1645,42 @@ private function findCriterionFromCells(
         $pattern = rtrim($pattern, '$');
         $pattern = str_replace('\\', '', $pattern);
         return rtrim(trim($pattern), '.');
+    }
+
+    // A per-criterion checkbox column's cell can hold either a generic mark
+    // (✔/✓, an X, anything with no meaning of its own beyond "present") OR
+    // the real negative code/glyph written directly into it instead of being
+    // left blank (e.g. "UD", "✘", "Uygun Değil") - never trust "non-empty" as
+    // "the column's declared value applies". Blank -> not confirmed
+    // compliant for THIS criterion ('uygun_degil'), same as an explicit
+    // negative mark. Regex-free (plain str_contains), matching this file's
+    // and FireSuppressionUnifiedNormalizer's established glyph/keyword set.
+    private function interpretCriterionCell(string $cellText, string $fixedValue): string
+    {
+        if ($cellText === '' || $cellText === '-' || $cellText === '—') return 'uygun_degil';
+
+        if (in_array($cellText, ['✘', '✗', '×'], true)) return 'uygun_degil';
+        if (in_array($cellText, ['✔', '✓'], true)) return $fixedValue;
+
+        $normalized = mb_strtolower($cellText, 'UTF-8');
+        if (str_contains($normalized, 'değil') || str_contains($normalized, 'degil')) return 'uygun_degil';
+        if ($normalized === 'ud' || $normalized === 'u.d.') return 'uygun_degil';
+        if (str_contains($normalized, 'uygulanamıyor') || str_contains($normalized, 'uygulanamiyor')) return 'uygulanamiyor';
+
+        return $fixedValue;
+    }
+
+    // Plain leading-digit scan (no regex) - "1- Yangın söndürme..." -> "1".
+    // Returns null when the text doesn't start with a digit at all.
+    private function leadingNumber(string $text): ?string
+    {
+        $text = ltrim($text);
+        $digits = '';
+        for ($i = 0; $i < strlen($text); $i++) {
+            if (!ctype_digit($text[$i])) break;
+            $digits .= $text[$i];
+        }
+        return $digits !== '' ? $digits : null;
     }
 
     // Removes a code fused into the front of its own cell ("1. Portatif ..."

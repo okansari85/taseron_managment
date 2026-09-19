@@ -106,16 +106,6 @@ class GeminiTemplateDiscoveryClient
             'required' => ['key', 'value'],
         ];
 
-        $controlItem = [
-            'type' => 'object',
-            'properties' => [
-                'control_code_patterns' => $stringArray,
-                'control_text_patterns' => $stringArray,
-                'result_patterns' => $stringArray,
-            ],
-            'required' => ['control_code_patterns', 'control_text_patterns', 'result_patterns'],
-        ];
-
         // A single, closed vocabulary for "what role does this column/row
         // play" - unlike table_structure.orientation / camelot_extraction.
         // block_detection below (plain free-text strings), Gemini has used
@@ -206,86 +196,26 @@ class GeminiTemplateDiscoveryClient
             'required' => ['equipment_name', 'system_name', 'table_shape'],
         ];
 
-        $matrix = [
-            'type' => 'object',
-            'properties' => [
-                'present' => ['type' => 'boolean'],
-                'orientation' => ['type' => 'string'],
-                'axis_detection' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'enabled' => ['type' => 'boolean'],
-                        'equipment_axis' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'axis' => ['type' => 'string'],
-                                'header_patterns' => $stringArray,
-                                'identity_patterns' => $stringArray,
-                                'detection_patterns' => $stringArray,
-                            ],
-                            'required' => ['axis', 'header_patterns', 'identity_patterns', 'detection_patterns'],
-                        ],
-                        'control_axis' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'axis' => ['type' => 'string'],
-                                'header_patterns' => $stringArray,
-                                'code_patterns' => $stringArray,
-                                'label_patterns' => $stringArray,
-                                'detection_patterns' => $stringArray,
-                            ],
-                            'required' => ['axis', 'header_patterns', 'code_patterns', 'label_patterns', 'detection_patterns'],
-                        ],
-                        'result_axis' => [
-                            'type' => 'object',
-                            'properties' => [
-                                'location' => ['type' => 'string'],
-                                'patterns' => $stringArray,
-                                'detection_patterns' => $stringArray,
-                            ],
-                            'required' => ['location', 'patterns', 'detection_patterns'],
-                        ],
-                    ],
-                    'required' => ['enabled', 'equipment_axis', 'control_axis', 'result_axis'],
-                ],
-                'matrix_relationship' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'equipment_vs_control' => ['type' => 'string'],
-                        'equipment_position' => ['type' => 'string'],
-                        'control_position' => ['type' => 'string'],
-                        'result_position' => ['type' => 'string'],
-                    ],
-                    'required' => ['equipment_vs_control', 'equipment_position', 'control_position', 'result_position'],
-                ],
-                'camelot_extraction' => [
-                    'type' => 'object',
-                    'properties' => [
-                        'table_type' => ['type' => 'string'],
-                        'system_section_patterns' => $stringArray,
-                        'equipment_header_patterns' => $stringArray,
-                        'equipment_identity_patterns' => $stringArray,
-                        'control_code_patterns' => $stringArray,
-                        'control_label_patterns' => $stringArray,
-                        'result_cell_patterns' => $stringArray,
-                        'equipment_axis' => ['type' => 'string'],
-                        'control_axis' => ['type' => 'string'],
-                        'result_binding' => ['type' => 'string'],
-                    ],
-                    'required' => ['table_type', 'system_section_patterns', 'equipment_header_patterns', 'equipment_identity_patterns', 'control_code_patterns', 'control_label_patterns', 'result_cell_patterns', 'equipment_axis', 'control_axis', 'result_binding'],
-                ],
-            ],
-            'required' => ['present', 'orientation', 'axis_detection', 'matrix_relationship', 'camelot_extraction'],
-        ];
-
+        // control_items (control_code_patterns/control_text_patterns/
+        // result_patterns) ve control_matrix ARTIK bu şablonda YOK - sistem
+        // seviyeli (ekipmana bağlı olmayan) kriterler, rapor uzunluğundan
+        // bağımsız SINIRLI bir liste olduğu için (report_information/
+        // overall_result ile AYNI mantık) artık Gemini'nin kendisi
+        // extracted_data.systems[].control_items içine GERÇEK değerlerle
+        // okuyor - Camelot'un pattern eşleştirmesine bırakılmıyor. Bu, hem
+        // Gemini'nin çıktısını küçültüyor (pattern + gerçek değer ikisini
+        // birden üretmek zorunda kalmıyor) hem de bu oturumda tekrar tekrar
+        // yaşanan pattern/kod çakışması bug'larını (örn. ekipman tablosunun
+        // kendi kimlik sütunuyla çakışan çıplak rakam pattern'leri) kökten
+        // ortadan kaldırıyor. Equipment (table_shape) alanı DEĞİŞMEDİ -
+        // ekipman sayısı sınırsız olabildiği için o taraf yapısal
+        // (pattern/rol) betimlemeyle kalmaya devam ediyor.
         $system = [
             'type' => 'object',
             'properties' => [
                 'system_name' => ['type' => 'string'],
                 'section_heading_patterns' => $stringArray,
-                'control_items' => ['type' => 'array', 'items' => $controlItem],
                 'equipment' => ['type' => 'array', 'items' => $equipment],
-                'control_matrix' => $matrix,
                 'section_detection' => [
                     'type' => 'object',
                     'properties' => [
@@ -296,7 +226,7 @@ class GeminiTemplateDiscoveryClient
                     'required' => ['start_heading_patterns', 'continuation_patterns', 'end_detection_patterns'],
                 ],
             ],
-            'required' => ['system_name', 'section_heading_patterns', 'control_items', 'equipment', 'control_matrix', 'section_detection'],
+            'required' => ['system_name', 'section_heading_patterns', 'equipment', 'section_detection'],
         ];
 
         return [
@@ -474,6 +404,40 @@ class GeminiTemplateDiscoveryClient
                             ],
                             'required' => ['text', 'status'],
                         ],
+                        // Sistem seviyeli (bir ekipmana bağlı OLMAYAN) kontrol
+                        // kriterleri - örn. bir "Genel Tespit" veya "Belge ve
+                        // Kayıt Kontrolleri" bölümünün 10-40 arası maddesi. Bu
+                        // liste HER raporda sabit/sınırlı boyutludur (rapor
+                        // uzunluğuyla BÜYÜMEZ - ekipman sayısı büyüyebilir ama
+                        // sistem başına kriter sayısı büyümez), bu yüzden
+                        // report_information/overall_result ile AYNI güven
+                        // seviyesiyle GERÇEK değerlerle okunur - control_code_
+                        // patterns/control_text_patterns gibi bir pattern
+                        // sözleşmesine ASLA ihtiyaç yoktur. Ekipmana bağlı
+                        // kriterler BURAYA YAZILMAZ (onlar equipment[].
+                        // table_shape'in result sütunlarından gelir).
+                        'systems' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'system_name' => ['type' => 'string'],
+                                    'control_items' => [
+                                        'type' => 'array',
+                                        'items' => [
+                                            'type' => 'object',
+                                            'properties' => [
+                                                'code' => ['type' => 'string'],
+                                                'criterion' => ['type' => 'string'],
+                                                'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
+                                            ],
+                                            'required' => ['code', 'criterion', 'result'],
+                                        ],
+                                    ],
+                                ],
+                                'required' => ['system_name', 'control_items'],
+                            ],
+                        ],
                         // Direct read for a SMALL, boundedly-countable equipment
                         // group (e.g. a pump room with 2-4 pumps) - Gemini
                         // actually looks at the table and reports the real
@@ -532,7 +496,7 @@ class GeminiTemplateDiscoveryClient
                             ],
                         ],
                     ],
-                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'equipment'],
+                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'systems', 'equipment'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],

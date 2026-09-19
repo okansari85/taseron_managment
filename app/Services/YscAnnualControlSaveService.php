@@ -21,11 +21,16 @@ use Throwable;
 // kalır (bkz. TemplateDrivenFireSuppressionExtractor) - sadece bu servis
 // "hangi hedef sisteme kaydedileceği" dallanmasını taşır.
 //
-// control_items içindeki scope=equipment maddeleri, üretildikleri sırayla
-// (extractor'daki equipment-senkron döngüsüyle) $tables['equipment'] ile
-// AYNI SIRADADIR - equipment kodu (bu raporlarda genelde "Cihazın Bulunduğu
-// yer" gibi TEKİL OLMAYAN bir kimlik) üzerinden değil, bu SIRA üzerinden
-// eşleştirilir.
+// Ekipman başına birden fazla GERÇEK kriter (örn. AKTAŞ'ın 7 sütunu) artık
+// mümkün olduğu için equipment-scope control_items ARTIK üst seviye düz
+// listeden İNDEKSE göre eşleştirilmez (bu, ekipman başına TEK madde
+// varsayan eski bir tasarımdı - 2+ madde geldiğinde dizi hizası tamamen
+// bozulup yanlış ekipmana yanlış kriter yazılıyordu, hatta rapor hiç
+// kaydedilemiyordu). Her equipment[] öğesinin KENDİ iç içe control_items
+// alanı (FireSuppressionUnifiedNormalizer::buildEquipmentEntry() tarafından
+// zaten code+equipment eşleşmesiyle doğru kurulmuş) tek gerçek kaynaktır.
+// Üst seviye düz control_items listesi SADECE scope=system (rapor geneline
+// ait) maddeler için kullanılır.
 //
 // Ekipman "aynı fiziksel tüp mü" sorusu YscMatchingProfile'ın genel
 // (kod-tekli) findExact()'ına DEVREDİLMEZ - Tüp No tek başına güvenilir
@@ -33,6 +38,12 @@ use Throwable;
 // AKTAŞ raporunda "7" hem Eğitim Salonu'nda hem Yedek'te). Kesin eşleşme
 // için Tüp No + konum + tip'in ÜÇÜNÜN BİRDEN aynı olması şart - bu üçü
 // aynıysa aynı fiziksel ekipman, değilse (biri bile farklıysa) yeni kayıt.
+//
+// properties içindeki konum/cihaz tipi anahtar METİNLERİ rapordan rapora
+// değişebilir (aynı AKTAŞ şablonunun iki farklı gerçek Gemini analizinde
+// bile "Bulunduğu Yer" / "Konum / Bulunduğu Yer" gibi FARKLI yazılmış -
+// tek bir sabit anahtar ismine güvenmek 100 farklı rapor formatında
+// kırılgan olurdu). Anahtar kelime bazlı (regex'siz) bulunur.
 class YscAnnualControlSaveService
 {
     public function __construct(
@@ -60,13 +71,12 @@ class YscAnnualControlSaveService
         $equipmentItems = array_values(array_filter((array) ($data['equipment'] ?? []), 'is_array'));
         $allControlItems = array_values(array_filter((array) ($data['control_items'] ?? []), 'is_array'));
 
-        $equipmentControlItems = array_values(array_filter(
-            $allControlItems,
-            fn (array $c) => ($c['scope'] ?? null) === 'equipment'
-        ));
+        // scope=equipment maddeleri artık her equipment[] öğesinin KENDİ
+        // control_items alanından okunuyor (bkz. yukarıdaki sınıf notu) -
+        // düz listeden sadece rapor geneline ait (scope=system) maddeler alınır.
         $generalControlItems = array_values(array_filter(
             $allControlItems,
-            fn (array $c) => ($c['scope'] ?? null) === 'system'
+            fn (array $c) => ($c['scope'] ?? null) !== 'equipment'
         ));
 
         $filePath = null;
@@ -76,7 +86,6 @@ class YscAnnualControlSaveService
                 $locationBusinessEntity,
                 $data,
                 $equipmentItems,
-                $equipmentControlItems,
                 $generalControlItems,
                 $tenantId,
                 $file,
@@ -86,14 +95,17 @@ class YscAnnualControlSaveService
                 $equipmentTypeCache = [];
                 $equipmentIds = [];
                 $claimedEquipmentIds = [];
+                $equipmentItemRowsByIndex = [];
 
                 foreach ($equipmentItems as $index => $item) {
                     $properties = (array) ($item['properties'] ?? []);
-                    $code = $this->stringOrNull($properties['Tüp No'] ?? null);
-                    $locationNote = $this->stringOrNull($item['code'] ?? null);
-                    [$tip, $capacityKg] = $this->parseEquipmentTypeText(
-                        (string) ($properties['Cihaz Tipi'] ?? '')
-                    );
+                    // Tüp No, table_shape'in IDENTITY rolüyle geliyor - bu
+                    // yapısal bir garanti (extractEquipmentFromTableShape()),
+                    // properties içinde aranan bir metin değil.
+                    $code = $this->stringOrNull($item['code'] ?? null);
+                    $locationNote = $this->findPropertyByKeywords($properties, ['yer', 'konum', 'lokasyon']);
+                    $deviceTypeText = $this->findPropertyByKeywords($properties, ['cihaz tip', 'tip', 'tür', 'tur']);
+                    [$tip, $capacityKg] = $this->parseEquipmentTypeText((string) ($deviceTypeText ?? ''));
 
                     $existing = $this->findExistingEquipment(
                         $locationBusinessEntity,
@@ -107,21 +119,38 @@ class YscAnnualControlSaveService
                     if ($existing !== null) {
                         $equipmentIds[$index] = $existing;
                         $claimedEquipmentIds[] = $existing;
-                        continue;
+                    } else {
+                        $typeCacheKey = $tenantId . '|' . ($tip ?? '') . '|' . ($capacityKg ?? '');
+                        if (! isset($equipmentTypeCache[$typeCacheKey])) {
+                            $equipmentTypeCache[$typeCacheKey] = $this->resolveEquipmentType($tenantId, $tip, $capacityKg);
+                        }
+
+                        $equipment = $this->equipmentService->create($locationBusinessEntity, [
+                            'equipment_type_id' => $equipmentTypeCache[$typeCacheKey],
+                            'code' => $code,
+                            'location_note' => $locationNote,
+                        ]);
+                        $equipmentIds[$index] = $equipment->id;
+                        $claimedEquipmentIds[] = $equipment->id;
                     }
 
-                    $typeCacheKey = $tenantId . '|' . ($tip ?? '') . '|' . ($capacityKg ?? '');
-                    if (! isset($equipmentTypeCache[$typeCacheKey])) {
-                        $equipmentTypeCache[$typeCacheKey] = $this->resolveEquipmentType($tenantId, $tip, $capacityKg);
+                    // Bu ekipmanın KENDİ kriterleri (örn. AKTAŞ'ta 7 tane) -
+                    // FireSuppressionUnifiedNormalizer::buildEquipmentEntry()
+                    // tarafından zaten code+equipment eşleşmesiyle doğru
+                    // kurulmuş {code, title, status} listesi.
+                    $ownControlItems = array_values(array_filter((array) ($item['control_items'] ?? []), 'is_array'));
+                    $rows = [];
+                    foreach ($ownControlItems as $ci) {
+                        $result = $this->stringOrNull($ci['status'] ?? $ci['result_normalized'] ?? $ci['result'] ?? null);
+                        $criterion = $this->stringOrNull($ci['title'] ?? $ci['criterion'] ?? null);
+                        if ($criterion === null) continue;
+                        $rows[] = [
+                            'code' => (string) ($ci['code'] ?? ''),
+                            'criterion' => $criterion,
+                            'result' => $result,
+                        ];
                     }
-
-                    $equipment = $this->equipmentService->create($locationBusinessEntity, [
-                        'equipment_type_id' => $equipmentTypeCache[$typeCacheKey],
-                        'code' => $code,
-                        'location_note' => $locationNote,
-                    ]);
-                    $equipmentIds[$index] = $equipment->id;
-                    $claimedEquipmentIds[] = $equipment->id;
+                    $equipmentItemRowsByIndex[$index] = $rows;
                 }
 
                 $filePath = $file->store('emergency-equipment-annual-control-reports', 'public');
@@ -140,11 +169,30 @@ class YscAnnualControlSaveService
                 ]);
 
                 $syncData = [];
-                foreach ($equipmentControlItems as $index => $controlItem) {
+                foreach ($equipmentItemRowsByIndex as $index => $rows) {
                     if (! isset($equipmentIds[$index])) continue;
-                    $syncData[$equipmentIds[$index]] = [
-                        'result' => $this->stringOrNull($controlItem['result_normalized'] ?? $controlItem['result'] ?? null),
-                        'note' => $this->stringOrNull($controlItem['criterion'] ?? null),
+                    $equipmentId = $equipmentIds[$index];
+
+                    // Pivot tek bir özet result/note taşır (ekranlarda hızlı
+                    // "bu ekipman genel olarak uygun mu" rozeti için) - asıl
+                    // kriter bazlı kırılım equipmentItems() ilişkisindedir.
+                    $hasNonconforming = false;
+                    $hasConforming = false;
+                    foreach ($rows as $row) {
+                        if ($row['result'] === 'uygun_degil') $hasNonconforming = true;
+                        elseif ($row['result'] === 'uygun') $hasConforming = true;
+
+                        $report->equipmentItems()->create([
+                            'location_emergency_equipment_id' => $equipmentId,
+                            'code' => $row['code'],
+                            'criterion' => $row['criterion'],
+                            'result' => $row['result'],
+                        ]);
+                    }
+
+                    $syncData[$equipmentId] = [
+                        'result' => $hasNonconforming ? 'uygun_degil' : ($hasConforming ? 'uygun' : null),
+                        'note' => null,
                     ];
                 }
                 $report->equipment()->sync($syncData);
@@ -197,6 +245,27 @@ class YscAnnualControlSaveService
             ->first();
 
         return $equipment?->id;
+    }
+
+    // properties anahtarları (Gemini'nin kendi header metninden geldiği
+    // için) rapordan rapora değişebilir - "Bulunduğu Yer" / "Konum /
+    // Bulunduğu Yer" gibi. Anahtar kelime bazlı, regex'siz (str_contains)
+    // arama yapar; ilk eşleşen anahtarın değerini döner. Sıralama önemli -
+    // çağıran taraf en özgül kelimeleri önce verir (örn. "cihaz tip" önce,
+    // sonra tek başına "tip").
+    private function findPropertyByKeywords(array $properties, array $keywords): ?string
+    {
+        foreach ($keywords as $keyword) {
+            foreach ($properties as $key => $value) {
+                if (! is_string($key)) continue;
+                if (str_contains(mb_strtolower($key, 'UTF-8'), mb_strtolower($keyword, 'UTF-8'))) {
+                    $stringValue = $this->stringOrNull($value);
+                    if ($stringValue !== null) return $stringValue;
+                }
+            }
+        }
+
+        return null;
     }
 
     // "5KG CO2" / "6KG KKT" / "50KG KKT" -> [tip, capacity_kg]. Regex YOK -
