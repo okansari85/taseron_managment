@@ -36,7 +36,12 @@ class StoreYscAnnualControlFromAnalysisRequest extends FormRequest
             'next_control_date' => ['nullable', 'date'],
             'result' => ['nullable', 'string', Rule::in(EmergencyEquipmentAnnualControlReport::RESULTS)],
             'company_name' => ['nullable', 'string', 'max:255'],
-            'file' => ['required', 'file', 'mimes:pdf', 'max:20480'],
+            // Test modu: StoreFireSuppressionReportRequest ile AYNI desen -
+            // gerçek dosya yoksa, zaten sunucuda duran bir Gemini fixture'ının
+            // PDF'i fixture_id ile kullanılır (bkz. controller
+            // uploadedFileFromFixture()).
+            'file' => ['required_without:fixture_id', 'nullable', 'file', 'mimes:pdf', 'max:20480'],
+            'fixture_id' => ['required_without:file', 'nullable', 'string'],
             'notes' => ['nullable', 'string', 'max:2000'],
 
             'equipment' => ['required', 'array', 'min:1'],

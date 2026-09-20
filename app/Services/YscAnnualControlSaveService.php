@@ -205,6 +205,19 @@ class YscAnnualControlSaveService
                     ]);
                 }
 
+                // Section 5'teki düz özet alanları (Genel Bakış tablosunun
+                // "Son Kontrol"/"Sonraki İşlem" sütunları bunları okur) - bu
+                // rapor az önce sync edildiği HER ekipman için en güncel
+                // yıllık kontrol raporuna göre güncellenir. Eskiden bu adım
+                // hiç çağrılmıyordu - rapordan gelen tüpler Genel Bakış
+                // tablosunda hep boş ("—") tarih/durum gösteriyordu.
+                foreach (array_keys($syncData) as $equipmentId) {
+                    $equipment = LocationEmergencyEquipment::query()->find($equipmentId);
+                    if ($equipment) {
+                        $this->reportService->syncAnnualMaintenanceSnapshot($equipment);
+                    }
+                }
+
                 return $this->reportService->find($report);
             });
         } catch (Throwable $exception) {

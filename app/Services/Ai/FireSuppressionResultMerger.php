@@ -189,6 +189,28 @@ class FireSuppressionResultMerger
                 continue;
             }
 
+            // Equipment-scoped controls carry a SYNTHESIZED composite code
+            // (e.g. "EQP-YD1-5.38", "EQP-YD2-5.38" - one per equipment
+            // instance, same trailing criterion number). normalizeCode()
+            // below extracts just a bare dotted number ("5.38") out of
+            // WHATEVER string it's given, which was fine for a genuinely
+            // system-wide code but silently COLLAPSES every equipment's
+            // same-numbered criterion onto the SAME key here - only the
+            // last equipment processed would survive in $indexed, every
+            // earlier one's control_items silently disappearing. Equipment-
+            // scoped controls are already globally unique via their own
+            // code string (and further disambiguated by their 'equipment'
+            // field), so key them directly - never through normalizeCode()'s
+            // system-code-oriented extraction.
+            $equipment = trim((string) ($control['equipment'] ?? ''));
+            if ($equipment !== '') {
+                $rawCode = trim((string) ($control['code'] ?? ($control['control_code'] ?? '')));
+                if ($rawCode !== '') {
+                    $indexed[$equipment . '::' . $rawCode] = $control;
+                    continue;
+                }
+            }
+
             $code = $this->directCode($control);
             if ($code !== '') {
                 $indexed[$code] = $control;

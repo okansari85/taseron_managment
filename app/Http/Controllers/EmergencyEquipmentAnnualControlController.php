@@ -15,6 +15,8 @@ use App\Services\Matching\MatchingEngine;
 use App\Services\Matching\YscMatchingProfile;
 use App\Services\YscAnnualControlSaveService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 class EmergencyEquipmentAnnualControlController extends Controller
 {
@@ -34,10 +36,13 @@ class EmergencyEquipmentAnnualControlController extends Controller
         LocationBusinessEntity $locationBusinessEntity,
         YscAnnualControlSaveService $saveService
     ): JsonResponse {
+        $validated = $request->validated();
+        $file = $request->hasFile('file') ? $request->file('file') : $this->uploadedFileFromFixture((string) $validated['fixture_id']);
+
         $report = $saveService->save(
             $locationBusinessEntity,
-            $request->validated(),
-            $request->file('file'),
+            $validated,
+            $file,
             $request->user()
         );
 
@@ -45,6 +50,23 @@ class EmergencyEquipmentAnnualControlController extends Controller
             'message' => 'Yıllık kontrol raporu (YSC) kaydedildi.',
             'data' => $report,
         ], 201);
+    }
+
+    // Test modu: FireSuppressionReportController::uploadedFileFromFixture()
+    // ile AYNI desen - gerçek dosya yoksa, zaten sunucuda duran bir Gemini
+    // fixture'ının PDF'i sahte bir tarayıcı yükleme turu gerektirmeden
+    // doğrudan kullanılır.
+    private function uploadedFileFromFixture(string $fixtureId): UploadedFile
+    {
+        abort_unless(preg_match('/^[0-9a-f-]{36}$/i', $fixtureId) === 1, 422, 'Geçersiz fixture ID.');
+        $fixturePath = "fire-suppression-gemini-fixtures/{$fixtureId}.json";
+        abort_unless(Storage::disk('local')->exists($fixturePath), 404, 'Gemini fixture bulunamadı.');
+        $fixture = json_decode(Storage::disk('local')->get($fixturePath), true, 512, JSON_THROW_ON_ERROR);
+        $pdfPath = (string) ($fixture['pdf_path'] ?? "fire-suppression-gemini-fixtures/{$fixtureId}.pdf");
+        abort_unless(Storage::disk('local')->exists($pdfPath), 404, 'Bu fixture için kayıtlı PDF yok.');
+        $fileName = (string) ($fixture['original_file_name'] ?? 'rapor.pdf');
+
+        return new UploadedFile(Storage::disk('local')->path($pdfPath), $fileName, 'application/pdf', null, true);
     }
 
     // AI destekli ön-analiz — hiçbir şey kaydetmez, sadece taslak döner.

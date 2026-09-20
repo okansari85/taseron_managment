@@ -94,12 +94,44 @@ class FireSuppressionUnifiedNormalizer
             }
         }
 
+        // A system's compliance data can ALSO come entirely from Gemini's own
+        // direct-read SYSTEM-level checklist (extracted_data.systems[]) -
+        // control_code_patterns/control_text_patterns/control_matrix no
+        // longer exist in the schema at all for this (see
+        // GeminiTemplateDiscoveryClient/TemplateDiscoveryFireSuppressionAnalyzer),
+        // so the pattern-based "usable" check below would otherwise find
+        // NOTHING for every multi-system report and always reject it.
+        $directReadSystemControlNames = [];
+        foreach ((array) ($semantic['extracted_data']['systems'] ?? []) as $directSystem) {
+            if (!is_array($directSystem)) continue;
+            $name = trim((string) ($directSystem['system_name'] ?? ''));
+            if ($name !== '' && (array) ($directSystem['control_items'] ?? [])) {
+                $directReadSystemControlNames[$name] = true;
+            }
+        }
+
+        // A system whose ONLY real data is its equipment table (table_shape)
+        // is also usable on its own - e.g. a system made purely of a dolap/
+        // hidrant/tüp table with no equipment-independent checklist at all.
+        $systemsWithEquipmentShape = [];
+        foreach ($systems as $system) {
+            if (!is_array($system)) continue;
+            $name = trim((string) ($system['system_name'] ?? ''));
+            if ($name !== '' && (array) ($system['equipment'] ?? [])) {
+                $systemsWithEquipmentShape[$name] = true;
+            }
+        }
+
         $usableSystems = 0;
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
 
             $systemName = trim((string) ($system['system_name'] ?? ''));
-            if ($systemName !== '' && isset($directReadSystemNames[$systemName])) {
+            if ($systemName !== '' && (
+                isset($directReadSystemNames[$systemName])
+                || isset($directReadSystemControlNames[$systemName])
+                || isset($systemsWithEquipmentShape[$systemName])
+            )) {
                 $usableSystems++;
                 continue;
             }

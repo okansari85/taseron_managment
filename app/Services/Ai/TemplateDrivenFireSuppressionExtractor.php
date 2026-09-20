@@ -412,25 +412,35 @@ class TemplateDrivenFireSuppressionExtractor
                 }
                 if ($identityColumn === null || (!$propertyColumns && !$resultColumns)) continue;
 
-                // Two genuinely different shapes both declare 2+ "result"
-                // columns with a FIXED (non-null) value, and only the real
-                // report distinguishes them: classic U./U.D./N.U. checkbox
-                // columns each stand for a DIFFERENT outcome of the SAME one
-                // judgment (values differ across columns) - collapse to one
-                // aggregate result per row (existing behaviour below, kept
-                // unchanged). A per-tüp 7-criteria matrix (real AKTAŞ report)
-                // instead declares N columns that ALL share the SAME fixed
-                // value (e.g. every column says "uygun" - a mark in THAT
-                // column means THAT specific criterion, from its own header
-                // text, is compliant) - there is no schema field for "this is
-                // N separate criteria" so Gemini expresses it as N same-value
-                // result columns; the only way to tell them apart from a
-                // genuine 3-way outcome block is that a REAL outcome block's
-                // values are never all identical (uygun/uygun_degil/
-                // uygulanamiyor are mutually exclusive by definition).
+                // Three genuinely different shapes can all declare 2+ "result"
+                // columns, and only the real report distinguishes them:
+                // - Classic U./U.D./N.U. checkbox columns each stand for a
+                //   DIFFERENT outcome of the SAME one judgment (fixed values
+                //   differ across columns) - collapse to one aggregate result
+                //   per row (existing behaviour below, kept unchanged).
+                // - A per-tüp 7-criteria matrix (real AKTAŞ report) declares N
+                //   columns that ALL share the SAME fixed value (e.g. every
+                //   column says "uygun" - a mark in THAT column means THAT
+                //   specific criterion, from its own header text, is
+                //   compliant) - the only way to tell this apart from a
+                //   genuine 3-way outcome block is that a REAL outcome
+                //   block's values are never all identical.
+                // - A per-criterion matrix where each criterion's OWN column
+                //   has a DYNAMIC (null) per-row code instead of a fixed mark
+                //   (real OKCO "Yangın Dolapları" report: 15 criteria ROWS,
+                //   each already independently one column per equipment in
+                //   the transposed columns-axis case, but the SAME dynamic-
+                //   per-cell shape can appear on the rows axis too - N result
+                //   columns ALL declared value=null, each one its own
+                //   criterion, cell text read as-is per row). There is no
+                //   schema field for "this is N separate criteria" in either
+                //   sub-case, so Gemini expresses it as N result columns that
+                //   are either all-same-fixed or all-dynamic.
                 $fixedCriterionColumns = array_filter($resultColumns, fn ($value) => $value !== null);
                 $distinctFixedValues = array_unique(array_values($fixedCriterionColumns));
-                $isMultiCriterionResultBlock = count($fixedCriterionColumns) >= 2 && count($distinctFixedValues) === 1;
+                $isMultiCriterionResultBlock =
+                    (count($fixedCriterionColumns) >= 2 && count($distinctFixedValues) === 1)
+                    || (count($resultColumns) >= 2 && count($fixedCriterionColumns) === 0);
 
                 $found = false;
                 for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
@@ -492,7 +502,7 @@ class TemplateDrivenFireSuppressionExtractor
                     $criteriaResults = [];
                     if ($isMultiCriterionResultBlock) {
                         $criterionPosition = 0;
-                        foreach ($fixedCriterionColumns as $column => $fixedValue) {
+                        foreach ($resultColumns as $column => $fixedValue) {
                             $criterionPosition++;
                             $headerText = $resultColumnHeaders[$column] ?? null;
                             $code = ($headerText !== null ? $this->leadingNumber($headerText) : null) ?? (string) $criterionPosition;
@@ -502,19 +512,25 @@ class TemplateDrivenFireSuppressionExtractor
                             $criteriaResults[] = [
                                 'code' => $code,
                                 'criterion' => $criterionText,
-                                // The column's declared value is only a
-                                // DEFAULT for "this criterion has a mark" -
-                                // it must NOT be applied blindly to any
-                                // non-empty cell. A report can (and does)
-                                // sometimes write the real negative code/glyph
-                                // directly into the SAME column instead of
-                                // leaving it blank (e.g. "UD" printed where a
-                                // ✔ was expected) - read what the cell
-                                // ACTUALLY says first, only fall back to the
-                                // column's fixed value when the mark itself
-                                // carries no information of its own (a plain
-                                // ✔/✓ or any other non-negative mark).
-                                'result' => $this->interpretCriterionCell($cellText, $fixedValue),
+                                // Fixed-value sub-case (AKTAŞ-style, e.g. every
+                                // criterion column says "uygun"): the column's
+                                // declared value is only a DEFAULT for "this
+                                // criterion has a mark" - a report can (and
+                                // does) sometimes write the real negative
+                                // code/glyph directly into the SAME column
+                                // instead of leaving it blank, so the cell's
+                                // ACTUAL text is checked first.
+                                // Dynamic sub-case (OKCO-style, e.g. every
+                                // criterion column/row's own cell independently
+                                // varies U/UD/N per equipment): there is no
+                                // fixed reference value to fall back to, so the
+                                // raw per-cell code is passed straight through
+                                // (blank -> unknown/null, never guessed) -
+                                // FireSuppressionUnifiedNormalizer::normalizeResult()
+                                // downstream already recognizes these short codes.
+                                'result' => $fixedValue !== null
+                                    ? $this->interpretCriterionCell($cellText, $fixedValue)
+                                    : ($cellText !== '' ? $this->cleanValue($cellText) : null),
                             ];
                         }
                     }
@@ -615,13 +631,21 @@ class TemplateDrivenFireSuppressionExtractor
         // row - N rows sharing the IDENTICAL fixed value can only mean N
         // separate criteria, one per row, each independently checked for
         // EVERY equipment column.
+        // Real OKCO "Yangın Dolapları" report: 15 criteria rows (5.38-5.52),
+        // each its OWN row, each cell independently U/UD/N PER equipment
+        // column - no single fixed value at all (the DYNAMIC sub-case,
+        // mirrored from extractEquipmentFromTableShape's rows-axis version).
+        $resultRoleDefCount = 0;
         $fixedResultRoleDefs = [];
         foreach ($roleColumns as $roleDef) {
             if (!is_array($roleDef) || ($roleDef['role'] ?? '') !== 'result') continue;
+            $resultRoleDefCount++;
             $fixedValue = $this->string($roleDef['value'] ?? null);
             if ($fixedValue !== null) $fixedResultRoleDefs[] = $fixedValue;
         }
-        $isMultiCriterionResultBlock = count($fixedResultRoleDefs) >= 2 && count(array_unique($fixedResultRoleDefs)) === 1;
+        $isMultiCriterionResultBlock =
+            (count($fixedResultRoleDefs) >= 2 && count(array_unique($fixedResultRoleDefs)) === 1)
+            || ($resultRoleDefCount >= 2 && $fixedResultRoleDefs === []);
 
         // The header row can repeat multiple times (e.g. a new 5-or-10-wide
         // block of instances starting fresh on each page) - accumulate every
@@ -649,6 +673,16 @@ class TemplateDrivenFireSuppressionExtractor
                 }
                 if ($labelColumn === null || !$instanceColumns) continue;
 
+                // Every column BEFORE the first equipment instance column is
+                // part of this row's OWN label region - a real report can
+                // split a criterion's code and its text across TWO separate
+                // cells there (e.g. code alone in one cell, criterion text in
+                // the next) instead of fusing them into one, depending on how
+                // the PDF wraps that particular row. Concatenating the whole
+                // region (not just the first non-empty cell) means
+                // resolveColumnRole() below sees the FULL text either way.
+                $labelRegionEnd = min(array_keys($instanceColumns));
+
                 $items = [];
                 $criteriaResults = [];
                 foreach ($instanceColumns as $column => $identity) {
@@ -667,11 +701,12 @@ class TemplateDrivenFireSuppressionExtractor
                 $criterionPosition = 0;
                 for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
                     $dataRow = $grid[$r];
-                    $rowLabel = null;
-                    foreach ($dataRow as $cellValue) {
-                        $cellValue = trim((string) $cellValue);
-                        if ($cellValue !== '') { $rowLabel = $cellValue; break; }
+                    $labelParts = [];
+                    for ($labelColumnIndex = 0; $labelColumnIndex < $labelRegionEnd; $labelColumnIndex++) {
+                        $cellValue = trim((string) ($dataRow[$labelColumnIndex] ?? ''));
+                        if ($cellValue !== '') $labelParts[] = $cellValue;
                     }
+                    $rowLabel = $labelParts ? implode(' ', $labelParts) : null;
                     if ($rowLabel === null) continue;
                     // A later occurrence of the header row (a new block, e.g.
                     // the next page's set of instances) ends this block.
@@ -688,7 +723,7 @@ class TemplateDrivenFireSuppressionExtractor
                     $fixedValue = $role === 'result' ? $this->string($roleDef['value'] ?? null) : null;
                     $criterionCode = null;
                     $criterionText = null;
-                    if ($role === 'result' && $isMultiCriterionResultBlock && $fixedValue !== null) {
+                    if ($role === 'result' && $isMultiCriterionResultBlock) {
                         $criterionPosition++;
                         $criterionCode = $this->leadingNumber($rowLabel) ?? (string) $criterionPosition;
                         $criterionText = $this->stripLeadingCode($rowLabel, $criterionCode);
@@ -697,16 +732,26 @@ class TemplateDrivenFireSuppressionExtractor
 
                     foreach ($instanceColumns as $column => $identity) {
                         $value = trim((string) ($dataRow[$column] ?? ''));
-                        if ($role === 'result' && $isMultiCriterionResultBlock && $fixedValue !== null) {
+                        if ($role === 'result' && $isMultiCriterionResultBlock) {
                             // Every equipment column gets its OWN answer for
                             // THIS criterion row, whether marked or blank -
                             // unlike property/note, silence here is itself
                             // meaningful (not confirmed compliant), so this
                             // does not skip on empty like the branch below.
+                            // Fixed sub-case (AKTAŞ-style): interpret the mark
+                            // against the column's own declared value. Dynamic
+                            // sub-case (OKCO-style, real "Yangın Dolapları"
+                            // report: 15 criteria rows, each cell independently
+                            // U/UD/N per dolap column): no fixed reference
+                            // exists, pass the raw per-cell code straight
+                            // through - the downstream normalizer already
+                            // recognizes these short codes.
                             $criteriaResults[$column][] = [
                                 'code' => $criterionCode,
                                 'criterion' => $criterionText,
-                                'result' => $this->interpretCriterionCell($value, $fixedValue),
+                                'result' => $fixedValue !== null
+                                    ? $this->interpretCriterionCell($value, $fixedValue)
+                                    : ($value !== '' ? $this->cleanValue($value) : null),
                             ];
                             continue;
                         }
@@ -1672,15 +1717,23 @@ private function findCriterionFromCells(
 
     // Plain leading-digit scan (no regex) - "1- Yangın söndürme..." -> "1".
     // Returns null when the text doesn't start with a digit at all.
+    // Also accepts a DOTTED multi-part code ("5.38 Hortumda..." -> "5.38",
+    // not just "5") - a dot only extends the code when it sits BETWEEN two
+    // digit groups; a trailing dot with no digit after it ("5. Kriter metni")
+    // is ordinary punctuation, not part of the code, and is trimmed off.
     private function leadingNumber(string $text): ?string
     {
         $text = ltrim($text);
-        $digits = '';
-        for ($i = 0; $i < strlen($text); $i++) {
-            if (!ctype_digit($text[$i])) break;
-            $digits .= $text[$i];
+        $end = 0;
+        $length = strlen($text);
+        $sawDigit = false;
+        while ($end < $length) {
+            if (ctype_digit($text[$end])) { $end++; $sawDigit = true; continue; }
+            if ($text[$end] === '.' && $sawDigit && $end + 1 < $length && ctype_digit($text[$end + 1])) { $end++; continue; }
+            break;
         }
-        return $digits !== '' ? $digits : null;
+        $code = rtrim(substr($text, 0, $end), '.');
+        return $code !== '' ? $code : null;
     }
 
     // Removes a code fused into the front of its own cell ("1. Portatif ..."

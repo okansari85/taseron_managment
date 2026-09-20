@@ -142,7 +142,11 @@ class EmergencyEquipmentAnnualControlService
     // kontrol raporuna göre senkronize eder. Rapor yoksa (silinip başka rapor
     // kalmadıysa) MEVCUT değerlere dokunulmaz — bu alanlar rapor sistemi
     // gelmeden önce elle girilmiş olabilir, zorla temizlenmez.
-    private function syncAnnualMaintenanceSnapshot(LocationEmergencyEquipment $equipment): void
+    // Public: YscAnnualControlSaveService (tek upload akışının "ysc" dalı)
+    // da AYNI senkronizasyonu kendi kaydettiği raporlar için çağırır - iki
+    // farklı rapor kaydetme yolu (bu servisin kendi store()'u ve YSC dalı)
+    // aynı düz özet alanları güncel tutmalı.
+    public function syncAnnualMaintenanceSnapshot(LocationEmergencyEquipment $equipment): void
     {
         $latestReport = $equipment->annualControlReports()->first();
 
