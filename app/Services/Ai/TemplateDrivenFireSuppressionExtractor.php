@@ -782,16 +782,32 @@ class TemplateDrivenFireSuppressionExtractor
                 if (!$this->isHeaderRow($row, $headerPatterns)) continue;
 
                 // The first cell matching header_row_patterns is this row's
-                // OWN label (e.g. "No / Kod"); every OTHER non-empty cell in
-                // the SAME row is one equipment instance's identity, at that
-                // column position.
+                // OWN label (e.g. "No / Kod"); every OTHER non-empty cell
+                // AFTER it in the SAME row is one equipment instance's
+                // identity, at that column position. Found in its OWN pass
+                // first (rather than inline while scanning left-to-right) -
+                // a real report can prefix the label with a purely
+                // decorative row-reference cell of its own (observed: an
+                // Excel-style row letter "A"/"G"/"M"... sitting in column 0
+                // before "Dolap No" itself in column 1) that carries no real
+                // equipment identity at all. Only cells found AFTER the
+                // label column are real per-instance data - anything before
+                // it is auxiliary/reference content, never an instance.
                 $labelColumn = null;
-                $instanceColumns = [];
                 foreach ($row as $column => $cellValue) {
                     $cellValue = trim((string) $cellValue);
                     if ($cellValue === '') continue;
-                    if ($labelColumn === null && $this->matchesAny($cellValue, $headerPatterns)) { $labelColumn = (int) $column; continue; }
-                    $instanceColumns[(int) $column] = $cellValue;
+                    if ($this->matchesAny($cellValue, $headerPatterns)) { $labelColumn = (int) $column; break; }
+                }
+                if ($labelColumn === null) continue;
+
+                $instanceColumns = [];
+                foreach ($row as $column => $cellValue) {
+                    $column = (int) $column;
+                    if ($column <= $labelColumn) continue;
+                    $cellValue = trim((string) $cellValue);
+                    if ($cellValue === '') continue;
+                    $instanceColumns[$column] = $cellValue;
                 }
                 if ($labelColumn === null || !$instanceColumns) continue;
 
@@ -805,18 +821,32 @@ class TemplateDrivenFireSuppressionExtractor
                 // resolveColumnRole() below sees the FULL text either way.
                 $labelRegionEnd = min(array_keys($instanceColumns));
 
+                // Special case, one real report observed: instead of
+                // widening the table further, a single identity cell can
+                // cram SEVERAL equipment codes together, hyphen-joined
+                // (e.g. "48-49-50-...-61") when that many share the exact
+                // same recorded properties/criteria answers. Only a cell
+                // that is ENTIRELY hyphen-joined plain digit codes expands
+                // this way (a real single code that happens to contain a
+                // hyphen, e.g. "A-12", is left alone) - every expanded code
+                // gets its OWN equipment entry, all reading from this SAME
+                // shared column position (so identical properties/criteria
+                // answers, which is exactly what the compressed cell means).
                 $items = [];
                 $criteriaResults = [];
                 foreach ($instanceColumns as $column => $identity) {
-                    $items[$column] = [
-                        'code' => $this->cleanValue($identity),
-                        'name' => $this->string($template['equipment_name'] ?? null),
-                        'system_name' => $this->string($template['system_name'] ?? null),
-                        'properties' => [],
-                        'result' => null,
-                        'note' => null,
-                        'source_pages' => [(int) ($table['page'] ?? 0)],
-                    ];
+                    $items[$column] = [];
+                    foreach ($this->expandCompressedIdentity($identity) as $code) {
+                        $items[$column][] = [
+                            'code' => $this->cleanValue($code),
+                            'name' => $this->string($template['equipment_name'] ?? null),
+                            'system_name' => $this->string($template['system_name'] ?? null),
+                            'properties' => [],
+                            'result' => null,
+                            'note' => null,
+                            'source_pages' => [(int) ($table['page'] ?? 0)],
+                        ];
+                    }
                     $criteriaResults[$column] = [];
                 }
 
@@ -922,21 +952,37 @@ class TemplateDrivenFireSuppressionExtractor
                             continue;
                         }
                         if ($value === '' || $value === '-') continue;
+                        // A column can now hold MORE THAN ONE equipment entry
+                        // (see the compressed-identity expansion above) - the
+                        // SAME cell value applies to every expanded instance
+                        // at this column, since a compressed cell means they
+                        // all share the identical recorded answer.
                         if ($role === 'property') {
                             $key = $this->string($roleDef['key'] ?? null) ?? $rowLabel;
-                            $this->assignPropertyValue($items[$column]['properties'], $key, $this->patterns($roleDef['sub_keys'] ?? []), $value);
-                        } elseif ($role === 'result' && $items[$column]['result'] === null) {
-                            $items[$column]['result'] = $fixedValue ?? $this->cleanValue($value);
-                        } elseif ($role === 'note' && $items[$column]['note'] === null) {
-                            $items[$column]['note'] = $this->cleanValue($value);
+                            foreach ($items[$column] as &$instanceItem) {
+                                $this->assignPropertyValue($instanceItem['properties'], $key, $this->patterns($roleDef['sub_keys'] ?? []), $value);
+                            }
+                            unset($instanceItem);
+                        } elseif ($role === 'result') {
+                            foreach ($items[$column] as &$instanceItem) {
+                                if ($instanceItem['result'] === null) $instanceItem['result'] = $fixedValue ?? $this->cleanValue($value);
+                            }
+                            unset($instanceItem);
+                        } elseif ($role === 'note') {
+                            foreach ($items[$column] as &$instanceItem) {
+                                if ($instanceItem['note'] === null) $instanceItem['note'] = $this->cleanValue($value);
+                            }
+                            unset($instanceItem);
                         }
                     }
                 }
 
-                foreach ($items as $column => $item) {
-                    $item['direct_control_items'] = $criteriaResults[$column] ?? [];
-                    if ($item['properties'] || $item['result'] !== null || $item['note'] !== null || $item['direct_control_items']) {
-                        $allItems[] = $item;
+                foreach ($items as $column => $itemList) {
+                    foreach ($itemList as $item) {
+                        $item['direct_control_items'] = $criteriaResults[$column] ?? [];
+                        if ($item['properties'] || $item['result'] !== null || $item['note'] !== null || $item['direct_control_items']) {
+                            $allItems[] = $item;
+                        }
                     }
                 }
             }
@@ -2012,6 +2058,28 @@ private function findCriterionFromCells(
     private function cleanValue(string $value): string
     {
         return trim(preg_replace('/\s+/u', ' ', str_replace(["\n", "\r"], ' ', $value)) ?? $value);
+    }
+
+    // "48-49-50-...-61" -> ['48','49','50',...,'61'] when EVERY hyphen-
+    // separated part is a plain digit code (a real report can cram several
+    // equipment codes into one identity cell this way when they all share
+    // identical recorded properties/criteria answers, instead of widening
+    // the table). Plain string split, no regex. Anything else (a single
+    // code, a code that itself contains a hyphen like "A-12", an empty
+    // part) is left as ONE unchanged identity - only an unambiguous, fully
+    // numeric hyphen list expands.
+    private function expandCompressedIdentity(string $identity): array
+    {
+        if (!str_contains($identity, '-')) return [$identity];
+
+        $parts = array_map('trim', explode('-', $identity));
+        if (count($parts) < 2) return [$identity];
+
+        foreach ($parts as $part) {
+            if ($part === '' || !ctype_digit($part)) return [$identity];
+        }
+
+        return $parts;
     }
 
     private function sanitizeUtf8(mixed $value): mixed
