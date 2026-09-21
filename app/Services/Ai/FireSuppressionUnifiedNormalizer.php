@@ -122,6 +122,24 @@ class FireSuppressionUnifiedNormalizer
             }
         }
 
+        // Current schema: system_criteria (real code/text/result values,
+        // replaces the old extracted_data.systems[].control_items) and
+        // equipment_definitions (structure, replaces the old system[].
+        // equipment/table_shape - equipment_axis="none" entries also carry
+        // real per-instance values, replacing the old extracted_data.
+        // equipment[] direct-read list). A system counts as usable the
+        // moment either is non-empty, no separate direct-read/pattern
+        // distinction needed anymore.
+        $usableSystemNames = [];
+        foreach ($systems as $system) {
+            if (!is_array($system)) continue;
+            $name = trim((string) ($system['system_name'] ?? ''));
+            if ($name === '') continue;
+            if ((array) ($system['system_criteria'] ?? []) || (array) ($system['equipment_definitions'] ?? [])) {
+                $usableSystemNames[$name] = true;
+            }
+        }
+
         $usableSystems = 0;
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
@@ -131,6 +149,7 @@ class FireSuppressionUnifiedNormalizer
                 isset($directReadSystemNames[$systemName])
                 || isset($directReadSystemControlNames[$systemName])
                 || isset($systemsWithEquipmentShape[$systemName])
+                || isset($usableSystemNames[$systemName])
             )) {
                 $usableSystems++;
                 continue;
@@ -846,6 +865,13 @@ class FireSuppressionUnifiedNormalizer
                     : [],
                 'source_pages' => $this->pages($component['source_pages'] ?? []),
                 'compliance_status' => $this->stringOrNull($component['compliance_status'] ?? null) ?? 'unknown',
+                // Equipment tables that carry a single overall verdict per
+                // instance (e.g. a "AÇIKLAMALAR" free-text column next to
+                // fixed U./U.D./N.U. result columns) attach their reason as
+                // 'note' directly on the raw component - carried through
+                // here so buildEquipmentEntry() below can surface it instead
+                // of always reporting an empty note.
+                'note' => $this->stringOrNull($component['note'] ?? null),
             ];
         }
 
@@ -910,7 +936,7 @@ class FireSuppressionUnifiedNormalizer
             'model' => $component['model'] ?? null,
             'serial_no' => $component['serial_no'] ?? null,
             'result' => $hasNonconforming ? 'uygun_degil' : ($hasConforming ? 'uygun' : null),
-            'note' => null,
+            'note' => $component['note'] ?? null,
             // Serbest formattaki ekipman özellikleri (örn. "Ölçülen Basınç",
             // "Hortum Uzunluğu") - components[].properties'te zaten çıkarılmış
             // durumdaydı ama bu equipment[] düzleştirmesine hiç aktarılmıyordu,

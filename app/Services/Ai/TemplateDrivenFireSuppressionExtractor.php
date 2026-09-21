@@ -19,145 +19,104 @@ class TemplateDrivenFireSuppressionExtractor
         $systems = (array) ($template['fire_systems']['systems'] ?? []);
         $extractedSystems = [];
 
-        // Gemini-direct equipment (extracted_data.equipment) - real values it
-        // read itself for a SMALL, boundedly-countable group (e.g. 2-4 pumps
-        // with an idiosyncratic "proje değeri / uygulama değeri" split column
-        // no fixed structural rule generalizes well). Grouped by system_name
-        // so a system with a direct-read group skips table_shape/legacy
-        // entirely for it - trust the AI's own reading over a structural
-        // guess when the AI already did the reading.
-        // Cells a table_shape reader has already claimed as an equipment
+        // Cells a table-shape reader has already claimed as an equipment
         // instance's own identity/property/result/note column (keyed
-        // tableIndex -> row -> column). A system's own control_code_patterns
-        // can be as generic as bare "^1$".."^10$" (real Gemini output seen
-        // for a YSC report) which then ALSO matches an equipment table's
-        // identity column (e.g. "Tüp No" values 1-10) verbatim - without this
-        // guard extractControls() below would misread that equipment table's
-        // OWN cells as bogus "genel kriter" control items (code=Tüp No,
-        // criterion=nearest neighboring cell like "Cihaz Tipi"). Populated
-        // BEFORE extractControls() runs for the same tables.
+        // tableIndex -> row -> column) - populated as equipment_definitions
+        // are read below, consulted so two different equipment groups on
+        // the SAME shared table never reinterpret each other's cells.
         $claimedCells = [];
-
-        // Gemini-direct system-level control items (extracted_data.systems) -
-        // real code/criterion/result values it read itself for a system's
-        // OWN (equipment-independent) checklist, e.g. "Genel Tespit" or
-        // "Belge ve Kayıt Kontrolleri". These are SMALL/BOUNDED per system
-        // (unlike equipment, which can run into the hundreds), so - same
-        // trust level as report_information/overall_result - Gemini reads
-        // the real values directly instead of declaring control_code_
-        // patterns/control_text_patterns for extractControls() below to
-        // pattern-match. This sidesteps a whole class of bugs repeatedly hit
-        // this session (bare-digit code patterns colliding with an unrelated
-        // equipment table's own identity column, code/text pattern COUNT
-        // mismatches producing garbled criteria, etc). Keyed by system_name;
-        // a system missing from this map (older fixture, captured before
-        // this field existed) falls back to the legacy pattern-based
-        // extractControls() path further below - never a hard requirement.
-        $directSystemControlItemsByName = [];
-        foreach ((array) ($semantic['extracted_data']['systems'] ?? []) as $directSystem) {
-            if (!is_array($directSystem)) continue;
-            $directSystemName = $this->string($directSystem['system_name'] ?? null);
-            if ($directSystemName === null) continue;
-            $items = [];
-            foreach ((array) ($directSystem['control_items'] ?? []) as $controlEntry) {
-                if (!is_array($controlEntry)) continue;
-                $controlCode = $this->string($controlEntry['code'] ?? null);
-                $criterion = $this->string($controlEntry['criterion'] ?? null);
-                if ($controlCode === null || $criterion === null) continue;
-                $items[] = [
-                    'code' => $controlCode,
-                    'criterion' => $criterion,
-                    'result' => $this->string($controlEntry['result'] ?? null),
-                    'source_pages' => [],
-                ];
-            }
-            // A system can legitimately have NO equipment-independent
-            // criteria (e.g. a system whose only data is its equipment
-            // table) - still record it (empty array) so the "isset" check
-            // below correctly skips the legacy pattern fallback for it too,
-            // rather than mistaking "AI found nothing" for "AI never looked".
-            $directSystemControlItemsByName[$directSystemName] = $items;
-        }
-
-        $directEquipmentBySystem = [];
-        foreach ((array) ($semantic['extracted_data']['equipment'] ?? []) as $directItem) {
-            if (!is_array($directItem)) continue;
-            $directSystemName = $this->string($directItem['system_name'] ?? null);
-            if ($directSystemName === null) continue;
-            $properties = [];
-            foreach ((array) ($directItem['properties'] ?? []) as $propertyEntry) {
-                if (!is_array($propertyEntry)) continue;
-                $propertyKey = $this->string($propertyEntry['key'] ?? null);
-                $propertyValue = $this->string($propertyEntry['value'] ?? null);
-                if ($propertyKey === null || $propertyValue === null) continue;
-                $properties[$propertyKey] = $this->cleanValue($propertyValue);
-            }
-            // This equipment's OWN inspection checklist, when Gemini read one
-            // directly (a single-equipment report, e.g. a forklift/transpalet -
-            // the whole "KONTROL KRİTERLERİ" list IS this one machine's
-            // inspection). Empty for the common case (dolap/pompa etc, which
-            // has at most one aggregate 'result', not a per-criterion list).
-            $directControlItems = [];
-            foreach ((array) ($directItem['control_items'] ?? []) as $controlEntry) {
-                if (!is_array($controlEntry)) continue;
-                $controlCode = $this->string($controlEntry['code'] ?? null);
-                if ($controlCode === null) continue;
-                $directControlItems[] = [
-                    'code' => $controlCode,
-                    'criterion' => $this->string($controlEntry['criterion'] ?? null),
-                    'result' => $this->string($controlEntry['result'] ?? null),
-                ];
-            }
-
-            $directEquipmentBySystem[$directSystemName][] = [
-                'code' => $this->string($directItem['code'] ?? null),
-                'name' => $this->string($directItem['equipment_name'] ?? null),
-                'system_name' => $directSystemName,
-                'properties' => $properties,
-                'result' => $this->string($directItem['result'] ?? null),
-                'note' => null,
-                'direct_control_items' => $directControlItems,
-                'source_pages' => array_values(array_unique(array_filter(array_map('intval', (array) ($directItem['source_pages'] ?? []))))),
-            ];
-        }
 
         foreach ($systems as $system) {
             if (!is_array($system)) continue;
             $systemName = $this->string($system['system_name'] ?? null);
             if ($systemName === null) continue;
 
-            $equipment = [];
-
-            if (isset($directEquipmentBySystem[$systemName])) {
-                $equipment = $directEquipmentBySystem[$systemName];
-            } else {
-                // table_shape is the sole, authoritative structure
-                // declaration (role: identity/property/result/note) - one
-                // generic reader for any rows/none-axis layout. A bounded,
-                // idiosyncratically-laid-out equipment group (e.g. a pump
-                // room) is expected to arrive via extracted_data.equipment
-                // (the direct-read branch above) instead of here. There is
-                // deliberately no further fallback: an equipment group that
-                // is neither table_shape rows/none NOR direct-read simply
-                // yields no equipment for now, rather than guessing via
-                // heuristics that have repeatedly mismatched across reports.
-                foreach ((array) ($system['equipment'] ?? []) as $equipmentTemplate) {
-                    if (!is_array($equipmentTemplate)) continue;
-                    foreach ($this->extractEquipmentFromTableShape($latticeTables, $equipmentTemplate, $claimedCells) as $item) {
-                        $equipment[] = $item;
-                    }
-                }
+            // system_criteria: real code/text/result values Gemini read
+            // directly for this system's OWN (equipment-independent)
+            // checklist (e.g. "Genel Tespit"/"Belge ve Kayıt Kontrolleri").
+            // 'result' here is {raw, label} - raw is the UNNORMALIZED cell
+            // text (e.g. "U"/"UD"), passed straight through so the SAME
+            // proven normalizeResult() further down the pipeline (which
+            // already recognizes many real symbol sets - U/UD/N, U./U.D./
+            // N.U., U/U.D/U.Y/G, ✔/✘...) interprets it, instead of trusting
+            // Gemini's own (occasionally wrong) interpretation.
+            $controlItems = [];
+            foreach ((array) ($system['system_criteria'] ?? []) as $criterionEntry) {
+                if (!is_array($criterionEntry)) continue;
+                $code = $this->string($criterionEntry['code'] ?? null);
+                $text = $this->string($criterionEntry['text'] ?? null);
+                if ($code === null || $text === null) continue;
+                $resultRaw = is_array($criterionEntry['result'] ?? null)
+                    ? $this->string($criterionEntry['result']['raw'] ?? null)
+                    : $this->string($criterionEntry['result'] ?? null);
+                $controlItems[] = [
+                    'code' => $code,
+                    'criterion' => $text,
+                    'result' => $resultRaw,
+                    'source_pages' => [],
+                ];
             }
 
-            if (isset($directSystemControlItemsByName[$systemName])) {
-                $controlItems = $directSystemControlItemsByName[$systemName];
-            } else {
-                // Legacy fallback - older fixtures captured before AI
-                // direct-read system criteria existed still carry their own
-                // template.control_items/control_matrix declarations.
-                $controlTemplates = (array) ($system['control_items'] ?? []);
-                $resultAxis = (array) ($system['control_matrix']['axis_detection']['result_axis'] ?? []);
-                $controlItems = $this->extractControls($latticeTables, $controlTemplates, $resultAxis, $claimedCells);
+            // equipment_definitions: one entry per equipment TYPE/GROUP, not
+            // per instance. equipment_axis="none" (genuinely one real
+            // instance) carries its own real values directly (identity_
+            // value/attributes[].value/criteria[].result) - read here like
+            // report_information. equipment_axis="rows"/"columns" (possibly
+            // unbounded) carries STRUCTURE only - converted into the SAME
+            // internal role-list shape extractEquipmentFromTableShape()
+            // already reads (identity/property, no declared result roles at
+            // all: the real per-instance criteria are recovered by that
+            // function's own undeclared-row auto-detection, already proven
+            // on real multi-hundred-equipment reports - Gemini is no longer
+            // asked to enumerate them).
+            $equipment = [];
+            foreach ((array) ($system['equipment_definitions'] ?? []) as $definition) {
+                if (!is_array($definition)) continue;
+                $instanceStructure = (array) ($definition['instance_structure'] ?? []);
+                $axis = mb_strtolower(trim((string) ($instanceStructure['equipment_axis'] ?? '')), 'UTF-8');
+
+                if ($axis === 'none') {
+                    $properties = [];
+                    foreach ((array) ($definition['attributes'] ?? []) as $attribute) {
+                        if (!is_array($attribute)) continue;
+                        $field = $this->string($attribute['field'] ?? null);
+                        $value = $this->string($attribute['value'] ?? null);
+                        if ($field === null || $value === null) continue;
+                        $properties[$field] = $this->cleanValue($value);
+                    }
+                    $directControlItems = [];
+                    $criteria = (array) ($definition['equipment_control_criteria']['criteria'] ?? []);
+                    foreach ($criteria as $criterionEntry) {
+                        if (!is_array($criterionEntry)) continue;
+                        $code = $this->string($criterionEntry['code'] ?? null);
+                        if ($code === null) continue;
+                        $resultRaw = is_array($criterionEntry['result'] ?? null)
+                            ? $this->string($criterionEntry['result']['raw'] ?? null)
+                            : null;
+                        $directControlItems[] = [
+                            'code' => $code,
+                            'criterion' => $this->string($criterionEntry['text'] ?? null),
+                            'result' => $resultRaw,
+                        ];
+                    }
+                    $equipment[] = [
+                        'code' => $this->string($instanceStructure['identity_value'] ?? null),
+                        'name' => $this->string($definition['equipment_name'] ?? null),
+                        'system_name' => $systemName,
+                        'properties' => $properties,
+                        'result' => null,
+                        'note' => null,
+                        'direct_control_items' => $directControlItems,
+                        'source_pages' => [],
+                    ];
+                    continue;
+                }
+
+                $equipmentTemplate = $this->equipmentTemplateFromDefinition($definition, $systemName);
+                if ($equipmentTemplate === null) continue;
+                foreach ($this->extractEquipmentFromTableShape($latticeTables, $equipmentTemplate, $claimedCells) as $item) {
+                    $equipment[] = $item;
+                }
             }
 
             // A per-tüp criteria column's own header text is often a short,
@@ -322,6 +281,77 @@ class TemplateDrivenFireSuppressionExtractor
         return $result;
     }
 
+    // Converts a NEW-schema equipment_definitions[] entry (instance_
+    // structure + attributes, both structural - no per-instance values for
+    // an unbounded rows/columns group) into the internal table_shape shape
+    // extractEquipmentFromTableShape() already reads, so that function and
+    // everything it calls (row/column readers, the header-row anchor
+    // safety check, the axis fallback, the undeclared-row auto-criterion
+    // detection - all proven on real multi-hundred-equipment reports) stay
+    // completely untouched. Deliberately declares NO "result" roles at
+    // all: Gemini is no longer asked to enumerate criteria columns/rows one
+    // by one (real reports have shown this both undercounts wildly-long
+    // criteria lists AND over-declares when Gemini feels forced to invent
+    // structure it isn't sure of) - every row/column not claimed by
+    // identity/property here is automatically treated as its own dynamic
+    // criterion by the existing reader. Returns null when there is no
+    // usable identity_field (nothing to anchor on).
+    private function equipmentTemplateFromDefinition(array $definition, string $systemName): ?array
+    {
+        $instanceStructure = (array) ($definition['instance_structure'] ?? []);
+        $axis = mb_strtolower(trim((string) ($instanceStructure['equipment_axis'] ?? '')), 'UTF-8');
+        $identityField = $this->string($instanceStructure['identity_field'] ?? null);
+        if ($identityField === null || !in_array($axis, ['rows', 'columns'], true)) return null;
+
+        $headerPatterns = $this->patterns($instanceStructure['header_patterns'] ?? []);
+        if (!$headerPatterns) $headerPatterns = [$identityField];
+
+        $roleColumns = [
+            ['role' => 'identity', 'header_patterns' => [$identityField]],
+        ];
+        foreach ((array) ($definition['attributes'] ?? []) as $attribute) {
+            if (!is_array($attribute)) continue;
+            $field = $this->string($attribute['field'] ?? null);
+            $sourcePattern = $this->string($attribute['source_pattern'] ?? null) ?? $field;
+            if ($field === null || $sourcePattern === null) continue;
+            $roleColumns[] = ['role' => 'property', 'header_patterns' => [$sourcePattern], 'key' => $field];
+        }
+
+        // Explicit note/fixed-outcome declarations (see instance_structure.
+        // result_columns in GeminiTemplateDiscoveryClient) - reuses the
+        // SAME 'note'/'result' roles the deep rows/columns engines already
+        // understand (collapsed exact/substring text matching via
+        // resolveColumnRole()/collapseForMatch(), never regex). A column NOT
+        // declared here still falls through to the engines' own undeclared-
+        // column auto-detection (each becomes its own dynamic criterion),
+        // which stays correct for genuinely independent criteria.
+        foreach ((array) ($instanceStructure['result_columns'] ?? []) as $resultColumnDef) {
+            if (!is_array($resultColumnDef)) continue;
+            $headerPattern = $this->string($resultColumnDef['header_pattern'] ?? null);
+            if ($headerPattern === null) continue;
+            $kind = mb_strtolower(trim((string) ($resultColumnDef['kind'] ?? '')), 'UTF-8');
+            if ($kind === 'note') {
+                $roleColumns[] = ['role' => 'note', 'header_patterns' => [$headerPattern]];
+                continue;
+            }
+            if ($kind === 'fixed_value') {
+                $value = $this->string($resultColumnDef['value'] ?? null);
+                if ($value === null) continue;
+                $roleColumns[] = ['role' => 'result', 'header_patterns' => [$headerPattern], 'value' => $value];
+            }
+        }
+
+        return [
+            'equipment_name' => $this->string($definition['equipment_name'] ?? null),
+            'system_name' => $systemName,
+            'table_shape' => [
+                'instance_axis' => $axis,
+                'header_row_patterns' => $headerPatterns,
+                'columns' => $roleColumns,
+            ],
+        ];
+    }
+
     // Reads equipment straight from Gemini's declared table_shape (role:
     // identity/property/result/note) instead of guessing between several
     // shape-specific heuristics below. Gemini describes the STRUCTURE only
@@ -336,12 +366,47 @@ class TemplateDrivenFireSuppressionExtractor
         $shape = (array) ($template['table_shape'] ?? []);
         $axis = mb_strtolower(trim((string) ($shape['instance_axis'] ?? '')), 'UTF-8');
         $roleColumns = (array) ($shape['columns'] ?? []);
+
+        // Gemini sometimes recognizes that a per-unit equipment table exists
+        // (it names the header row via header_row_patterns, e.g. "Soru /
+        // Kriter" / "Dolap No") without managing to name a single column
+        // role for it (columns: []). Reverse-engineering the role list from
+        // Camelot's raw cells alone was tried here and repeatedly produced
+        // wrong data on real reports (a generic block-title row like "Soru
+        // / Kriter" is indistinguishable from a genuine header without
+        // knowing which system it belongs to, and page-scoping it well
+        // enough to be safe needs more context than this method has). The
+        // reliable fix is upstream: TemplateDiscoveryFireSuppressionAnalyzer's
+        // prompt must get Gemini to always enumerate identity/property
+        // roles for a table it already recognized, never leaving columns:
+        // [] - not something this extractor should guess around.
         if ($axis === '' || !$roleColumns) return [];
 
         if ($axis === 'none') return $this->extractShapeSingle($tables, $roleColumns, $template);
-        if ($axis === 'columns') return $this->extractEquipmentFromColumns($tables, $shape, $roleColumns, $template);
-        if ($axis !== 'rows') return [];
 
+        // Gemini's declared axis for a transposed equipment matrix (rows of
+        // equipment vs. columns of equipment) is not always reliable - the
+        // SAME real "Yangın Dolapları" table produced "columns" on one real
+        // Gemini call and "rows" on a separate real call for the identical
+        // PDF, while the underlying Camelot table never changes. Both axis
+        // extractors are cheap, read-only structural scans (nothing is
+        // written until one of them actually finds instances), so when the
+        // declared axis yields nothing, trying the other one before giving
+        // up recovers the real equipment instead of silently returning
+        // empty over one flaky field.
+        if ($axis === 'columns') {
+            $items = $this->extractEquipmentFromColumns($tables, $shape, $roleColumns, $template);
+            return $items ?: $this->extractEquipmentFromRows($tables, $shape, $roleColumns, $template, $claimedCells);
+        }
+        if ($axis === 'rows') {
+            $items = $this->extractEquipmentFromRows($tables, $shape, $roleColumns, $template, $claimedCells);
+            return $items ?: $this->extractEquipmentFromColumns($tables, $shape, $roleColumns, $template);
+        }
+        return [];
+    }
+
+    private function extractEquipmentFromRows(array $tables, array $shape, array $roleColumns, array $template, array &$claimedCells = []): array
+    {
         $headerPatterns = $this->patterns($shape['header_row_patterns'] ?? []);
         if (!$headerPatterns) return [];
 
@@ -351,7 +416,7 @@ class TemplateDrivenFireSuppressionExtractor
             if (!$grid) continue;
 
             foreach ($grid as $headerRowIndex => $row) {
-                if (!$this->matchesAny($this->rowText($row), $headerPatterns)) continue;
+                if (!$this->isHeaderRow($row, $headerPatterns)) continue;
 
                 // Locate each declared column by its POSITION (column_index)
                 // first - exact, unambiguous, immune to the text-overlap trap
@@ -410,6 +475,32 @@ class TemplateDrivenFireSuppressionExtractor
                     }
                     if ($role === 'note' && $noteColumn === null) { $noteColumn = (int) $column; continue; }
                 }
+
+                // Any column in the SAME header row that no declared role
+                // (identity/property) claimed is automatically treated as
+                // its own dynamic result column - the NEW schema no longer
+                // asks Gemini to enumerate result/note columns one by one
+                // (U./U.D./N.U., a "Durum" column, a numbered per-criterion
+                // set, "AÇIKLAMALAR"...), only identity + real fixed
+                // properties. Without this, a real report's whole
+                // compliance data (every U/UD/N mark) would be silently
+                // dropped - the columns-axis reader already does the
+                // equivalent for transposed tables (see
+                // extractEquipmentFromColumns()), this mirrors it for the
+                // rows axis. A column's own header cell text becomes its
+                // criterion label (leadingNumber() below still recovers a
+                // real code like "5.38" from it when present).
+                if ($identityColumn !== null) {
+                    foreach ($row as $column => $cellValue) {
+                        $column = (int) $column;
+                        if (array_key_exists($column, $columnRoles)) continue;
+                        $headerLabel = trim((string) $cellValue);
+                        if ($headerLabel === '') continue;
+                        $resultColumns[$column] = null;
+                        $resultColumnHeaders[$column] = $headerLabel;
+                    }
+                }
+
                 if ($identityColumn === null || (!$propertyColumns && !$resultColumns)) continue;
 
                 // Three genuinely different shapes can all declare 2+ "result"
@@ -619,7 +710,23 @@ class TemplateDrivenFireSuppressionExtractor
     // column, found once from the header row.
     private function extractEquipmentFromColumns(array $tables, array $shape, array $roleColumns, array $template): array
     {
-        $headerPatterns = $this->patterns($shape['header_row_patterns'] ?? []);
+        // A new instance block is anchored ONLY by the declared IDENTITY
+        // row's own header pattern (e.g. "No / Kod") - NOT by the full
+        // shape['header_row_patterns'] list, which can also contain every
+        // property row's label (Gemini sometimes lists "No / Kod", "Kat",
+        // "Marka", ... together as if they jointly describe one header row,
+        // even though each is its OWN separate row in a columns-axis table).
+        // Anchoring on any of those too meant a plain "Marka" row anywhere in
+        // ANY table on the page could be mistaken for the start of a brand
+        // new (bogus) equipment block, turning that row's own values into
+        // fake equipment identities. The identity role is unambiguous and
+        // unique to this equipment, so it is the only safe anchor.
+        $headerPatterns = [];
+        foreach ($roleColumns as $roleDef) {
+            if (is_array($roleDef) && ($roleDef['role'] ?? '') === 'identity') {
+                $headerPatterns = array_merge($headerPatterns, $this->patterns($roleDef['header_patterns'] ?? []));
+            }
+        }
         if (!$headerPatterns) return [];
 
         // Transpose of the rows-axis case (see extractEquipmentFromTableShape):
@@ -657,7 +764,7 @@ class TemplateDrivenFireSuppressionExtractor
             if (!$grid) continue;
 
             foreach ($grid as $headerRowIndex => $row) {
-                if (!$this->matchesAny($this->rowText($row), $headerPatterns)) continue;
+                if (!$this->isHeaderRow($row, $headerPatterns)) continue;
 
                 // The first cell matching header_row_patterns is this row's
                 // OWN label (e.g. "No / Kod"); every OTHER non-empty cell in
@@ -698,7 +805,26 @@ class TemplateDrivenFireSuppressionExtractor
                     $criteriaResults[$column] = [];
                 }
 
-                $criterionPosition = 0;
+                // Gemini declares WHERE this block starts (header_row_patterns)
+                // and WHICH rows are identity/property - it is never asked how
+                // many rows the block spans, or to enumerate every criterion
+                // row individually (real-world gap observed: a Gemini call can
+                // declare the identity+property rows correctly and simply stop
+                // there, never mentioning the criteria rows beneath them even
+                // though Camelot's raw table clearly has them - see OKCO
+                // "Yangın Dolapları" fixture, 15 undeclared 5.38-5.52 rows).
+                // The block's END is instead found structurally, from the
+                // SAME Camelot data Gemini already saw: either the header row
+                // repeats (a fresh instance block, e.g. next page) or a row is
+                // completely empty across every instance column (never a real
+                // per-equipment answer row - always a section heading or a
+                // legend line). A first pass locates that boundary and counts
+                // how many in-range rows Gemini left undeclared; the real
+                // extraction pass below then treats any such undeclared row as
+                // an additional dynamic (per-column) criterion, exactly like
+                // the OKCO-style declared-dynamic case, instead of dropping it.
+                $blockEnd = count($grid);
+                $undeclaredRowCount = 0;
                 for ($r = $headerRowIndex + 1; $r < count($grid); $r++) {
                     $dataRow = $grid[$r];
                     $labelParts = [];
@@ -708,12 +834,37 @@ class TemplateDrivenFireSuppressionExtractor
                     }
                     $rowLabel = $labelParts ? implode(' ', $labelParts) : null;
                     if ($rowLabel === null) continue;
-                    // A later occurrence of the header row (a new block, e.g.
-                    // the next page's set of instances) ends this block.
-                    if ($this->matchesAny($rowLabel, $headerPatterns)) break;
+                    if ($this->matchesAny($rowLabel, $headerPatterns)) { $blockEnd = $r; break; }
+
+                    $hasAnyInstanceValue = false;
+                    foreach ($instanceColumns as $column => $identity) {
+                        if (trim((string) ($dataRow[$column] ?? '')) !== '') { $hasAnyInstanceValue = true; break; }
+                    }
+                    if (!$hasAnyInstanceValue) { $blockEnd = $r; break; }
+
+                    if ($this->resolveColumnRole($rowLabel, $roleColumns) === null) $undeclaredRowCount++;
+                }
+                $blockIsMultiCriterion = $isMultiCriterionResultBlock || $undeclaredRowCount >= 1;
+
+                $criterionPosition = 0;
+                for ($r = $headerRowIndex + 1; $r < $blockEnd; $r++) {
+                    $dataRow = $grid[$r];
+                    $labelParts = [];
+                    for ($labelColumnIndex = 0; $labelColumnIndex < $labelRegionEnd; $labelColumnIndex++) {
+                        $cellValue = trim((string) ($dataRow[$labelColumnIndex] ?? ''));
+                        if ($cellValue !== '') $labelParts[] = $cellValue;
+                    }
+                    $rowLabel = $labelParts ? implode(' ', $labelParts) : null;
+                    if ($rowLabel === null) continue;
 
                     $roleDef = $this->resolveColumnRole($rowLabel, $roleColumns);
-                    if ($roleDef === null) continue;
+                    if ($roleDef === null) {
+                        // Undeclared but inside the structurally-bounded block -
+                        // Gemini simply never named this row; treat it as its
+                        // own dynamic criterion (no shared fixed value, since
+                        // none was ever declared for it).
+                        $roleDef = ['role' => 'result', 'value' => null];
+                    }
                     $role = (string) ($roleDef['role'] ?? '');
                     if (!in_array($role, ['property', 'result', 'note'], true)) continue;
 
@@ -723,7 +874,7 @@ class TemplateDrivenFireSuppressionExtractor
                     $fixedValue = $role === 'result' ? $this->string($roleDef['value'] ?? null) : null;
                     $criterionCode = null;
                     $criterionText = null;
-                    if ($role === 'result' && $isMultiCriterionResultBlock) {
+                    if ($role === 'result' && $blockIsMultiCriterion) {
                         $criterionPosition++;
                         $criterionCode = $this->leadingNumber($rowLabel) ?? (string) $criterionPosition;
                         $criterionText = $this->stripLeadingCode($rowLabel, $criterionCode);
@@ -732,7 +883,7 @@ class TemplateDrivenFireSuppressionExtractor
 
                     foreach ($instanceColumns as $column => $identity) {
                         $value = trim((string) ($dataRow[$column] ?? ''));
-                        if ($role === 'result' && $isMultiCriterionResultBlock) {
+                        if ($role === 'result' && $blockIsMultiCriterion) {
                             // Every equipment column gets its OWN answer for
                             // THIS criterion row, whether marked or blank -
                             // unlike property/note, silence here is itself
@@ -1596,6 +1747,52 @@ private function findCriterionFromCells(
     private function rowText(array $row): string
     {
         return trim(implode(' ', array_values(array_filter(array_map('strval', $row), fn ($v) => trim($v) !== ''))));
+    }
+
+    // Detects the ONE real header/instance-anchor row for an equipment
+    // table_shape - deliberately NOT the same loose matchesAny() used for
+    // per-cell role resolution elsewhere. matchesAny() wraps a declared
+    // fragment as a live, unanchored regex search (see regexMatches()),
+    // which is safe for a short SPECIFIC cell value but dangerous here: a
+    // short declared header fragment like "U." or "No." would otherwise
+    // match "U" + ANY character or "no" ANYWHERE inside a totally
+    // unrelated, much longer sentence sitting elsewhere in the same PDF
+    // (confirmed on a real report: a repeated page-header info block's
+    // "KKD'lerin Kullanımı: ..." sentence contains "Ku" and got mistaken
+    // for the "U." result column header; a signature block's "MMO /
+    // DİPLOMA NO" line matched "No." the same way) - each occurrence
+    // fabricated a fake "equipment" out of that unrelated row.
+    // A genuine header row instead has MULTIPLE of the declared fragments
+    // sitting as their OWN, EXACT (collapsed) cell content side by side -
+    // an unrelated prose sentence never does. Requiring an EXACT per-cell
+    // match (no substring containment) across at least two distinct
+    // declared fragments (or the one available fragment, when only one was
+    // declared) keeps this working for headers whose fragments only fill
+    // SOME of the row's cells and leave the rest blank (real report: "No."/
+    // "Lokasyon"/"U."/"U.D."/"N.U." each occupy their own cell while a
+    // wrapped compound label like "Dolap No." spills onto a neighbouring
+    // row instead), without reopening the loose-regex hole.
+    private function isHeaderRow(array $row, array $headerPatterns): bool
+    {
+        if (!$headerPatterns) return false;
+
+        $collapsedPatterns = [];
+        foreach ($headerPatterns as $pattern) {
+            $collapsed = $this->collapseForMatch((string) $pattern);
+            if ($collapsed !== '') $collapsedPatterns[] = $collapsed;
+        }
+        if (!$collapsedPatterns) return false;
+
+        $matchedPatterns = [];
+        foreach ($row as $cellValue) {
+            $collapsedCell = $this->collapseForMatch((string) $cellValue);
+            if ($collapsedCell === '') continue;
+            foreach ($collapsedPatterns as $index => $collapsedPattern) {
+                if ($collapsedCell === $collapsedPattern) $matchedPatterns[$index] = true;
+            }
+        }
+
+        return count($matchedPatterns) >= min(2, count($collapsedPatterns));
     }
 
     private function matrix(array $table): array

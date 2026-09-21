@@ -106,116 +106,234 @@ class GeminiTemplateDiscoveryClient
             'required' => ['key', 'value'],
         ];
 
-        // A single, closed vocabulary for "what role does this column/row
-        // play" - unlike table_structure.orientation / camelot_extraction.
-        // block_detection below (plain free-text strings), Gemini has used
-        // DIFFERENT wording for the SAME underlying shape across different
-        // reports ("table_grid" vs "repeating_horizontal_matrix" vs
-        // "table_rows" all meaning "equipment repeats"), which made those
-        // fields unusable as a dispatch key. `enum` here constrains Gemini to
-        // these exact 4 role names, so ONE generic parser can place cells
-        // correctly regardless of the report's own layout - Camelot still
-        // does all the actual cell reading, Gemini only describes the shape,
-        // so its own JSON output stays small even for a 300-row equipment
-        // table (it never lists the equipment itself, only the column plan).
-        $tableShapeColumn = [
+        // Raw text as literally seen in the PDF cell (e.g. "U", "UD",
+        // "UYGUN DEĞİL") PLUS Gemini's own best-effort human label - but
+        // 'raw' is the authoritative one. PHP already has a proven,
+        // battle-tested normalizer that maps many different real-world
+        // symbol sets (U/UD/N, U./U.D./N.U., U/U.D/U.Y/G, ✔/✘...) to the
+        // same 3 outcomes using plain text comparison (no regex) - Gemini
+        // does NOT need to (and must NOT try to) normalize the value
+        // itself, just copy the cell's real text faithfully. This also
+        // means a genuine Gemini misreading only breaks 'label', never
+        // silently reinterprets 'raw' into the wrong outcome.
+        $resultValue = [
             'type' => 'object',
             'properties' => [
-                'role' => ['type' => 'string', 'enum' => ['identity', 'property', 'result', 'note']],
-                // The AUTHORITATIVE way to find this column: its 0-based
-                // physical position in the header row, counting every column
-                // left to right (first column = 0). Short header labels like
-                // "U.", "U.D.", "N.U." are text-substrings of each other
-                // (matching "U." against a "U.D." cell would wrongly succeed)
-                // - position never has that ambiguity, so the parser locates
-                // columns by this index FIRST and only falls back to
-                // header_patterns text search when column_index is missing
-                // (older captures).
-                'column_index' => ['type' => 'integer'],
-                'header_patterns' => $stringArray,
-                // property: the key this value should be stored under.
-                // result: which normalized status this column/row stands for.
-                // identity/note: leave both null.
-                'key' => ['type' => ['string', 'null']],
-                // result role only:
-                // - one of the 3 fixed values: this column is its OWN
-                //   dedicated status (checkbox-style, e.g. separate "U." /
-                //   "U.D." / "N.U." columns - a mark anywhere in THIS column
-                //   means that fixed status).
-                // - null: this is the ONLY result column and its cell TEXT
-                //   itself varies per row (e.g. a single "Durum" column
-                //   containing the literal text "U" / "UD" / "N" per row) -
-                //   the parser reads the raw cell text per row instead of a
-                //   fixed value; the existing result-normalizer already
-                //   recognizes these short codes.
-                'value' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
-                // property only: some reports pack SEVERAL distinct properties
-                // into one compound column header (e.g. "Dolap Bilgileri
-                // (Makarası - Tipi - Makara Bağlantısı - Vana Tipi)" - one
-                // header, one cell per row, but 4 real properties separated by
-                // dashes). List the sub-property names here, in the SAME order
-                // they appear in the header text, and the generic parser splits
-                // each row's cell by its dash/newline separators into that many
-                // parts. Leave empty when the column is a single plain
-                // property (the common case).
-                'sub_keys' => $stringArray,
+                'raw' => $nullableString,
+                'label' => $nullableString,
             ],
-            'required' => ['role', 'column_index', 'header_patterns', 'key', 'value', 'sub_keys'],
-        ];
-        $tableShape = [
-            'type' => 'object',
-            'properties' => [
-                // rows: one equipment instance per table ROW, named columns.
-                // columns: one equipment instance per table COLUMN (a shared
-                //   header row lists the instances, e.g. several Dolap side by
-                //   side), named rows.
-                // separate_blocks: each instance is its OWN small lattice
-                //   table (e.g. one pump's own label:value grid), not a
-                //   shared table at all.
-                // none: exactly one piece of equipment, no repetition.
-                'instance_axis' => ['type' => 'string', 'enum' => ['rows', 'columns', 'separate_blocks', 'none']],
-                'header_row_patterns' => $stringArray,
-                'columns' => ['type' => 'array', 'items' => $tableShapeColumn],
-            ],
-            'required' => ['instance_axis', 'header_row_patterns', 'columns'],
+            'required' => ['raw', 'label'],
         ];
 
-        // equipment_identity / table_structure / camelot_extraction (the
-        // pre-table_shape pattern-guessing fields) were removed once
-        // table_shape (rows/none axis) and extracted_data.equipment
-        // (direct-read, for small/idiosyncratic groups) together proved
-        // sufficient for every report format tested - keeping them around
-        // only cost Gemini output tokens for fields nothing reads anymore.
-        $equipment = [
+        // Structure only for the UNLIMITED case (equipment_axis=rows/
+        // columns): 'code'/'text' are the criterion's own real, fixed
+        // identity (e.g. "5.38" / "Hortumda TSE standardı varlığı") - safe
+        // to read once since it does NOT repeat once per equipment instance
+        // the way a result cell does. 'result' stays {raw: null, label:
+        // null} in that case - with potentially hundreds of equipment
+        // instances, each one's OWN answer to this SAME criterion differs
+        // (real example: 20 different "Yangın Dolabı" instances, each its
+        // own U/UD/N for criterion "5.38" - there is no single value that
+        // could go here), so Camelot reads every real per-instance answer
+        // instead. ONLY when equipment_axis="none" (exactly one instance,
+        // no repetition) does a single real answer genuinely exist - fill
+        // 'result' with it directly then, exactly like system_criteria.
+        $criterionDef = [
+            'type' => 'object',
+            'properties' => [
+                'code' => ['type' => 'string'],
+                'text' => ['type' => 'string'],
+                'result' => $resultValue,
+            ],
+            'required' => ['code', 'text', 'result'],
+        ];
+
+        // One real property definition - 'field' is the property's own name
+        // (as it will be stored), 'source_pattern' is the EXACT label text
+        // Gemini saw for it in the PDF (e.g. "Kat", "Marka"), used to find
+        // that row/column by plain text match (no coordinates, no regex).
+        // 'value' follows the SAME rule as equipment_control_criteria's
+        // result above: stays null when equipment_axis="rows"/"columns"
+        // (many instances, each with its OWN real value - Camelot reads
+        // them), only filled with the real text when equipment_axis="none"
+        // (exactly one instance, one real value genuinely exists).
+        $attributeDef = [
+            'type' => 'object',
+            'properties' => [
+                'field' => ['type' => 'string'],
+                'source_pattern' => ['type' => 'string'],
+                'value' => $nullableString,
+            ],
+            'required' => ['field', 'source_pattern', 'value'],
+        ];
+
+        // Replaces the old table_shape.columns role list. Two real,
+        // observed shapes:
+        // - equipment_axis="rows": one equipment instance per table ROW,
+        //   properties/criteria are named COLUMNS (e.g. a "No. | Dolap No.
+        //   | Lokasyon | ... | U. | U.D. | N.U." header row, one dolap per
+        //   row below it).
+        // - equipment_axis="columns": one equipment instance per table
+        //   COLUMN - several equipment side by side (e.g. "No / Kod | YD1 |
+        //   YD2 | ... | YD10"), each property/criterion its OWN row below,
+        //   applying across every instance column at once. Real reports
+        //   repeat this in fixed-width BLOCKS (e.g. 5 or 10 equipment per
+        //   block, a fresh block starting every N columns/pages) -
+        //   group_width is that fixed width, so the parser knows where one
+        //   block ends and the next begins without guessing.
+        // - equipment_axis="none": exactly one instance, no repetition.
+        //
+        // A per-instance table often has columns that are NOT ordinary
+        // properties and NOT independent criteria either - two specific,
+        // recurring shapes:
+        // - A checkbox-style outcome split across 2-3 columns that together
+        //   express ONE judgment (classic "U. | U.D. | N.U." triplet - which
+        //   column has the mark IS the result, the other two are blank).
+        //   Declaring these explicitly (kind="fixed_value", value=the
+        //   normalized outcome that column's mark means) collapses them into
+        //   ONE result per instance instead of 3 separate criteria.
+        // - A free-text remarks/açıklama column (e.g. "AÇIKLAMALAR") holding
+        //   a human note, not a pass/fail judgment. Declaring it
+        //   (kind="note") keeps that text out of the criteria list.
+        // Leave result_columns=[] for the (equally real and common) opposite
+        // case - N columns that are genuinely N separate/independent
+        // criteria (e.g. a per-tüp 7-question matrix) - the parser already
+        // reads every undeclared column as its own dynamic criterion, so
+        // nothing needs to be declared there.
+        $resultColumnDef = [
+            'type' => 'object',
+            'properties' => [
+                'header_pattern' => ['type' => 'string'],
+                'kind' => ['type' => 'string', 'enum' => ['note', 'fixed_value']],
+                // Required (non-null) only when kind="fixed_value": the
+                // normalized outcome a MARK in this column means, e.g.
+                // "uygun" / "uygun_degil" / "uygulanamiyor". Always null when
+                // kind="note".
+                'value' => $nullableString,
+            ],
+            'required' => ['header_pattern', 'kind', 'value'],
+        ];
+
+        $instanceStructure = [
+            'type' => 'object',
+            'properties' => [
+                // The row/column label that identifies EACH instance (e.g.
+                // "Dolap No.", "No / Kod", "Tüp No"). This is the ONE
+                // required anchor - the parser locates the real table by
+                // finding this exact label in Camelot's cells.
+                'identity_field' => ['type' => 'string'],
+                // The real identity VALUE (e.g. an actual serial number) -
+                // stays null when equipment_axis="rows"/"columns" (many
+                // instances, Camelot reads each real code). Only filled when
+                // equipment_axis="none" AND this one instance genuinely has
+                // its own code/serial visible in the PDF.
+                'identity_value' => $nullableString,
+                // OPTIONAL sanity-check hint, e.g. pattern "YD*" when every
+                // real code you saw started with "YD". validation is always
+                // "soft": this NEVER filters or rejects a real value that
+                // doesn't match - Camelot reads whatever text is actually in
+                // the identity cell regardless, this is a hint for review
+                // only. pattern null when codes don't share an obvious shape.
+                'identity_hint' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'pattern' => $nullableString,
+                        'validation' => ['type' => 'string', 'enum' => ['soft']],
+                    ],
+                    'required' => ['pattern', 'validation'],
+                ],
+                'equipment_axis' => ['type' => 'string', 'enum' => ['rows', 'columns', 'none']],
+                // ONLY meaningful when equipment_axis="columns" - how many
+                // equipment columns make up ONE repeating block (e.g. 5, 10).
+                // null for "rows"/"none" (rows simply continue until the
+                // table ends, no fixed block width applies there).
+                'group_width' => ['type' => ['integer', 'null']],
+                // The row/column text that marks where a NEW block/table
+                // starts (e.g. ["No / Kod"], or ["Soru / Kriter", "Dolap
+                // No"] when the block title and the identity label are two
+                // separate lines). Include every distinct label you saw
+                // serving this purpose.
+                'header_patterns' => $stringArray,
+                // Explicit note/fixed-outcome column declarations - see the
+                // comment above this array's definition. [] when every
+                // result-bearing column here is a genuinely independent
+                // criterion (the normal, more common case).
+                'result_columns' => ['type' => 'array', 'items' => $resultColumnDef],
+                // true when you could not confidently determine the axis,
+                // the identity field, or where instances start/end for this
+                // table - Camelot/PHP will not guess past this point, so an
+                // honest "I could not tell" (with ambiguous_reason
+                // explaining what was unclear) is far more useful than a
+                // wrong guess.
+                'ambiguous' => ['type' => 'boolean'],
+                'ambiguous_reason' => $nullableString,
+            ],
+            'required' => ['identity_field', 'identity_value', 'identity_hint', 'equipment_axis', 'group_width', 'header_patterns', 'result_columns', 'ambiguous', 'ambiguous_reason'],
+        ];
+
+        $equipmentDefinition = [
             'type' => 'object',
             'properties' => [
                 'equipment_name' => ['type' => 'string'],
-                'system_name' => ['type' => 'string'],
-                'table_shape' => $tableShape,
+                'instance_structure' => $instanceStructure,
+                // Real, fixed-per-report properties (Kat, Marka, Uzunluk...)
+                // - NOT the criteria/results (those go in
+                // equipment_control_criteria below). Compound headers that
+                // pack several properties into one column/row separated by
+                // dashes (e.g. "Dolap Bilgileri (Makarası - Tipi - Makara
+                // Bağlantısı - Vana Tipi)") should be split into that many
+                // separate attribute entries here, one per real sub-property,
+                // in the order they appear - never left as one blob.
+                'attributes' => ['type' => 'array', 'items' => $attributeDef],
+                'equipment_control_criteria' => [
+                    'type' => 'object',
+                    'properties' => [
+                        // false when this equipment group is pure inventory
+                        // with no per-instance pass/fail criteria at all
+                        // (a real observed case: a "Dolap No / Marka /
+                        // Bulunduğu Yer / Basınç / Uzunluk" list with NO
+                        // result column anywhere) - criteria stays [].
+                        'present' => ['type' => 'boolean'],
+                        // List every criterion you can actually see labeled
+                        // in the table (its own code + text), but you do NOT
+                        // need to count them precisely or worry about
+                        // missing a few in a very long list - the parser
+                        // treats any remaining unlabeled row/column within
+                        // the same block as an additional criterion
+                        // automatically. What matters is not leaving this
+                        // empty when criteria clearly exist.
+                        'criteria' => ['type' => 'array', 'items' => $criterionDef],
+                    ],
+                    'required' => ['present', 'criteria'],
+                ],
             ],
-            'required' => ['equipment_name', 'system_name', 'table_shape'],
+            'required' => ['equipment_name', 'instance_structure', 'attributes', 'equipment_control_criteria'],
         ];
 
-        // control_items (control_code_patterns/control_text_patterns/
-        // result_patterns) ve control_matrix ARTIK bu şablonda YOK - sistem
-        // seviyeli (ekipmana bağlı olmayan) kriterler, rapor uzunluğundan
-        // bağımsız SINIRLI bir liste olduğu için (report_information/
-        // overall_result ile AYNI mantık) artık Gemini'nin kendisi
-        // extracted_data.systems[].control_items içine GERÇEK değerlerle
-        // okuyor - Camelot'un pattern eşleştirmesine bırakılmıyor. Bu, hem
-        // Gemini'nin çıktısını küçültüyor (pattern + gerçek değer ikisini
-        // birden üretmek zorunda kalmıyor) hem de bu oturumda tekrar tekrar
-        // yaşanan pattern/kod çakışması bug'larını (örn. ekipman tablosunun
-        // kendi kimlik sütunuyla çakışan çıplak rakam pattern'leri) kökten
-        // ortadan kaldırıyor. Equipment (table_shape) alanı DEĞİŞMEDİ -
-        // ekipman sayısı sınırsız olabildiği için o taraf yapısal
-        // (pattern/rol) betimlemeyle kalmaya devam ediyor.
+        // Sistem seviyeli (bir ekipmana bağlı OLMAYAN) kontrol kriterleri -
+        // örn. bir "Genel Tespit" veya "Belge ve Kayıt Kontrolleri"
+        // bölümünün 10-40 arası maddesi. Bu liste HER raporda sabit/sınırlı
+        // boyutludur (rapor uzunluğuyla BÜYÜMEZ - ekipman sayısı büyüyebilir
+        // ama sistem başına kriter sayısı büyümez), bu yüzden GERÇEK
+        // değerlerle (result dahil) okunur - pattern sözleşmesine ihtiyaç
+        // yoktur. Ekipmana bağlı kriterler BURAYA YAZILMAZ (onlar
+        // equipment_definitions[].equipment_control_criteria'nın YAPISINI
+        // tarif eder, gerçek sonuçları Camelot okur).
+        $systemCriterion = [
+            'type' => 'object',
+            'properties' => [
+                'code' => ['type' => 'string'],
+                'text' => ['type' => 'string'],
+                'result' => $resultValue,
+            ],
+            'required' => ['code', 'text', 'result'],
+        ];
+
         $system = [
             'type' => 'object',
             'properties' => [
                 'system_name' => ['type' => 'string'],
                 'section_heading_patterns' => $stringArray,
-                'equipment' => ['type' => 'array', 'items' => $equipment],
                 'section_detection' => [
                     'type' => 'object',
                     'properties' => [
@@ -225,8 +343,17 @@ class GeminiTemplateDiscoveryClient
                     ],
                     'required' => ['start_heading_patterns', 'continuation_patterns', 'end_detection_patterns'],
                 ],
+                'system_criteria' => ['type' => 'array', 'items' => $systemCriterion],
+                // equipment_axis="none" entries here ALSO cover what used to
+                // be a separate "direct read" list (a small, idiosyncratic
+                // equipment group like 2-4 pumps, or a single-equipment
+                // report) - same structure either way, differentiated only
+                // by whether a real value or null sits in each result/value
+                // field (see equipmentDefinition/instanceStructure/
+                // attributeDef/criterionDef comments above).
+                'equipment_definitions' => ['type' => 'array', 'items' => $equipmentDefinition],
             ],
-            'required' => ['system_name', 'section_heading_patterns', 'equipment', 'section_detection'],
+            'required' => ['system_name', 'section_heading_patterns', 'section_detection', 'system_criteria', 'equipment_definitions'],
         ];
 
         return [
@@ -366,8 +493,19 @@ class GeminiTemplateDiscoveryClient
                                     'system_name' => $nullableString,
                                     'description' => ['type' => 'string'],
                                     'source_pages' => $integerArray,
+                                    // How serious this finding is, ONLY when
+                                    // the PDF itself marks it that way (e.g.
+                                    // a "(*)" işareti meaning "majör
+                                    // uygunsuzluk" next to some items) - null
+                                    // when the report doesn't distinguish.
+                                    'severity' => $nullableString,
+                                    // true when this finding's own system/
+                                    // scope could not be confidently
+                                    // determined from the PDF - never guess a
+                                    // system_name just to fill the field.
+                                    'ambiguous' => ['type' => 'boolean'],
                                 ],
-                                'required' => ['id', 'system_name', 'description', 'source_pages'],
+                                'required' => ['id', 'system_name', 'description', 'source_pages', 'severity', 'ambiguous'],
                             ],
                         ],
                         // Report/company/facility info is always a handful of
@@ -404,99 +542,34 @@ class GeminiTemplateDiscoveryClient
                             ],
                             'required' => ['text', 'status'],
                         ],
-                        // Sistem seviyeli (bir ekipmana bağlı OLMAYAN) kontrol
-                        // kriterleri - örn. bir "Genel Tespit" veya "Belge ve
-                        // Kayıt Kontrolleri" bölümünün 10-40 arası maddesi. Bu
-                        // liste HER raporda sabit/sınırlı boyutludur (rapor
-                        // uzunluğuyla BÜYÜMEZ - ekipman sayısı büyüyebilir ama
-                        // sistem başına kriter sayısı büyümez), bu yüzden
-                        // report_information/overall_result ile AYNI güven
-                        // seviyesiyle GERÇEK değerlerle okunur - control_code_
-                        // patterns/control_text_patterns gibi bir pattern
-                        // sözleşmesine ASLA ihtiyaç yoktur. Ekipmana bağlı
-                        // kriterler BURAYA YAZILMAZ (onlar equipment[].
-                        // table_shape'in result sütunlarından gelir).
-                        'systems' => [
+                        // Sistem seviyeli kriterler (system_criteria) VE
+                        // ekipman yapı tarifi (equipment_definitions) artık
+                        // BURADA DEĞİL - template.fire_systems.systems[]
+                        // içine taşındı (her ikisi de zaten sistem başına
+                        // tanımlanıyordu, tek bir yerde tutmak "aynı sistemin
+                        // yapısı ile gerçek değerlerini iki ayrı JSON
+                        // dalında senkron tutma" riskini ortadan kaldırıyor).
+                        //
+                        // Her raporun kendi sembol/kısaltma lejantı olabilir
+                        // (U/UD/N, U./U.D./N.U., U/U.D/U.Y/G gibi farklı
+                        // setler) - PDF'de GERÇEKTEN yazan lejant cümlesini
+                        // (genelde tablonun hemen üstünde/altında, örn. "U:
+                        // Uygun; UD: Uygun Değil; N: Uygulaması Yok") bul ve
+                        // buraya kopyala. Lejant cümlesi yoksa boş dizi
+                        // bırak - kendi tahmininle uydurma.
+                        'result_legend' => [
                             'type' => 'array',
                             'items' => [
                                 'type' => 'object',
                                 'properties' => [
-                                    'system_name' => ['type' => 'string'],
-                                    'control_items' => [
-                                        'type' => 'array',
-                                        'items' => [
-                                            'type' => 'object',
-                                            'properties' => [
-                                                'code' => ['type' => 'string'],
-                                                'criterion' => ['type' => 'string'],
-                                                'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
-                                            ],
-                                            'required' => ['code', 'criterion', 'result'],
-                                        ],
-                                    ],
+                                    'code' => ['type' => 'string'],
+                                    'meaning' => ['type' => 'string'],
                                 ],
-                                'required' => ['system_name', 'control_items'],
-                            ],
-                        ],
-                        // Direct read for a SMALL, boundedly-countable equipment
-                        // group (e.g. a pump room with 2-4 pumps) - Gemini
-                        // actually looks at the table and reports the real
-                        // values, the same trust level as report_information
-                        // above. This is NOT for dolap/hidrant-style groups
-                        // that can run into the hundreds - those MUST stay
-                        // structure-only via equipment[].table_shape, or
-                        // Gemini's own output stops being small regardless of
-                        // report length. Use this specifically when a table's
-                        // layout is too idiosyncratic for a generic structural
-                        // rule to generalize (e.g. a "proje değeri / uygulama
-                        // değeri" split column where only one sub-value is
-                        // real) - something an AI reading the page can resolve
-                        // instantly but no fixed column-role scheme can.
-                        'equipment' => [
-                            'type' => 'array',
-                            'items' => [
-                                'type' => 'object',
-                                'properties' => [
-                                    'system_name' => ['type' => 'string'],
-                                    'equipment_name' => ['type' => 'string'],
-                                    'code' => $nullableString,
-                                    'properties' => ['type' => 'array', 'items' => $extractedField],
-                                    'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
-                                    // This equipment's OWN inspection checklist,
-                                    // when the report's control list is clearly
-                                    // an assessment of THIS one machine (e.g. a
-                                    // single-equipment report like a forklift/
-                                    // transpalet - "KONTROL KRİTERLERİ VE
-                                    // TESTLER" IS that machine's inspection, not
-                                    // a separate facility checklist). Read the
-                                    // REAL per-item results directly here rather
-                                    // than leaving Camelot to pattern-match a
-                                    // plain checklist it has no equipment to
-                                    // link to. Leave empty ([]) when this
-                                    // equipment has no such list of its own (the
-                                    // common dolap/hidrant case - those still go
-                                    // through table_shape/control_matrix, NEVER
-                                    // here, since they can run into the
-                                    // hundreds).
-                                    'control_items' => [
-                                        'type' => 'array',
-                                        'items' => [
-                                            'type' => 'object',
-                                            'properties' => [
-                                                'code' => ['type' => 'string'],
-                                                'criterion' => $nullableString,
-                                                'result' => ['type' => ['string', 'null'], 'enum' => ['uygun', 'uygun_degil', 'uygulanamiyor', null]],
-                                            ],
-                                            'required' => ['code', 'criterion', 'result'],
-                                        ],
-                                    ],
-                                    'source_pages' => $integerArray,
-                                ],
-                                'required' => ['system_name', 'equipment_name', 'code', 'properties', 'result', 'control_items', 'source_pages'],
+                                'required' => ['code', 'meaning'],
                             ],
                         ],
                     ],
-                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'systems', 'equipment'],
+                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'result_legend'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],
