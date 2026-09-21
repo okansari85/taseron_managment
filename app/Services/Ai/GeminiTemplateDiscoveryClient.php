@@ -484,6 +484,27 @@ class GeminiTemplateDiscoveryClient
                             'type' => 'string',
                             'enum' => ['tekli_ekipman', 'ysc', 'yangin_tesisati', 'yangin_algilama'],
                         ],
+                        // How this WHOLE report should be read, decided ONCE:
+                        //  - "structured": a mixed/tesisat-style report with
+                        //    real repeating dolap/tüp/pompa/hidrant tables -
+                        //    Gemini describes STRUCTURE only (equipment_axis=
+                        //    "rows"/"columns"), Camelot reads the real
+                        //    per-instance cells. The default, and by far the
+                        //    more common case.
+                        //  - "single_equipment": the WHOLE report is about
+                        //    ONE real piece of equipment (forklift/
+                        //    transpalet/vinç/basınçlı kap/tek bir tank...),
+                        //    with no repeating equipment table at all. Gemini
+                        //    reads EVERYTHING directly with real values -
+                        //    every equipment_definitions entry here uses
+                        //    equipment_axis="none" (see instance_structure),
+                        //    and every system_criteria/finding is the real
+                        //    PDF text/result, exactly like report_information
+                        //    already works. Camelot is not required to find
+                        //    any bordered table at all in this mode - it only
+                        //    still runs if the report ALSO happens to contain
+                        //    a large/mixed table somewhere (rare).
+                        'extraction_mode' => ['type' => 'string', 'enum' => ['structured', 'single_equipment']],
                         'findings' => [
                             'type' => 'array',
                             'items' => [
@@ -569,7 +590,7 @@ class GeminiTemplateDiscoveryClient
                             ],
                         ],
                     ],
-                    'required' => ['report_category', 'findings', 'report_information', 'facility_information', 'overall_result', 'result_legend'],
+                    'required' => ['report_category', 'extraction_mode', 'findings', 'report_information', 'facility_information', 'overall_result', 'result_legend'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],

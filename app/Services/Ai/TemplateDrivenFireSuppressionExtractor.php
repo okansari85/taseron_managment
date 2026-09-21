@@ -10,10 +10,25 @@ class TemplateDrivenFireSuppressionExtractor
 
     public function extract(string $pdfPath, array $semantic): array
     {
+        // extraction_mode="single_equipment" (a genuinely single piece of
+        // equipment - forklift/transpalet/crane/single tank, no repeating
+        // dolap/tüp/pompa table at all): Gemini already reads everything
+        // directly with real values (report_information/system_criteria/
+        // equipment_definitions with equipment_axis="none"/findings), none
+        // of which touch $latticeTables - such a report can legitimately
+        // have NO bordered/lattice table anywhere in the PDF, so requiring
+        // one here would reject a perfectly valid extraction. "structured"
+        // (the default - a mixed/tesisat report with real dolap/tüp/pompa
+        // tables) still requires at least one, since equipment_axis="rows"/
+        // "columns" definitions genuinely need Camelot to read from.
+        $extractionMode = mb_strtolower(trim((string) ($semantic['extracted_data']['extraction_mode'] ?? 'structured')), 'UTF-8');
+
         $camelot = $this->camelot->extract($pdfPath);
         $allTables = array_values(array_filter((array) ($camelot['tables'] ?? []), fn ($table) => is_array($table) && !empty($table['data'])));
         $latticeTables = array_values(array_filter($allTables, fn ($table) => ($table['flavor'] ?? '') === 'lattice'));
-        if (!$latticeTables) throw new RuntimeException('Camelot template extraction için kullanılabilir lattice tablo bulamadı.');
+        if (!$latticeTables && $extractionMode !== 'single_equipment') {
+            throw new RuntimeException('Camelot template extraction için kullanılabilir lattice tablo bulamadı.');
+        }
 
         $template = is_array($semantic['template'] ?? null) ? $semantic['template'] : [];
         $systems = (array) ($template['fire_systems']['systems'] ?? []);

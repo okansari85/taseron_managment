@@ -45,7 +45,7 @@ PDF'nin gerçek yapısını keşfet. Önceden bildiğin bir firma şablonuna zor
 
 ÇIKTI TAM OLARAK İKİ ANA BÖLÜMDÜR
 1. template.fire_systems.systems[]: PDF'den keşfedilen HER sistemin hem YAPISI (equipment_definitions - ekipman tablolarının rol haritası) hem de kendi GERÇEK, ekipmandan bağımsız kriterleri (system_criteria - kod/metin/sonuç).
-2. extracted_data: report_category + findings + report_information + facility_information + overall_result + result_legend (rapordaki sonuç sembollerinin GERÇEK açıklaması, varsa).
+2. extracted_data: report_category + extraction_mode + findings + report_information + facility_information + overall_result + result_legend (rapordaki sonuç sembollerinin GERÇEK açıklaması, varsa).
 
 TEMEL İLKE — HANGİ DEĞER SENDEN, HANGİSİ CAMELOT'TAN GELİR:
 - Rapor uzunluğuyla/ekipman SAYISIYLA BÜYÜMEYEN her şey (rapor bilgileri, sistem sayısı, sistem başına kriter sayısı, sonuç paragrafı) SABİT/SINIRLIDIR - bunları SEN doğrudan okur, GERÇEK değerleriyle yazarsın.
@@ -60,8 +60,14 @@ Bu sistemde 4 farklı rapor tipi var, aynı tek yükleme akışından geçiyorla
 - "yangin_algilama": Yangın ALGILAMA ve uyarı/alarm sistemi raporu (dedektör, alarm paneli, ihbar butonu gibi) — bu "yangin_tesisati" değildir, KENDİ AYRI kategorisidir, tesisata dahil etme.
 Emin olamadığın durumlarda raporun ana konusuna (tek makine mi, tüp listesi mi, çoklu sistem mi, algılama mı) bak ve en uygun olanı seç — bu alan HER ZAMAN doldurulmalı, null bırakılamaz.
 
+0b. OKUMA MODU (extracted_data.extraction_mode) — report_category'den HEMEN SONRA karar ver
+Bu, report_category'den BAĞIMSIZ ikinci bir karardır - raporun TAMAMININ nasıl okunacağını belirler:
+- "structured": Rapor karma/tesisat türü, GERÇEK tekrarlayan bir ekipman tablosu var (dolap/tüp/pompa/hidrant listesi gibi, 2'den fazla örnek). Sen sadece YAPIYI tarif edersin (equipment_axis="rows"/"columns"), Camelot gerçek hücreleri okur. VARSAYILAN, çok daha sık görülen durum - report_category="yangin_tesisati" veya "ysc" ise DAİMA bu.
+- "single_equipment": Rapor GERÇEKTEN TEK bir ekipmanı konu alıyor (forklift, transpalet, vinç, basınçlı kap, tek bir tank gibi - report_category="tekli_ekipman" ile aynı durum), hiç tekrarlayan ekipman tablosu yok. Bu modda SEN HER ŞEYİ doğrudan GERÇEK değerleriyle okursun: equipment_definitions'taki TEK kaydın instance_structure.equipment_axis="none" olur, identity_value/attributes[].value/equipment_control_criteria.criteria[].result GERÇEK değerlerle dolar (bkz. bölüm 5, ÖRNEK 3) - report_information'ı nasıl doğrudan okuyorsan aynen öyle. Bu raporda hiç lattice/kenarlıklı tablo olmasa bile SORUN DEĞİL, Camelot bu modda zorunlu değildir; yalnızca rapor İÇİNDE ayrıca büyük/karma bir tablo da varsa (nadir) Camelot yine de onu okur.
+report_category="tekli_ekipman" iken extraction_mode HER ZAMAN "single_equipment" olmalı; diğer 3 report_category değerinde HER ZAMAN "structured" olmalı - bu ikisi pratikte birebir eşleşir, ayrı ayrı sormamızın nedeni sadece extraction_mode'un extractor tarafında farklı bir davranışı (Camelot zorunluluğunun kalkması) tetiklemesidir.
+
 KESİN SINIR
-extracted_data içinde report_category, findings, report_information, facility_information, overall_result, result_legend dışında hiçbir alan bulunamaz.
+extracted_data içinde report_category, extraction_mode, findings, report_information, facility_information, overall_result, result_legend dışında hiçbir alan bulunamaz.
 Ekipmana bağlı, rapor uzunluğuyla (ekipman sayısıyla) BÜYÜYEBİLEN kısımlar extracted_data'ya asla yazılmaz - bunlar template.fire_systems.systems[].equipment_definitions altında (bkz. bölüm 5) YAPI olarak tarif edilir, Camelot gerçek verileri o tarife göre çıkarır.
 
 TEMPLATE İÇİNDE GERÇEK SİSTEM BAŞLIKLARI VE YAPISAL PATTERNLER BULUNABİLİR. Bunlar veri çıkarımı değil, Camelot'un doğru bölümü ve tabloyu bulması için keşfedilmiş şablon bilgisidir.
@@ -435,6 +441,7 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
   },
   "extracted_data": {
     "report_category": "yangin_tesisati",
+    "extraction_mode": "structured",
     "findings": [
       {
         "id": "finding-1",
