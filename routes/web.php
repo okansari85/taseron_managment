@@ -11,4 +11,5 @@ Route::post('/api/experts/set-password', [ExpertController::class, 'setPassword'
 
 Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
     Route::post('/api/experts', [ExpertController::class, 'store']);
+    Route::post('/api/experts/{tenant}/impersonate', [ExpertController::class, 'impersonate']);
 });
