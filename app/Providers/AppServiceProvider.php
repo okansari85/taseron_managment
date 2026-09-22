@@ -7,6 +7,7 @@ use App\Repositories\OrganizationRepository;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\TenantRepository;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Facades\Route;
 use App\Repositories\Contracts\CompanyRepositoryInterface;
 use App\Repositories\CompanyRepository;
 use App\Repositories\Contracts\LocationRepositoryInterface;
@@ -42,6 +43,8 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        //
+        Route::middleware('api')
+            ->prefix('api')
+            ->group(base_path('routes/experts.php'));
     }
 }
