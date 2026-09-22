@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\ExpertInvitationResendService;
 use App\Services\SuperAdminExpertOnboardingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -67,6 +68,15 @@ class ExpertController extends Controller
                 'contractor_id' => $user->contractor_id,
                 'tenant_id' => $tenant->id,
             ],
+        ]);
+    }
+
+    public function resendInvitation(Tenant $tenant, ExpertInvitationResendService $invitationService): JsonResponse
+    {
+        $invitationService->send($tenant);
+
+        return response()->json([
+            'message' => 'Uzman davet e-postası yeniden gönderildi.',
         ]);
     }
 
