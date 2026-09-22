@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Tenant;
+use App\Models\User;
 use App\Services\ExpertOnboardingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -30,6 +32,38 @@ class ExpertController extends Controller
                 $data['email'],
             ),
         ], 201);
+    }
+
+    public function impersonate(Request $request, Tenant $tenant): JsonResponse
+    {
+        abort_unless($tenant->tenant_type === 'expert', 404);
+
+        $actor = $request->user();
+        abort_unless($actor && $actor->hasRole('super-admin'), 403, 'Only super admin can impersonate users.');
+
+        $user = User::query()
+            ->where('is_expert', true)
+            ->whereHas('scopes', fn ($query) => $query
+                ->where('scope_type', 'tenant')
+                ->where('scope_id', $tenant->id))
+            ->first();
+
+        abort_unless($user, 404, 'Bu uzman için giriş kullanıcısı bulunamadı.');
+
+        $token = $user->createToken('impersonation')->plainTextToken;
+
+        return response()->json([
+            'message' => 'User impersonation started.',
+            'token' => $token,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->getRoleNames(),
+                'contractor_id' => $user->contractor_id,
+                'tenant_id' => $tenant->id,
+            ],
+        ]);
     }
 
     public function setPassword(Request $request): JsonResponse
