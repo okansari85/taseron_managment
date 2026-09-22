@@ -5,14 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tenant;
 use App\Models\User;
-use App\Services\ExpertOnboardingService;
+use App\Services\SuperAdminExpertOnboardingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Password;
 
 class ExpertController extends Controller
 {
-    public function __construct(private ExpertOnboardingService $service)
+    public function __construct(private SuperAdminExpertOnboardingService $service)
     {
     }
 
