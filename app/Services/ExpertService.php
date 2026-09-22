@@ -6,7 +6,6 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Notifications\ExpertInvitationNotification;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
@@ -67,21 +66,15 @@ class ExpertService
 
     public function setPassword(array $credentials): string
     {
-        $status = Password::broker()->reset(
+        return Password::broker()->reset(
             $credentials,
             function (User $user, string $password): void {
                 $user->forceFill([
-                    'password' => Hash::make($password),
+                    'password' => $password,
                     'remember_token' => Str::random(60),
                 ])->save();
             }
         );
-
-        if ($status !== Password::PASSWORD_RESET) {
-            return $status;
-        }
-
-        return Password::PASSWORD_RESET;
     }
 
     public function impersonate(Tenant $tenant): array
