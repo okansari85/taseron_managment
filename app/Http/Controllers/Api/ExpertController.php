@@ -24,13 +24,17 @@ class ExpertController extends Controller
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
         ]);
 
+        $result = $this->service->create(
+            $data['expert_name'],
+            $data['contact_name'],
+            $data['email'],
+        );
+
         return response()->json([
-            'message' => 'Uzman oluşturuldu. Davet e-postası gönderildi.',
-            'data' => $this->service->create(
-                $data['expert_name'],
-                $data['contact_name'],
-                $data['email'],
-            ),
+            'message' => $result['mail_sent']
+                ? 'Uzman oluşturuldu. Davet e-postası gönderildi.'
+                : 'Uzman oluşturuldu ancak davet e-postası gönderilemedi. Mail ayarlarını kontrol edin.',
+            'data' => $result,
         ], 201);
     }
 
