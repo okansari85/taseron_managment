@@ -21,7 +21,8 @@ class ExpertInvitationNotification extends Notification
 
     public function toMail(object $notifiable): MailMessage
     {
-        $url = rtrim(config('app.frontend_url'), '/')
+        $frontendUrl = rtrim(env('FRONTEND_URL', config('app.url')), '/');
+        $url = $frontendUrl
             . '/set-password?token=' . urlencode($this->token)
             . '&email=' . urlencode($notifiable->email);
 
