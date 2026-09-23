@@ -36,15 +36,17 @@ class CustomerOrganizationService
                     'locations_count' => $organizationIds->isEmpty()
                         ? 0
                         : DB::table('organization_locations')
-                            ->whereIn('organization_id', $organizationIds)
-                            ->distinct('location_id')
-                            ->count('location_id'),
+                            ->whereIn('organization_id', $organizationIds->all())
+                            ->select('location_id')
+                            ->distinct()
+                            ->count(),
                     'companies_count' => $organizationIds->isEmpty()
                         ? 0
                         : DB::table('organization_companies')
-                            ->whereIn('organization_id', $organizationIds)
-                            ->distinct('company_id')
-                            ->count('company_id'),
+                            ->whereIn('organization_id', $organizationIds->all())
+                            ->select('company_id')
+                            ->distinct()
+                            ->count(),
                     'created_at' => $customer->created_at,
                 ];
             });
@@ -52,10 +54,8 @@ class CustomerOrganizationService
 
     public function createCustomer(array $data): Customer
     {
-        $tenantId = $this->tenantId();
-
         return Customer::query()->create([
-            'tenant_id' => $tenantId,
+            'tenant_id' => $this->tenantId(),
             'name' => $data['name'],
             'notes' => $data['notes'] ?? null,
         ]);
@@ -84,7 +84,6 @@ class CustomerOrganizationService
         $this->assertCustomerTenant($customer);
 
         $organizations = $this->organizationsForCustomer($customer);
-
         $nodes = $organizations->keyBy('id')->map(function (Organization $organization) {
             return [
                 'id' => $organization->id,
@@ -93,21 +92,32 @@ class CustomerOrganizationService
                 'parent_id' => $organization->parent_id,
                 'children' => [],
             ];
-        });
+        })->all();
+
+        $build = function (int $id) use (&$build, &$nodes): array {
+            $node = $nodes[$id];
+            $children = [];
+
+            foreach ($nodes as $childId => $child) {
+                if ($child['parent_id'] === $id) {
+                    $children[] = $build((int) $childId);
+                }
+            }
+
+            $node['children'] = $children;
+
+            return $node;
+        };
 
         $roots = [];
 
         foreach ($nodes as $id => $node) {
-            $parentId = $node['parent_id'];
-
-            if ($parentId !== null && $nodes->has($parentId)) {
-                $nodes[$parentId]['children'][] = &$nodes[$id];
-            } else {
-                $roots[] = &$nodes[$id];
+            if ($node['parent_id'] === null || ! isset($nodes[$node['parent_id']])) {
+                $roots[] = $build((int) $id);
             }
         }
 
-        return array_values($roots);
+        return $roots;
     }
 
     public function createOrganization(Customer $customer, array $data): Organization
@@ -118,9 +128,7 @@ class CustomerOrganizationService
             $parentId = $data['parent_id'] ?? null;
 
             if ($parentId !== null) {
-                $parent = Organization::query()
-                    ->whereKey($parentId)
-                    ->first();
+                $parent = Organization::query()->whereKey($parentId)->first();
 
                 if (! $parent || ! $this->organizationIdsForCustomer($customer)->contains($parent->id)) {
                     throw new RuntimeException('Seçilen üst organizasyon bu müşteriye bağlı değil.');
