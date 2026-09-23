@@ -149,6 +149,12 @@ class CustomerOrganizationService
                 'default_brand_id' => $data['default_brand_id'] ?? null,
             ]);
 
+            // OrganizationService kök seviyedeki kayıtları tenant köküne bağlar;
+            // müşteri organizasyonlarında kök seviye müşterinin kendisidir.
+            if ($parentId === null && $organization->parent_id !== null) {
+                $organization->forceFill(['parent_id' => null])->save();
+            }
+
             $customer->organizations()->syncWithoutDetaching([$organization->id]);
 
             return $organization;

@@ -5,7 +5,7 @@ use App\Http\Controllers\CustomerOrganizationController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('api')
-    ->middleware(['auth:sanctum', 'tenant', 'workspace-context', 'web-role:super-admin,tenant,isg', 'bindings'])
+    ->middleware(['auth:sanctum', 'tenant', 'workspace-context', 'web-role:super-admin,tenant,isg', \Illuminate\Routing\Middleware\SubstituteBindings::class])
     ->group(function () {
         Route::apiResource('customers', CustomerController::class)
             ->only(['index', 'store', 'update', 'destroy']);
