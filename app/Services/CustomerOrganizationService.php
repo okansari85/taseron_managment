@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\Organization;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use LogicException;
 use RuntimeException;
 
@@ -225,6 +226,14 @@ class CustomerOrganizationService
 
     private function assertCustomerTenant(Customer $customer): void
     {
+        Log::info('CUSTOMER TENANT DEBUG', [
+            'customer_id' => $customer->id,
+            'customer_tenant_id' => $customer->tenant_id,
+            'customer_tenant_type' => gettype($customer->tenant_id),
+            'context_tenant_id' => $this->tenantId(),
+            'context_tenant_type' => gettype($this->tenantId()),
+        ]);
+
         if ($customer->tenant_id !== $this->tenantId()) {
             throw new RuntimeException('Bu müşteriye erişim yetkiniz yok.');
         }
