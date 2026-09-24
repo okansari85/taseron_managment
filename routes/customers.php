@@ -6,6 +6,7 @@ use App\Http\Controllers\CustomerLocationController;
 use App\Http\Controllers\CustomerOrganizationController;
 use App\Http\Controllers\CustomerOrganizationRenameController;
 use App\Http\Controllers\ExpertCompanyController;
+use App\Http\Controllers\PeriodicEquipmentCatalogController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('api')
@@ -33,5 +34,7 @@ Route::prefix('api')
         Route::patch('my-companies/{businessEntity}', [ExpertCompanyController::class, 'update']);
         Route::get('my-workplaces', [ExpertCompanyController::class, 'workplaces']);
         Route::get('nace-hazard-classes', [ExpertCompanyController::class, 'naceHazardClasses']);
+
+        Route::get('equipment-catalog', PeriodicEquipmentCatalogController::class);
 
     });
