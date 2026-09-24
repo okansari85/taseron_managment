@@ -7,6 +7,7 @@ use App\Http\Controllers\CustomerOrganizationController;
 use App\Http\Controllers\CustomerOrganizationRenameController;
 use App\Http\Controllers\ExpertCompanyController;
 use App\Http\Controllers\PeriodicEquipmentCatalogController;
+use App\Http\Controllers\PkReportAnalysisTestController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('api')
@@ -37,4 +38,9 @@ Route::prefix('api')
 
         Route::get('equipment-catalog', PeriodicEquipmentCatalogController::class);
 
+        // Test ekranı: yeni rapor algılaması (kriterler hariç) - fixture listele / göster / yeni analiz.
+        Route::get('pk-report-analyses', [PkReportAnalysisTestController::class, 'index']);
+        Route::get('pk-report-analyses/{fixtureId}', [PkReportAnalysisTestController::class, 'show']);
+        Route::post('pk-report-analyses', [PkReportAnalysisTestController::class, 'store']);
+        Route::post('pk-report-analyses/{fixtureId}/tables', [PkReportAnalysisTestController::class, 'rereadTables']);
     });
