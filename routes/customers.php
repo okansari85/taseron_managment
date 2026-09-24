@@ -1,8 +1,11 @@
 <?php
 
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\CustomerLocationCompanyController;
 use App\Http\Controllers\CustomerLocationController;
 use App\Http\Controllers\CustomerOrganizationController;
+use App\Http\Controllers\CustomerOrganizationRenameController;
+use App\Http\Controllers\ExpertCompanyController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('api')
@@ -16,6 +19,19 @@ Route::prefix('api')
         Route::post('customers/{customer}/organizations/{organization}', [CustomerOrganizationController::class, 'attach']);
         Route::delete('customers/{customer}/organizations/{organization}', [CustomerOrganizationController::class, 'detach']);
 
-        Route::get('customers/{customer}/locations', [CustomerLocationController::class, 'index']);
+        Route::patch('customers/{customer}/organizations/{organization}', CustomerOrganizationRenameController::class);
+
+        Route::get('customers/{customer}/locations',[CustomerLocationController::class, 'index']);
         Route::post('customers/{customer}/organizations/{organization}/locations', [CustomerLocationController::class, 'store']);
+
+        Route::get('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'index']);
+        Route::post('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'store']);
+        Route::delete('customers/{customer}/locations/{location}/companies/{locationBusinessEntity}', [CustomerLocationCompanyController::class, 'destroy']);
+
+        Route::get('my-companies', [ExpertCompanyController::class, 'index']);
+        Route::post('my-companies', [ExpertCompanyController::class, 'store']);
+        Route::patch('my-companies/{businessEntity}', [ExpertCompanyController::class, 'update']);
+        Route::get('my-workplaces', [ExpertCompanyController::class, 'workplaces']);
+        Route::get('nace-hazard-classes', [ExpertCompanyController::class, 'naceHazardClasses']);
+
     });
