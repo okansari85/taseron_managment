@@ -2,7 +2,8 @@
 
 namespace App\Services\Ai\PkTakip;
 
-use App\Services\Ai\PdfTextExtractor;
+use App\Services\PeriodicEquipmentSpecCatalog;
+use App\Services\PkInstallationService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -19,36 +20,63 @@ class PkReportFixtureStore
     public const LEGACY_DIR = 'fire-suppression-gemini-fixtures';
 
     public function __construct(
-        private PdfTextExtractor $extractor,
+        private PkReportText $text,
         private PkReportAnalyzer $analyzer,
-        private PkReportTableReader $tableReader
+        private PkReportTableReader $tableReader,
+        private PeriodicEquipmentSpecCatalog $catalog,
+        private PkInstallationService $installations,
+        private PkBulkReportReader $bulk
     ) {
     }
 
-    public function analyze(string $pdfPath, string $originalName): array
+    /**
+     * Test sayfası: ekipman raporu ($withCatalog) tüm katalogla okunur (tür, etiket, teknik özellikler — "Rapordan
+     * Ekipman Tanımla" ile aynı; toplu tüp raporu da aynı yoldan); tesisat raporu tesisat kataloğuyla (tür + sistem
+     * adları — "Yeni Tesisat Raporu Yükle" ile aynı).
+     */
+    public function analyze(string $pdfPath, string $originalName, bool $withCatalog = false): array
     {
-        $pages = $this->extractor->extractPages(new UploadedFile($pdfPath, $originalName, 'application/pdf', null, true));
+        // Taranmış PDF: OCR ikizi (tesisat raporu dahil); görüntüden okuma yalnızca ekipman raporunda, OCR yapılamazsa.
+        $upload = new UploadedFile($pdfPath, $originalName, 'application/pdf', null, true);
+        $document = $this->text->read($upload, $withCatalog);
 
         $startedAt = microtime(true);
-        $semantic = $this->analyzer->analyze($pages);
+        try {
+            $semantic = $this->analyzer->analyze($document['pages'], $withCatalog ? ['catalog' => $this->catalog->promptCatalog()] : ['installation_catalog' => PkInstallationReportReader::promptCatalog($this->installations->types())], $document['image'], $document['input'] === 'ocr');
+        } catch (RuntimeException $exception) {
+            $this->text->forget($document['ocr_pdf']);
+            // Tek istek, tekrar deneme yok; sınır / yoğunluk hatası anlaşılır yazılır.
+            throw PkGeminiError::friendly($exception);
+        }
 
         $fixtureId = (string) Str::uuid();
         $storedPdf = self::DIR . "/{$fixtureId}.pdf";
         Storage::disk('local')->put($storedPdf, file_get_contents($pdfPath));
+        // Tablolar OCR ikizinden okunur; ikiz saklanır (tabloları yeniden okumak için).
+        $ocrPdf = null;
+        if ($document['ocr_pdf']) {
+            $ocrPdf = self::DIR . "/{$fixtureId}.ocr.pdf";
+            Storage::disk('local')->put($ocrPdf, file_get_contents($document['ocr_pdf']));
+            $this->text->forget($document['ocr_pdf']);
+        }
 
         $fixture = [
             'fixture_id' => $fixtureId,
             'analyzer' => 'pk_report',
-            'provider' => 'gemini',
-            'model' => config('services.gemini.text_model'),
+            'provider' => PkAiProvider::name(),
+            'model' => PkAiProvider::model(),
             'original_file_name' => $originalName,
             'created_at' => now()->toIso8601String(),
             'duration_s' => round(microtime(true) - $startedAt, 1),
-            'page_count' => count($pages),
+            'page_count' => $document['image']['page_count'] ?? count($document['pages']),
+            // text: PDF metni | ocr: taranmış PDF, OCR ikizinin metni (tablolar ikizden) | image: sayfalar görüntüden (tablo adımı yok).
+            'input' => $document['input'],
+            'ocr_pdf_path' => $ocrPdf,
             'pdf_path' => $storedPdf,
+            'context' => ['mode' => $withCatalog ? 'catalog' : 'installation'],
             'semantic' => $semantic,
             // Gemini'den hemen sonra: ekipman tabloları Camelot ile okunur.
-            'tables' => $this->tableReader->read(Storage::disk('local')->path($storedPdf), $semantic),
+            'tables' => $document['image'] ? null : $this->readTables(Storage::disk('local')->path($ocrPdf ?? $storedPdf), $semantic, $withCatalog ? 'catalog' : 'installation'),
         ];
         $this->save($fixture);
 
@@ -59,14 +87,30 @@ class PkReportFixtureStore
     public function rereadTables(string $fixtureId): array
     {
         $fixture = $this->get($fixtureId);
-        $pdf = (string) ($fixture['pdf_path'] ?? self::DIR . "/{$fixtureId}.pdf");
+        if (($fixture['input'] ?? null) === 'image') {
+            throw new RuntimeException("Görüntü PDF'te tablo adımı çalışmaz: rapor sayfa görüntülerinden okundu.");
+        }
+        $pdf = (string) ($fixture['ocr_pdf_path'] ?? $fixture['pdf_path'] ?? self::DIR . "/{$fixtureId}.pdf");
         if (!Storage::disk('local')->exists($pdf)) {
             throw new RuntimeException('Bu analiz için kayıtlı PDF yok.');
         }
-        $fixture['tables'] = $this->tableReader->read(Storage::disk('local')->path($pdf), (array) ($fixture['semantic'] ?? []));
+        $fixture['tables'] = $this->readTables(Storage::disk('local')->path($pdf), (array) ($fixture['semantic'] ?? []), $fixture['context']['mode'] ?? null);
         $this->save($fixture);
 
         return $fixture;
+    }
+
+    /**
+     * Tablo adımı: tesisat raporunda kimlik no + konum (tesisat okumasıyla aynı); toplu tüp raporunda toplu mod
+     * ("Rapordan Ekipman Tanımla" ile aynı; "bulk": o modla oluşturulmuş eski fikstür); diğer ekipman raporlarında eskisi gibi.
+     */
+    private function readTables(string $pdfPath, array $semantic, ?string $mode): array
+    {
+        return match (true) {
+            $mode === 'installation' => $this->tableReader->read($pdfPath, $semantic, true),
+            $mode === 'bulk' || PkBulkReportReader::isBulk($semantic) => $this->bulk->tables($pdfPath, $semantic),
+            default => $this->tableReader->read($pdfPath, $semantic),
+        };
     }
 
     private function save(array $fixture): void
@@ -103,6 +147,11 @@ class PkReportFixtureStore
             'equipment_summary' => $fixture['tables']['equipment_summary'] ?? null,
             'duration_s' => $fixture['duration_s'] ?? null,
             'created_at' => $fixture['created_at'] ?? null,
+            // catalog: ekipman raporu (katalogla) | installation: tesisat raporu | eski fikstürlerde null.
+            'context' => $fixture['context'] ?? null,
+            'provider' => $fixture['provider'] ?? null,
+            'model' => $fixture['model'] ?? null,
+            'input' => $fixture['input'] ?? 'text',
         ]);
     }
 

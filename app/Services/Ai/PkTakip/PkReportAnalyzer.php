@@ -12,18 +12,198 @@ use RuntimeException;
  */
 class PkReportAnalyzer
 {
-    public function __construct(private PkGeminiReportClient $gemini)
-    {
+    public function __construct(
+        private PkGeminiReportClient $gemini,
+        private PkOpenAiReportClient $openai,
+        private PkNvidiaReportClient $nvidia
+    ) {
     }
 
-    public function analyze(array $pages): array
+    /**
+     * $equipment: rapor belirli bir ekipman için yükleniyorsa türün katalog bilgisi; yoksa boş.
+     * ['type' => 'Transpalet', 'label' => 'Tahrik türü', 'options' => ['Elektrikli', 'Manuel'],
+     *  'specs' => [['key' => 'kaldirma_kapasitesi', 'name' => 'Kaldırma kapasitesi', 'unit' => 'kg'], ...]]
+     * Rapordan ekipman tanımlarken (tür bilinmiyor): ['catalog' => PeriodicEquipmentSpecCatalog::promptCatalog()].
+     */
+    public function analyze(array $pages, array $equipment = [], ?array $image = null, bool $ocr = false): array
     {
-        $text = $this->buildDocumentText($pages);
+        // Görüntü PDF (PkReportText::read): metin yok, PDF'in kendisi gönderilir; sayfalar görüntüden okunur.
+        // OCR: taranmış PDF'in dijital ikizinin metni; yapay zekaya nereden geldiği ve işaret kutusu gösterimi söylenir.
+        $text = $image ? $this->imageInstruction($image) : ($ocr ? $this->ocrNote() . "\n\n" : '') . $this->buildDocumentText($pages);
         if (trim($text) === '') {
             throw new RuntimeException('PDF metni boş olduğu için Template Discovery yapılamadı.');
         }
 
-        return $this->gemini->extract($this->systemPrompt() . "\n\n" . $this->systemHierarchyRules(), $text, 50000);
+        // Tesisat raporu: tesisat kataloğu (tür + sistemleri); ekipman talimatları bu kolda kullanılmaz.
+        $equipmentInstructions = match (true) {
+            !empty($equipment['installation_catalog']) => $this->installationCatalogInstruction($equipment['installation_catalog']),
+            !empty($equipment['catalog']) => $this->catalogInstruction($equipment['catalog']),
+            default => $this->equipmentTypeInstruction($equipment) . "\n\n" . $this->equipmentTagInstruction($equipment) . "\n\n" . $this->equipmentSpecsInstruction($equipment),
+        };
+
+        // Seçili sağlayıcı (pktakip.ai_provider): Gemini, OpenAI ya da NVIDIA; istem aynı.
+        $client = match (PkAiProvider::name()) {
+            'openai' => $this->openai,
+            'nvidia' => $this->nvidia,
+            default => $this->gemini,
+        };
+
+        $systemPrompt = $this->systemPrompt() . "\n\n" . $this->systemHierarchyRules() . "\n\n" . $equipmentInstructions;
+        if ($image) {
+            if ($client !== $this->openai) {
+                throw new RuntimeException('Görüntü PDF okuma şu an yalnızca OpenAI ile yapılıyor (Ayarlar → Yapay zeka).');
+            }
+
+            return $this->openai->extract($systemPrompt, $text, 50000, $image);
+        }
+
+        return $client->extract($systemPrompt, $text, 50000);
+    }
+
+    private function ocrNote(): string
+    {
+        return <<<'PROMPT'
+NOT: Bu raporun PDF'i taranmış; aşağıdaki metin OCR (optik karakter tanıma) ile çıkarıldı ve tablolar hücre hücre okundu (Camelot da aynı metni okuyacak).
+- İşaret kutuları: "[X]" = işaretli, "[ ]" = işaretsiz.
+- OCR kaynaklı küçük harf hataları olabilir (örn. "1" yerine "I", Türkçe karakter karışması); anlamı açıksa düzelterek yorumla, değerden emin değilsen null bırak.
+- Kaşe / imza üstüne denk gelen hücreler boş ya da bozuk olabilir; boş hücreyi "uygun" ya da "uygun değil" diye tahmin etme.
+PROMPT;
+    }
+
+    private function imageInstruction(array $image): string
+    {
+        return <<<PROMPT
+Bu raporun PDF'inde metin katmanı YOK (taranmış ya da görüntü olarak kaydedilmiş); ekteki PDF'in {$image['page_count']} sayfasını görüntüden oku.
+- Rapor TEK bir ekipmanın periyodik kontrol raporudur; tablo satırlarını sonradan okuyacak bir Camelot adımı yoktur. Pattern alanları yine doldurulur ama asıl önemli olan extracted_data ve tek örnekli ekipmanın (equipment_axis="none") gerçek değerleridir.
+- İşaret kutuları (☑ / ✓ / X) ve renkli sonuç işaretleri görüntüde nasıl işaretlendiyse öyle oku; işaretsiz seçeneği seçilmiş sayma.
+- Görüntüde okuyamadığın ya da emin olamadığın değeri tahmin etme, null bırak. E-imza damgası ve karekod rapor içeriği değildir.
+PROMPT;
+    }
+
+    // Ekipman belliyse türü olduğu gibi yazılır; test sayfasında (ekipman yok) boş.
+    private function equipmentTypeInstruction(array $equipment): string
+    {
+        $slug = filled($equipment['slug'] ?? null) ? '"' . $equipment['slug'] . '"' : 'null';
+
+        return "EKİPMAN TÜRÜ (extracted_data.equipment_type)\nBu analizde ekipman türü seçilmeyecek: equipment_type = {\"slug\": {$slug}, \"evidence\": null}.";
+    }
+
+    // Rapordan ekipman tanımlama: türü bilinmeyen tek ekipman raporu için tüm katalog (tür + etiket + özellikler).
+    private function catalogInstruction(array $catalog): string
+    {
+        $specLine = fn (array $specs) => implode(', ', array_map(fn ($spec) => $spec['key'] . ': ' . $spec['name'] . (filled($spec['unit'] ?? null) ? ' (' . $spec['unit'] . ')' : ''), $specs));
+        $common = $specLine((array) ($catalog['common_specs'] ?? []));
+        $types = implode("\n", array_map(fn ($type) => '- ' . $type['slug'] . ' | ' . $type['name'] . ' | '
+            . ($type['tag'] ? $type['tag']['label'] . ': ' . implode(', ', $type['tag']['options']) : 'etiket yok')
+            . ' | ' . ($specLine((array) $type['specs']) ?: 'türe özel özellik yok'), (array) ($catalog['types'] ?? [])));
+        $rules = $this->specValueRules();
+
+        return <<<PROMPT
+EKİPMAN TÜRÜ, ETİKETİ VE TEKNİK ÖZELLİKLERİ (extracted_data.equipment_type, equipment_tag, equipment_specs)
+Bu rapor TEK bir ekipmanın periyodik kontrol raporu; ekipmanın türü bilinmiyor. Aşağıdaki katalogdan raporun konusu olan ekipman türünü seç.
+- equipment_type: {"slug": "<katalogdaki slug>", "evidence": "<dayanak: rapor başlığı / ekipman adı, PDF'de yazdığı gibi>"}. Hiçbir tür açıkça uymuyorsa slug: null (tahmin etme).
+- equipment_tag: seçtiğin türün etiketi varsa label = o türün etiket adı, value = SADECE o türün seçeneklerinden biri (anlamca açıkça karşılık geleni; örn. "ELEKTRİKLİ" ya da "akülü" → "Elektrikli"), net değilse null. Etiketi olmayan türde {"label": null, "value": null, "evidence": null}. evidence: dayanak alıntı.
+- equipment_specs: ORTAK özellikler + seçtiğin türün özellikleri için {"key", "value", "raw_label", "raw_value"}.
+{$rules}
+ORTAK ÖZELLİKLER (her türde; anahtar: ad (birim)): {$common}
+KATALOG (slug | ad | etiket: seçenekler | türe özel özellikler):
+{$types}
+PROMPT;
+    }
+
+    /**
+     * Tesisat raporu: tesisat türü katalogdan seçilir (equipment_type alanına yazılır, şema aynı) ve sistemler
+     * seçilen tesisatın sistem listesindeki adlarla yazılır. $catalog: [['slug', 'name', 'systems' => [ad, ...]], ...].
+     */
+    private function installationCatalogInstruction(array $catalog): string
+    {
+        // Her sistem kendi satırında; varsa ekipman türleri ve etiketleriyle.
+        $system = function ($system): string {
+            $system = is_array($system) ? $system : ['name' => (string) $system, 'equipment' => []];
+            $equipment = array_map(
+                fn ($item) => $item['name'] . (!empty($item['variants']) ? ' [etiket: ' . implode(' / ', $item['variants']) . ']' : ''),
+                (array) ($system['equipment'] ?? [])
+            );
+
+            return '  · ' . $system['name'] . ($equipment ? ' — ekipman türleri: ' . implode('; ', $equipment) : '');
+        };
+        $types = implode("\n", array_map(
+            fn ($type) => '- ' . $type['slug'] . ' | ' . $type['name'] . "\n" . implode("\n", array_map($system, (array) $type['systems'])),
+            $catalog
+        ));
+
+        return <<<PROMPT
+TESİSAT TÜRÜ VE SİSTEMLERİ (extracted_data.equipment_type, template.fire_systems.systems[].system_name)
+Bu rapor bir TESİSATIN periyodik kontrol raporudur (tek bir ekipmanın değil). Aşağıdaki katalogdan raporun konusu olan tesisatı seç.
+- equipment_type: {"slug": "<katalogdaki tesisat slug'ı>", "evidence": "<dayanak: rapor başlığı / kapsamı, PDF'de yazdığı gibi>"}. Rapor listedeki tesisatlardan hiçbirinin raporu değilse slug: null (tahmin etme).
+- system_name: raporun her sistem bölümünü, seçtiğin tesisatın sistem listesinde anlamca karşılık gelen adla, listede yazdığı gibi AYNEN yaz (örn. rapordaki "Yangın Pompa Bölmesi" → "Yangın Pompa İstasyonu"). Listede karşılığı olmayan bölüm için rapordaki adı yaz. findings[].system_name da aynı adı kullanır.
+- equipment_tag: {"label": null, "value": null, "evidence": null}; equipment_specs: [] (tesisat raporunda istenmiyor).
+- equipment_definitions[].equipment_name: ekipmanı, sisteminin "ekipman türleri" listesinde anlamca karşılık gelen adla, listede yazdığı gibi AYNEN yaz (örn. rapordaki "JOKEY POMPA", "1 NUMARALI POMPA" → "Yangın Pompası"). Listede karşılığı yoksa rapordaki adı yaz.
+  Türün etiketleri varsa ve rapor ekipmanın hangisi olduğunu söylüyorsa, attributes'a {"field": "Etiket", "source_pattern": "<rapordaki başlık>", "value": "<listedeki etiket, AYNEN>"} ekle (örn. jokey pompa → "Jokey", dizel pompa → "Dizel"). Rapor söylemiyorsa ekleme, tahmin etme.
+- Sistemlerin içindeki ekipmanlar (yangın dolabı, pompa, hidrant, tüp gibi) her zamanki gibi equipment_definitions altında tarif edilir.
+- YANGIN TESİSATINDA CAMELOT YALNIZCA YANGIN DOLAPLARI VE HİDRANTLAR İÇİNDİR: yangın dolabı ve hidrant listeleri çok satırlıdır; onları her zamanki gibi tablo olarak tarif et (equipment_axis "rows" / "columns"), gerçek hücreleri Camelot okur.
+  Bunların DIŞINDAKİ bütün ekipmanları (yangın pompaları — asıl, yedek, jokey —, su deposu, sprinkler vana istasyonu, basınç tankı, pano gibi; "1 NUMARALI POMPA", "JOKEY POMPA" gibi bloklar dahil) tablo olarak TARİF ETME, SEN çıkar. HER ekipmanı AYRI bir equipment_definitions girdisi olarak yaz:
+  equipment_name: ekipmanın adı (örn. "Yangın Pompası"); equipment_axis: "none"; header_patterns: []; identity_field: rapordaki no / başlık alanı (yoksa "No"); identity_value: ekipmanın GERÇEK no'su ya da başlığı (örn. pompalar için "1", "2", "Jokey");
+  attributes: rapordaki etiket / tespit bilgileri GERÇEK değerleriyle, PDF'deki başlıklarıyla (örn. Marka, Tip - Model, Tür (Asıl/Yedek/Jokey), Debi, Basınç, Güç, Seri No);
+  verdict: raporda o ekipmanın kendi sonucu yazıyorsa onu, yazmıyorsa {"status": null, "basis": "not_stated"}.
+  Bütün değerleri boş ya da "-" olan bloğu (raporda olmayan ekipman) YAZMA. Bir ekipmana ait ek bilgi ayrı bir ekipman değildir (örn. dizel pompanın yakıt bilgileri): o ekipmanın attributes'ına ekle.
+TESİSAT KATALOĞU (slug | ad, altında sistemleri ve ekipman türleri):
+{$types}
+PROMPT;
+    }
+
+    // Teknik özellik değer kuralları (ekipman belli olsa da olmasa da aynı).
+    private function specValueRules(): string
+    {
+        return <<<'PROMPT'
+- key: SADECE listedeki anahtarlardan biri. Listede olmayan anahtar uydurma; karşılığı olmayan bilgiyi buraya yazma (attributes'ta zaten var).
+- value: birimi verilmişse o birime çevrilmiş SAYI (örn. birim kg iken "2 ton" → "2000", "2000 kg" → "2000"); birim yoksa metin. Çeviremiyorsan raporda yazdığı gibi bırak.
+- raw_label: rapordaki başlık; raw_value: rapordaki değer, yazdığı gibi.
+- Aynı anahtarı bir kez yaz. Raporda bulunmayan özelliği yazma. "NU", "-" gibi değerleri raw_value'da olduğu gibi, value'da da aynen yaz.
+- Test/deney sonuçları (test yükü, deformasyon ölçümü gibi) ekipmanın özelliği değildir; listede karşılığı yoksa yazma.
+PROMPT;
+    }
+
+    // Teknik özellik talimatı: türün özellik kataloğu (katalog büyüdükçe kendiliğinden genişler).
+    private function equipmentSpecsInstruction(array $equipment): string
+    {
+        $specs = array_values(array_filter((array) ($equipment['specs'] ?? []), fn ($spec) => filled($spec['key'] ?? null)));
+        if (!$specs) {
+            return "TEKNİK ÖZELLİKLER (extracted_data.equipment_specs)\nBu analizde teknik özellik kataloğu verilmedi: equipment_specs = [].";
+        }
+        $list = implode("\n", array_map(fn ($spec) => '- ' . $spec['key'] . ': ' . $spec['name'] . (filled($spec['unit'] ?? null) ? ' (' . $spec['unit'] . ')' : ''), $specs));
+        $type = (string) ($equipment['type'] ?? '');
+        $rules = $this->specValueRules();
+
+        return <<<PROMPT
+TEKNİK ÖZELLİKLER (extracted_data.equipment_specs)
+Bu rapor "{$type}" türündeki TEK bir ekipman için yükleniyor. Farklı muayene firmaları aynı özelliği farklı adlarla yazar;
+rapordaki etiket/tespit bilgilerini aşağıdaki SABİT özellik listesine eşle (anahtar: ad (birim)):
+{$list}
+Her bulduğun özellik için {"key": "<listedeki anahtar>", "value": "<değer>", "raw_label": "<rapordaki başlık>", "raw_value": "<rapordaki değer, yazdığı gibi>"} yaz:
+{$rules}
+PROMPT;
+    }
+
+    // Ekipman etiketi talimatı: seçenekler katalogdan gelir (katalog büyüdükçe kendiliğinden genişler).
+    private function equipmentTagInstruction(array $tag): string
+    {
+        $options = array_values(array_filter((array) ($tag['options'] ?? []), fn ($option) => filled($option)));
+        if (blank($tag['label'] ?? null) || !$options) {
+            return "EKİPMAN ETİKETİ (extracted_data.equipment_tag)\nBu analizde ekipman etiketi istenmiyor: equipment_tag = {\"label\": null, \"value\": null, \"evidence\": null}.";
+        }
+        $list = implode(', ', array_map(fn ($option) => '"' . $option . '"', $options));
+        $type = (string) ($tag['type'] ?? '');
+
+        return <<<PROMPT
+EKİPMAN ETİKETİ (extracted_data.equipment_tag)
+Bu rapor "{$type}" türündeki TEK bir ekipman için yükleniyor. Bu ekipmanın "{$tag['label']}" bilgisini rapordan belirle:
+- label: "{$tag['label']}"
+- value: SADECE şu seçeneklerden biri, burada yazıldığı gibi: {$list}.
+  Raporda farklı yazılmış olsa da anlamca AÇIKÇA bu seçeneklerden birine karşılık geliyorsa o seçeneği yaz (örn. "ELEKTRİKLİ" ya da "akülü" → "Elektrikli").
+  Raporda bu bilgi yoksa, net değilse ya da hiçbir seçeneğe uymuyorsa null yaz. Tahmin etme, listede olmayan değer uydurma.
+- evidence: kararın dayanağı olan kısa alıntı (PDF'de gerçekten yazan ifade), yoksa null.
+PROMPT;
     }
 
     private function buildDocumentText(array $pages): string
@@ -50,7 +230,7 @@ PDF'nin gerçek yapısını keşfet. Önceden bildiğin bir firma şablonuna zor
 
 ÇIKTI TAM OLARAK İKİ ANA BÖLÜMDÜR
 1. template.fire_systems.systems[]: PDF'den keşfedilen HER sistemin YAPISI (equipment_definitions - ekipman tablolarının rol haritası) ve GENEL UYGUNLUĞU (verdict).
-2. extracted_data: report_category + extraction_mode + findings + report_information + facility_information + overall_result + result_legend (rapordaki sonuç sembollerinin GERÇEK açıklaması, varsa).
+2. extracted_data: report_category + extraction_mode + findings + report_information + facility_information + overall_result + result_legend (rapordaki sonuç sembollerinin GERÇEK açıklaması, varsa) + inspection_body (periyodik kontrolü yapan kuruluş ve uzmanları).
 
 TEMEL İLKE — HANGİ DEĞER SENDEN, HANGİSİ CAMELOT'TAN GELİR:
 - Rapor uzunluğuyla/ekipman SAYISIYLA BÜYÜMEYEN her şey (rapor bilgileri, sistem sayısı, sonuç paragrafı) SABİT/SINIRLIDIR - bunları SEN doğrudan okur, GERÇEK değerleriyle yazarsın.
@@ -72,7 +252,7 @@ Bu, report_category'den BAĞIMSIZ ikinci bir karardır - raporun TAMAMININ nası
 report_category="tekli_ekipman" iken extraction_mode HER ZAMAN "single_equipment" olmalı; diğer 3 report_category değerinde HER ZAMAN "structured" olmalı - bu ikisi pratikte birebir eşleşir, ayrı ayrı sormamızın nedeni sadece extraction_mode'un extractor tarafında farklı bir davranışı (Camelot zorunluluğunun kalkması) tetiklemesidir.
 
 KESİN SINIR
-extracted_data içinde report_category, extraction_mode, findings, report_information, facility_information, overall_result, result_legend dışında hiçbir alan bulunamaz.
+extracted_data içinde report_category, extraction_mode, findings, report_information, facility_information, overall_result, result_legend, inspection_body, equipment_type, equipment_tag, equipment_specs dışında hiçbir alan bulunamaz.
 Ekipmana bağlı, rapor uzunluğuyla (ekipman sayısıyla) BÜYÜYEBİLEN kısımlar extracted_data'ya asla yazılmaz - bunlar template.fire_systems.systems[].equipment_definitions altında (bkz. bölüm 5) YAPI olarak tarif edilir, Camelot gerçek verileri o tarife göre çıkarır.
 
 TEMPLATE İÇİNDE GERÇEK SİSTEM BAŞLIKLARI VE YAPISAL PATTERNLER BULUNABİLİR. Bunlar veri çıkarımı değil, Camelot'un doğru bölümü ve tabloyu bulması için keşfedilmiş şablon bilgisidir.
@@ -238,7 +418,8 @@ Her finding şu alanlara sahip olmalıdır:
 - system_name
 - description
 - source_pages
-- severity: PDF'in KENDİSİ bu bulguyu önem derecesine göre ayırıyorsa (örn. bir "(*)" işareti "majör uygunsuzluk" anlamına geliyorsa) onu buraya yaz; rapor böyle bir ayrım yapmıyorsa null bırak, kendinden bir önem derecesi uydurma.
+- severity: PDF'in KENDİSİ bu bulguyu önem derecesine göre ayırıyorsa (örn. bir "(*)" işareti "majör uygunsuzluk" anlamına geliyorsa; asansör raporlarında (K) Kırmızı, (S) Sarı, (M) Mavi) onu buraya raporun kendi ifadesiyle yaz (örn. "Kırmızı"); rapor böyle bir ayrım yapmıyorsa null bırak, kendinden bir önem derecesi uydurma.
+- description: bulgunun PDF'deki metni; bulgunun raporda kendi madde kodu / numarası varsa (örn. "1.36.2", "6.A.7.") description'ın başına yaz. Bulguları gruplayan kontrol maddesi BAŞLIKLARI (örn. "1.36. Topraklama") bulgu değildir, ayrı finding yapma.
 - ambiguous: bu bulgunun hangi sisteme ait olduğunu GÜVENLE belirleyemediysen true yap (system_name null kalsın) - tahmin etmektense dürüstçe işaretle.
 
 Başka alan EKLEME. Özellikle affected_equipment ekleme.
@@ -283,7 +464,18 @@ Camelot için güvenilir bir bounding box metinden çıkarılamıyorsa uydurma k
 
 11. ÇIKARIM SINIRI
 equipment_definitions SADECE ekipman gruplarının YAPISAL keşfidir. Ekipman SAYISIYLA BÜYÜYEBİLEN gerçek değerler (identity_value, attributes[].value) equipment_axis="rows"/"columns" iken HER ZAMAN null kalır - Camelot bunları gerçek tablodan okur. TEK istisna equipment_axis="none" (gerçekten tek örnek) - o zaman bu alanlar GERÇEK değerlerle doldurulur.
-AI semantic'in gerçek veri kısmı: findings + report_information + facility_information + overall_result + result_legend + systems[].verdict + (equipment_axis="none" olan equipment_definitions kayıtlarının identity_value/attributes/verdict'i) - bunlar HER raporda sabit/sınırlı boyutlu kısımlardır, ekipman SAYISIYLA BÜYÜK ÖLÇÜDE büyümez.
+AI semantic'in gerçek veri kısmı: findings + report_information + facility_information + overall_result + result_legend + inspection_body + systems[].verdict + (equipment_axis="none" olan equipment_definitions kayıtlarının identity_value/attributes/verdict'i) - bunlar HER raporda sabit/sınırlı boyutlu kısımlardır, ekipman SAYISIYLA BÜYÜK ÖLÇÜDE büyümez.
+
+12. PERİYODİK KONTROLÜ YAPAN KURULUŞ (extracted_data.inspection_body)
+Raporu düzenleyen / periyodik kontrolü yapan kuruluşu (muayene firması - genelde antette/başlıkta, altbilgide ya da imza/onay bölümünde) bul ve GERÇEK değerleriyle yaz:
+- name: kuruluşun tam unvanı, PDF'de yazdığı gibi
+- address, phone, email, website, tax_info (vergi dairesi / no): PDF'de gerçekten varsa; yoksa null
+- accreditation: akreditasyon / yetki bilgisi (örn. TÜRKAK akreditasyon no, TS EN ISO/IEC 17020) metinde gerçekten yazıyorsa; yoksa null
+- personnel: kontrolü yapan ve onaylayan uzmanlar, metinde GERÇEKTEN yazan değerlerle:
+  role ("kontrol_eden" | "onaylayan" | PDF'deki başka gerçek görev adı), name, profession (mesleği), chamber_registry_no (MMO / oda sicil no), diploma (diploma no ve tarihi), authorization_no (Bakanlık yetki no).
+  Yalnızca etiketler olup değerler yoksa (değerler imza/mühür görüntüsünde olabilir) o kişiyi EKLEME. Hiç kişi yoksa [].
+Raporu İSTEYEN firma (müşteri) bu DEĞİLDİR - o report_information.company_title'dır; ikisini karıştırma.
+PDF'de olmayan hiçbir bilgiyi uydurma; null bırak.
 
 13. SON JSON SÖZLEŞMESİ
 Çıktının yapısı tam olarak aşağıdaki sözleşmeye uymalıdır:
@@ -456,6 +648,24 @@ AI semantic'in gerçek veri kısmı: findings + report_information + facility_in
       {"code": "U", "meaning": "Uygun"},
       {"code": "UD", "meaning": "Uygun Değil"},
       {"code": "N", "meaning": "Uygulaması Yok, Değerlendirme Dışı"}
+    ],
+    "inspection_body": {
+      "name": "...",
+      "address": "...",
+      "phone": null,
+      "email": null,
+      "website": null,
+      "tax_info": null,
+      "accreditation": null,
+      "personnel": [
+        {"role": "kontrol_eden", "name": "...", "profession": "...", "chamber_registry_no": "...", "diploma": null, "authorization_no": "..."},
+        {"role": "onaylayan", "name": "...", "profession": "...", "chamber_registry_no": "...", "diploma": null, "authorization_no": "..."}
+      ]
+    },
+    "equipment_type": {"slug": null, "evidence": null},
+    "equipment_tag": {"label": null, "value": null, "evidence": null},
+    "equipment_specs": [
+      {"key": "...", "value": "...", "raw_label": "...", "raw_value": "..."}
     ]
   }
 }

@@ -50,17 +50,20 @@ class PkReportAnalysisTestController extends Controller
         $request->validate([
             'file' => ['required_without:legacy_fixture_id', 'file', 'mimes:pdf', 'max:51200'],
             'legacy_fixture_id' => ['required_without:file', 'nullable', 'string'],
+            // equipment: katalogla (tür, etiket, teknik özellikler; toplu tüp raporu da); installation: tesisat raporu.
+            'kind' => ['nullable', 'in:equipment,installation'],
         ]);
+        $withCatalog = $request->input('kind', 'equipment') === 'equipment';
 
         set_time_limit(600);
 
         try {
             if ($request->hasFile('file')) {
                 $file = $request->file('file');
-                $fixture = $this->store->analyze($file->getRealPath(), $file->getClientOriginalName());
+                $fixture = $this->store->analyze($file->getRealPath(), $file->getClientOriginalName(), $withCatalog);
             } else {
                 [$pdfPath, $originalName] = $this->store->legacyPdf((string) $request->input('legacy_fixture_id'));
-                $fixture = $this->store->analyze($pdfPath, $originalName);
+                $fixture = $this->store->analyze($pdfPath, $originalName, $withCatalog);
             }
         } catch (RuntimeException $exception) {
             throw ValidationException::withMessages(['file' => $exception->getMessage()]);

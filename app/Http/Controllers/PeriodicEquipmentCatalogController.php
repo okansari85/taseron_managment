@@ -28,6 +28,8 @@ class PeriodicEquipmentCatalogController extends Controller
                     'default_period_months' => $type->default_period_months,
                     'default_scope' => $type->default_scope,
                     'regulation_note' => $type->regulation_note,
+                    'variants' => $type->variants ?? [],
+                    'variant_label' => $type->variant_label,
                 ])->values(),
             ])
             ->values();

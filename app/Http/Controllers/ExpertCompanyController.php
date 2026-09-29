@@ -87,12 +87,53 @@ class ExpertCompanyController extends Controller
         return response()->json($company);
     }
 
+    /**
+     * İşyeri ekleme formu: firmaların müşterilere dağılımı (işyeri olduğu lokasyonun müşterisine göre).
+     * customer: bu müşteride işyeri olan firmalar; other_customers: yalnızca başka müşterilerde işyeri olanlar
+     * (formda gizlenir). İkisinde de olmayan firma henüz hiçbir müşteride işyeri olmayandır.
+     */
+    public function customerCompanies(Customer $customer): JsonResponse
+    {
+        $tenantId = app(\App\Domain\Tenancy\TenantContext::class)->id();
+        abort_if($customer->tenant_id !== $tenantId, 404);
+
+        $own = $this->companiesAt($customer);
+        $others = Customer::query()
+            ->where('tenant_id', $tenantId)
+            ->whereKeyNot($customer->id)
+            ->get()
+            ->flatMap(fn (Customer $item) => $this->companiesAt($item))
+            ->unique()
+            ->diff($own);
+
+        return response()->json(['customer' => $own->values(), 'other_customers' => $others->values()]);
+    }
+
+    // Müşteriler listesi "Firma" sütunu: her müşterinin lokasyonlarında işyeri olan firma sayısı ({müşteri id: sayı}).
+    public function customerCompanyCounts(): JsonResponse
+    {
+        return response()->json(Customer::query()
+            ->where('tenant_id', app(\App\Domain\Tenancy\TenantContext::class)->id())
+            ->get()
+            ->mapWithKeys(fn (Customer $customer) => [$customer->id => $this->companiesAt($customer)->count()]));
+    }
+
+    // Müşterinin lokasyonlarında işyeri olan firmalar (business entity id).
+    private function companiesAt(Customer $customer): \Illuminate\Support\Collection
+    {
+        return LocationBusinessEntity::query()
+            ->whereIn('location_id', $this->customerLocationService->list($customer)->pluck('id'))
+            ->pluck('business_entity_id')
+            ->unique();
+    }
+
     // Uzmanın atandığı işyerleri: company tipindeki firma + lokasyon kayıtları.
     public function workplaces(Request $request): JsonResponse
     {
         $locationContext = [];
 
-        foreach (Customer::query()->orderBy('name')->get() as $customer) {
+        // Yalnızca bu hesabın müşterileri (başka hesabın müşterisi lokasyon listesinde yetki hatası verir).
+        foreach (Customer::query()->where('tenant_id', app(\App\Domain\Tenancy\TenantContext::class)->id())->orderBy('name')->get() as $customer) {
             foreach ($this->customerLocationService->list($customer) as $location) {
                 $locationContext[$location['id']] ??= [
                     'customer_id' => $customer->id,

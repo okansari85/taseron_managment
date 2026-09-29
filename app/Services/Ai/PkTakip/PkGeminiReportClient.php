@@ -16,14 +16,15 @@ class PkGeminiReportClient
 {
     public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000): array
     {
-        $apiKey = config('services.gemini.api_key');
+        // Anahtar ve model: Ayarlar → Yapay zeka (yoksa .env).
+        $apiKey = PkAiProvider::apiKey('gemini');
         if (!filled($apiKey)) {
-            throw new RuntimeException('GEMINI_API_KEY tanımlı değil.');
+            throw new RuntimeException('Gemini API anahtarı tanımlı değil (Ayarlar → Yapay zeka).');
         }
 
         $url = rtrim((string) config('services.gemini.base_url'), '/') . '/interactions';
         $payload = [
-            'model' => config('services.gemini.text_model'),
+            'model' => PkAiProvider::model('gemini'),
             'system_instruction' => $systemPrompt,
             'input' => $userContent,
             'response_format' => [
@@ -67,11 +68,19 @@ class PkGeminiReportClient
 
         Log::info('Gemini Template Discovery tamamlandı', [
             'duration_s' => round(microtime(true) - $startedAt, 1),
-            'model' => config('services.gemini.text_model'),
+            'model' => PkAiProvider::model('gemini'),
             'output_length' => mb_strlen($content),
         ]);
+        $usage = (array) ($response->json('usage') ?? []);
+        PkAiUsage::record($usage['total_input_tokens'] ?? $usage['input_tokens'] ?? null, $usage['total_output_tokens'] ?? $usage['output_tokens'] ?? null);
 
         return $decoded;
+    }
+
+    // OpenAI istemcisi aynı çıktı şemasını kullanır.
+    public function responseSchema(): array
+    {
+        return $this->schema();
     }
 
     private function schema(): array
@@ -342,7 +351,8 @@ class PkGeminiReportClient
                         'fire_systems' => [
                             'type' => 'object',
                             'properties' => [
-                                'systems' => ['type' => 'array', 'items' => $system],
+                                // Her raporda en az bir kontrol grubu var; model listeyi boş bırakamasın.
+                                'systems' => ['type' => 'array', 'items' => $system, 'minItems' => 1],
                             ],
                             'required' => ['systems'],
                         ],
@@ -549,8 +559,71 @@ class PkGeminiReportClient
                                 'required' => ['code', 'meaning'],
                             ],
                         ],
+                        // Periyodik kontrolü yapan kuruluş (raporu düzenleyen muayene firması) ve
+                        // kontrol eden / onaylayan uzmanlar - yalnızca PDF metninde gerçekten yazanlar.
+                        'inspection_body' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'name' => $nullableString,
+                                'address' => $nullableString,
+                                'phone' => $nullableString,
+                                'email' => $nullableString,
+                                'website' => $nullableString,
+                                'tax_info' => $nullableString,
+                                'accreditation' => $nullableString,
+                                'personnel' => [
+                                    'type' => 'array',
+                                    'items' => [
+                                        'type' => 'object',
+                                        'properties' => [
+                                            'role' => $nullableString,
+                                            'name' => $nullableString,
+                                            'profession' => $nullableString,
+                                            'chamber_registry_no' => $nullableString,
+                                            'diploma' => $nullableString,
+                                            'authorization_no' => $nullableString,
+                                        ],
+                                        'required' => ['role', 'name', 'profession', 'chamber_registry_no', 'diploma', 'authorization_no'],
+                                    ],
+                                ],
+                            ],
+                            'required' => ['name', 'address', 'phone', 'email', 'website', 'tax_info', 'accreditation', 'personnel'],
+                        ],
+                        // Ekipman türü: rapordan ekipman tanımlarken katalogdan seçilen tür (slug); ekipman belliyse o tür.
+                        'equipment_type' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'slug' => $nullableString,
+                                'evidence' => $nullableString,
+                            ],
+                            'required' => ['slug', 'evidence'],
+                        ],
+                        // Ekipman etiketi: istemde verilen türün seçeneklerinden biri (ya da null).
+                        'equipment_tag' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'label' => $nullableString,
+                                'value' => $nullableString,
+                                'evidence' => $nullableString,
+                            ],
+                            'required' => ['label', 'value', 'evidence'],
+                        ],
+                        // Teknik özellikler: istemde verilen türün katalog anahtarlarına eşlenmiş değerler.
+                        'equipment_specs' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'key' => ['type' => 'string'],
+                                    'value' => $nullableString,
+                                    'raw_label' => $nullableString,
+                                    'raw_value' => $nullableString,
+                                ],
+                                'required' => ['key', 'value', 'raw_label', 'raw_value'],
+                            ],
+                        ],
                     ],
-                    'required' => ['report_category', 'extraction_mode', 'findings', 'report_information', 'facility_information', 'overall_result', 'result_legend'],
+                    'required' => ['report_category', 'extraction_mode', 'findings', 'report_information', 'facility_information', 'overall_result', 'result_legend', 'inspection_body', 'equipment_type', 'equipment_tag', 'equipment_specs'],
                 ],
             ],
             'required' => ['template', 'extracted_data'],
