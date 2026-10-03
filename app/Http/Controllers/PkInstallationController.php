@@ -132,6 +132,8 @@ class PkInstallationController extends Controller
             'location_business_entity_id' => ['nullable', 'integer'],
             'name' => ['nullable', 'string', 'max:255'],
             'status' => ['required', Rule::in(['uygun', 'uygun_degil'])],
+            // Boş = tesisat raporu; system = sistem raporu (dolap, pano…; tesisatın genel durumunu değiştirmez).
+            'report_scope' => ['nullable', Rule::in(['system'])],
             'control_date' => ['required', 'date'],
             'next_control_date' => ['nullable', 'date', 'after_or_equal:control_date'],
             'report_no' => ['nullable', 'string', 'max:100'],

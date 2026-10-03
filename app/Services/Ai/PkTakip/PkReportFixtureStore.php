@@ -83,6 +83,62 @@ class PkReportFixtureStore
         return $fixture;
     }
 
+    /**
+     * Test sayfası: elektrik ailesi tesisat raporu (elektrik iç tesisatı, topraklama) tesisat türünün kendi talimatıyla okunur
+     * (PkElectricalReportAnalyzer; yangının talimatı kullanılmaz). Tablolar tesisat okumasındaki gibi (kimlik no + konum).
+     * Fikstür context.mode = electrical, context.type = tesisat türü; o tesisatın Kontrol Ekle penceresinde test verisi olur.
+     */
+    public function analyzeElectrical(string $pdfPath, string $originalName, string $typeSlug = 'elektrik-ic-tesisati'): array
+    {
+        $types = $this->installations->electricalTypes()->where('slug', $typeSlug)->values();
+        if ($types->isEmpty()) {
+            throw new RuntimeException('Tesisat türü bulunamadı.');
+        }
+        $upload = new UploadedFile($pdfPath, $originalName, 'application/pdf', null, true);
+        $document = $this->text->read($upload, false);
+
+        $startedAt = microtime(true);
+        try {
+            $semantic = app(PkElectricalReportAnalyzer::class)->analyze($document['pages'], PkElectricalReportReader::promptCatalog($types), $document['input'] === 'ocr', $typeSlug, PkElectricalReportReader::otherTypes($this->installations->tesisatTypes(), $types->first()));
+        } catch (RuntimeException $exception) {
+            $this->text->forget($document['ocr_pdf']);
+            // Tek istek, tekrar deneme yok; sınır / yoğunluk hatası anlaşılır yazılır.
+            throw PkGeminiError::friendly($exception);
+        }
+
+        $fixtureId = (string) Str::uuid();
+        $storedPdf = self::DIR . "/{$fixtureId}.pdf";
+        Storage::disk('local')->put($storedPdf, file_get_contents($pdfPath));
+        $ocrPdf = null;
+        if ($document['ocr_pdf']) {
+            $ocrPdf = self::DIR . "/{$fixtureId}.ocr.pdf";
+            Storage::disk('local')->put($ocrPdf, file_get_contents($document['ocr_pdf']));
+            $this->text->forget($document['ocr_pdf']);
+        }
+
+        $fixture = [
+            'fixture_id' => $fixtureId,
+            'analyzer' => 'pk_electrical',
+            'provider' => PkAiProvider::name(),
+            'model' => PkAiProvider::model(),
+            'original_file_name' => $originalName,
+            'created_at' => now()->toIso8601String(),
+            'duration_s' => round(microtime(true) - $startedAt, 1),
+            'page_count' => count($document['pages']),
+            'input' => $document['input'],
+            'ocr_pdf_path' => $ocrPdf,
+            'pdf_path' => $storedPdf,
+            'context' => ['mode' => 'electrical', 'type' => $typeSlug],
+            'semantic' => $semantic,
+            // Rapordaki ölçüm sonuçları (panolar, röleler, ölçüm noktaları): elektrik okumasındaki tablo adımıyla (birleşik
+            // başlık tamamlaması dahil).
+            'tables' => app(PkElectricalReportReader::class)->readTables(Storage::disk('local')->path($ocrPdf ?? $storedPdf), $semantic),
+        ];
+        $this->save($fixture);
+
+        return $fixture;
+    }
+
     // Kayıtlı bir analizin tablo adımını Gemini'ye tekrar gitmeden yeniden çalıştırır.
     public function rereadTables(string $fixtureId): array
     {
@@ -101,13 +157,15 @@ class PkReportFixtureStore
     }
 
     /**
-     * Tablo adımı: tesisat raporunda kimlik no + konum (tesisat okumasıyla aynı); toplu tüp raporunda toplu mod
-     * ("Rapordan Ekipman Tanımla" ile aynı; "bulk": o modla oluşturulmuş eski fikstür); diğer ekipman raporlarında eskisi gibi.
+     * Tablo adımı: tesisat raporunda kimlik no + konum (tesisat okumasıyla aynı); elektrik ailesi raporunda elektrik okumasının
+     * tablo adımı (birleşik başlık tamamlaması dahil); toplu tüp raporunda toplu mod ("Rapordan Ekipman Tanımla" ile aynı;
+     * "bulk": o modla oluşturulmuş eski fikstür); diğer ekipman raporlarında eskisi gibi.
      */
     private function readTables(string $pdfPath, array $semantic, ?string $mode): array
     {
         return match (true) {
             $mode === 'installation' => $this->tableReader->read($pdfPath, $semantic, true),
+            $mode === 'electrical' => app(PkElectricalReportReader::class)->readTables($pdfPath, $semantic),
             $mode === 'bulk' || PkBulkReportReader::isBulk($semantic) => $this->bulk->tables($pdfPath, $semantic),
             default => $this->tableReader->read($pdfPath, $semantic),
         };

@@ -71,4 +71,32 @@ class PkReportAnalysisTestController extends Controller
 
         return response()->json($fixture, 201);
     }
+
+    // Elektrik ailesi tesisat raporu (elektrik iç tesisatı, topraklama, yangın algılama): türün kendi talimatıyla okunur, test
+    // verisi olarak saklanır (store ile aynı girişler).
+    public function storeElectrical(Request $request): JsonResponse
+    {
+        $request->validate([
+            'file' => ['required_without:legacy_fixture_id', 'file', 'mimes:pdf', 'max:51200'],
+            'legacy_fixture_id' => ['required_without:file', 'nullable', 'string'],
+            'type' => ['nullable', 'in:elektrik-ic-tesisati,topraklama,yangin-algilama,havalandirma-klima,paratoner,akumulator,trafo'],
+        ]);
+        $type = (string) $request->input('type', 'elektrik-ic-tesisati');
+
+        set_time_limit(600);
+
+        try {
+            if ($request->hasFile('file')) {
+                $file = $request->file('file');
+                $fixture = $this->store->analyzeElectrical($file->getRealPath(), $file->getClientOriginalName(), $type);
+            } else {
+                [$pdfPath, $originalName] = $this->store->legacyPdf((string) $request->input('legacy_fixture_id'));
+                $fixture = $this->store->analyzeElectrical($pdfPath, $originalName, $type);
+            }
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages(['file' => $exception->getMessage()]);
+        }
+
+        return response()->json($fixture, 201);
+    }
 }

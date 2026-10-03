@@ -8,11 +8,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-// Tesisatın periyodik kontrol raporu; kapsadığı sistemlerin sonuçları systems() içinde.
+// Tesisatın periyodik kontrol raporu; kapsadığı sistemlerin sonuçları systems() içinde. report_scope: boş = tesisat raporu,
+// 'system' = sistem raporu (yalnızca kendi sistemlerini günceller; tesisatın genel durumu tesisat raporundan).
 class PkInstallationReport extends Model
 {
     protected $fillable = [
-        'tenant_id', 'pk_installation_id', 'control_date', 'next_control_date', 'status', 'source', 'report_file', 'report_file_name',
+        'tenant_id', 'pk_installation_id', 'control_date', 'next_control_date', 'status', 'source', 'report_scope', 'report_file', 'report_file_name',
         'report_no', 'report_hash', 'inspection_body', 'conclusion', 'findings', 'notes', 'analysis', 'created_by',
     ];
 

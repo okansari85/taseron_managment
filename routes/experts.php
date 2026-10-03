@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\ExpertController;
 use App\Http\Controllers\PkAccountController;
+use App\Http\Controllers\PkAccountOrganizationController;
 use App\Http\Controllers\PkAccountOverviewController;
 use App\Http\Controllers\PkAccountUserController;
 use App\Http\Controllers\PkCompanyTitleController;
@@ -39,6 +40,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('pk-account/assignments', [PkWorkplaceAssignmentController::class, 'index']);
     // Yönetici ve operasyon yöneticisinin işyerleri: hesabın tamamı.
     Route::get('pk-account/workplaces', [PkWorkplaceAssignmentController::class, 'workplaces']);
+    // Üstteki menünün Organizasyon kutusu (yalnızca yönetici): müşteriler, organizasyon ağaçları, lokasyonun düğümü.
+    Route::get('pk-account/organizations', PkAccountOrganizationController::class);
     Route::patch('pk-account/assignments/{locationBusinessEntity}', [PkWorkplaceAssignmentController::class, 'update']);
     // Genel Bakış: uzman / müşteri bazında durum (yönetici ve operasyon yöneticisi).
     Route::get('pk-account/overview', PkAccountOverviewController::class);

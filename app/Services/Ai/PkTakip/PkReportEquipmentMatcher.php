@@ -32,10 +32,12 @@ class PkReportEquipmentMatcher
     private const GENERIC_WORDS = ['elektrikli', 'manuel', 'mobil', 'sabit', 'servis', 'kontrol', 'sistemi', 'sistemleri', 'tesisati', 'ekipmani'];
 
     // Seri no yokken kimliği belirleyen alanlar: varsayılan ekipman no; yangın tüpünde no tekrar ettiği için
-    // bulunduğu yer + ekipman no + söndürücü tipi (etiket) birlikte; yangın dolabında dolap no + konum.
+    // bulunduğu yer + ekipman no + söndürücü tipi (etiket) birlikte; yangın dolabında dolap no + konum; rafta raf sıra no
+    // + konum (rafın seri no'su yok; rapor no her yıl değişir, kimlik değildir).
     private const IDENTITY_FIELDS = [
         'yangin-sondurme-cihazi' => ['place', 'code', 'variant'],
         'yangin-dolabi' => ['place', 'code'],
+        'depolama-rafi' => ['place', 'code'],
     ];
 
     /** @return array<int, string> seri no yokken bu türde kimliği belirleyen alanlar */
@@ -176,9 +178,12 @@ class PkReportEquipmentMatcher
 
     // Rapordaki kimlik değerleri, ekipman alanlarına eşlenmiş olarak: önce yapay zekanın katalog anahtarıyla verdiği
     // teknik özellikler (equipment_specs), eksik kalanlar tek örnekli ekipman tanımının özelliklerinden.
+    // Tanımın kimlik alanı seri no / marka / model / yer değilse ekipman no'dur: adı firmadan firmaya değişir ("Raf Sıra
+    // Numarası", "Raf No"...); raporda ayrıca ekipman no yazmıyorsa o kullanılır.
     private function reportValues(array $semantic): array
     {
         $values = [];
+        $identityCode = null;
         foreach ((array) ($semantic['extracted_data']['equipment_specs'] ?? []) as $spec) {
             $key = self::SPEC_FIELDS[(string) ($spec['key'] ?? '')] ?? null;
             $value = trim((string) (($spec['value'] ?? null) ?: ($spec['raw_value'] ?? '')));
@@ -195,7 +200,11 @@ class PkReportEquipmentMatcher
                 $pairs = [];
                 $identity = $structure['identity_value'] ?? $definition['identity_value'] ?? null;
                 if (filled($identity)) {
-                    $pairs[] = [(string) ($structure['identity_field'] ?? 'no'), (string) $identity];
+                    $identityLabel = (string) ($structure['identity_field'] ?? 'no');
+                    $pairs[] = [$identityLabel, (string) $identity];
+                    if ($this->fieldFor($identityLabel) === null) {
+                        $identityCode ??= trim((string) $identity);
+                    }
                 }
                 foreach ((array) ($definition['attributes'] ?? []) as $attribute) {
                     if (filled($attribute['value'] ?? null)) {
@@ -209,6 +218,9 @@ class PkReportEquipmentMatcher
                     }
                 }
             }
+        }
+        if (!isset($values['code']) && $identityCode !== null && !$this->isEmptyValue($identityCode)) {
+            $values['code'] = $identityCode;
         }
 
         return $values;

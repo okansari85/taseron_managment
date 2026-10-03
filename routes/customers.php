@@ -8,10 +8,18 @@ use App\Http\Controllers\CustomerOrganizationRenameController;
 use App\Http\Controllers\CustomerPurgeController;
 use App\Http\Controllers\ExpertCompanyController;
 use App\Http\Controllers\PeriodicEquipmentCatalogController;
+use App\Http\Controllers\PkAreaController;
+use App\Http\Controllers\PkWorkplaceNameController;
+use App\Http\Controllers\PkOperationalUnitController;
+use App\Http\Controllers\PkBulkAnalysisController;
 use App\Http\Controllers\PkBulkReportController;
+use App\Http\Controllers\PkCompanyDeletionController;
+use App\Http\Controllers\PkBulkReportMatchController;
 use App\Http\Controllers\PkDashboardController;
+use App\Http\Controllers\PkElectricalReportController;
 use App\Http\Controllers\PkEquipmentController;
 use App\Http\Controllers\PkInstallationController;
+use App\Http\Controllers\PkInstallationReportAnalysisController;
 use App\Http\Controllers\PkInstallationSystemRequestController;
 use App\Http\Controllers\PkReportAnalysisHistoryController;
 use App\Http\Controllers\PkReportAnalysisTestController;
@@ -45,6 +53,9 @@ Route::prefix('api')
         Route::get('my-companies', [ExpertCompanyController::class, 'index']);
         Route::post('my-companies', [ExpertCompanyController::class, 'store']);
         Route::patch('my-companies/{businessEntity}', [ExpertCompanyController::class, 'update']);
+        // pktakip firma silme: yalnızca verisi olmayan firma (önce özet; verisiz lokasyon bağlantıları birlikte kalkar).
+        Route::get('my-companies/{businessEntity}/delete-summary', [PkCompanyDeletionController::class, 'summary']);
+        Route::delete('my-companies/{businessEntity}', [PkCompanyDeletionController::class, 'destroy']);
         Route::get('my-workplaces', [ExpertCompanyController::class, 'workplaces']);
         // İşyeri ekleme: seçilen müşteride gösterilecek firmalar (başka müşterilerin firmaları gizlenir).
         Route::get('customers/{customer}/companies', [ExpertCompanyController::class, 'customerCompanies']);
@@ -64,11 +75,17 @@ Route::prefix('api')
         Route::patch('pk-installations/{pkInstallation}', [PkInstallationController::class, 'update']);
         Route::delete('pk-installations/{pkInstallation}', [PkInstallationController::class, 'destroy']);
         Route::post('pk-installations/{pkInstallation}/pending', [PkInstallationController::class, 'storePending']);
+        // Elektrik İç Tesisatı: kendi yapay zeka okuması ve kontrol kaydı; rapordaki ekipmanlar Ekipmanlar'a eklenmez.
+        Route::post('pk-installations/electrical-reports', [PkElectricalReportController::class, 'store']);
+        Route::post('pk-installations/{pkInstallation}/electrical-analysis', [PkElectricalReportController::class, 'analyze']);
+        Route::get('pk-installations/{pkInstallation}/electrical-systems', [PkElectricalReportController::class, 'systems']);
         // Analiz geçmişi (Ayarlar): yapay zeka ile yapılan her rapor okuması.
         Route::get('pk-analysis-history', [PkReportAnalysisHistoryController::class, 'index']);
         Route::get('pk-analysis-history/{analysis}', [PkReportAnalysisHistoryController::class, 'show']);
         Route::get('pk-analysis-history/{analysis}/file', [PkReportAnalysisHistoryController::class, 'file']);
         Route::get('pk-installations/{pkInstallation}/reports/{pkInstallationReport}/file', [PkInstallationController::class, 'downloadReport']);
+        // Kontrol geçmişi (bütün tesisatlar): raporun yapay zeka okuması; satır açılınca.
+        Route::get('pk-installations/{pkInstallation}/reports/{pkInstallationReport}/analysis', [PkInstallationReportAnalysisController::class, 'show']);
         Route::delete('pk-installations/{pkInstallation}/reports/{pkInstallationReport}', [PkInstallationController::class, 'destroyReport']);
         Route::get('pk-equipment', [PkEquipmentController::class, 'index']);
         Route::post('pk-equipment', [PkEquipmentController::class, 'store']);
@@ -85,6 +102,44 @@ Route::prefix('api')
         Route::get('pk-bulk-reports/{pkBulkReport}', [PkBulkReportController::class, 'show']);
         Route::get('pk-bulk-reports/{pkBulkReport}/file', [PkBulkReportController::class, 'file']);
         Route::delete('pk-bulk-reports/{pkBulkReport}', [PkBulkReportController::class, 'destroy']);
+        // Tüp formu eşleştirme: eşleşmeyen satırlar eşleştirme bekler; sonradan mevcut tüp / yeni tüp / yok say, tüp taşıma.
+        Route::post('pk-bulk-report-matches', [PkBulkReportMatchController::class, 'store']);
+        Route::get('pk-bulk-report-matches/pending-counts', [PkBulkReportMatchController::class, 'pendingCounts']);
+        Route::get('pk-bulk-report-matches/board', [PkBulkReportMatchController::class, 'board']);
+        Route::post('pk-bulk-report-matches/board/match', [PkBulkReportMatchController::class, 'boardMatch']);
+        Route::post('pk-bulk-report-matches/board/add', [PkBulkReportMatchController::class, 'boardAdd']);
+        Route::get('pk-bulk-report-matches/scopes', [PkBulkReportMatchController::class, 'scopes']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/scope', [PkBulkReportMatchController::class, 'setScope']);
+        Route::get('pk-bulk-report-matches/{pkBulkReport}', [PkBulkReportMatchController::class, 'matching']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/{pendingRow}/match', [PkBulkReportMatchController::class, 'match']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/add', [PkBulkReportMatchController::class, 'add']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/skip', [PkBulkReportMatchController::class, 'skip']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/inspections/{pkInspection}/move', [PkBulkReportMatchController::class, 'move']);
+        // Toplu rapor yükleme (raf, transpalet): dosya daha önce yüklendi mi (yapay zekaya gitmeden). Okuma/kayıt mevcut uçlarla.
+        // pktakip işyeri adı (firmanın lokasyondaki kaydının adı) ve aynı firmanın lokasyondaki ek işyeri.
+        Route::get('pk-workplace-names', [PkWorkplaceNameController::class, 'index']);
+        Route::post('pk-workplace-names/{workplace}', [PkWorkplaceNameController::class, 'update'])->whereNumber('workplace');
+        Route::post('pk-workplaces/additional', [PkWorkplaceNameController::class, 'storeAdditional']);
+        // pktakip alanları: lokasyonun içindeki operasyonel / ortak alanlar, alan türleri, ekipmana ve tesisata alan seçimi.
+        Route::get('pk-area-types', [PkAreaController::class, 'types']);
+        Route::post('pk-area-types', [PkAreaController::class, 'storeType']);
+        Route::get('pk-areas', [PkAreaController::class, 'index']);
+        Route::get('pk-areas/assignments', [PkAreaController::class, 'assignments']);
+        // Operasyonel birimler: işyerinin içinde ayrı yönetilen birimler (kullandığı alanlarla) ve ekipmana birim seçimi.
+        Route::get('pk-units', [PkOperationalUnitController::class, 'index']);
+        Route::get('pk-units/assignments', [PkOperationalUnitController::class, 'assignments']);
+        Route::post('pk-units', [PkOperationalUnitController::class, 'store']);
+        Route::patch('pk-units/{pkOperationalUnit}', [PkOperationalUnitController::class, 'update']);
+        Route::delete('pk-units/{pkOperationalUnit}', [PkOperationalUnitController::class, 'destroy']);
+        Route::post('pk-equipment/{pkEquipment}/unit', [PkOperationalUnitController::class, 'equipmentUnit']);
+        Route::post('pk-areas', [PkAreaController::class, 'store']);
+        Route::patch('pk-areas/{pkArea}', [PkAreaController::class, 'update']);
+        Route::delete('pk-areas/{pkArea}', [PkAreaController::class, 'destroy']);
+        Route::post('pk-equipment/{pkEquipment}/area', [PkAreaController::class, 'equipmentArea']);
+        Route::post('pk-installations/{pkInstallation}/area', [PkAreaController::class, 'installationArea']);
+        Route::post('pk-bulk-analysis/duplicates', [PkBulkAnalysisController::class, 'duplicates']);
+        Route::post('pk-bulk-analysis/reuse', [PkBulkAnalysisController::class, 'reuse']);
+        Route::post('pk-bulk-analysis/{analysisId}/preview', [PkBulkAnalysisController::class, 'preview']);
         Route::post('pk-equipment/report-analysis', [PkEquipmentController::class, 'analyzeNewReport']);
         Route::post('pk-equipment/report-analysis/{analysisId}/draft', [PkEquipmentController::class, 'previewDraft']);
         Route::post('pk-equipment/from-report', [PkEquipmentController::class, 'storeFromReport']);
@@ -117,5 +172,7 @@ Route::prefix('api')
         Route::get('pk-report-analyses', [PkReportAnalysisTestController::class, 'index']);
         Route::get('pk-report-analyses/{fixtureId}', [PkReportAnalysisTestController::class, 'show']);
         Route::post('pk-report-analyses', [PkReportAnalysisTestController::class, 'store']);
+        // Test sayfası: elektrik iç tesisatı raporu (elektriğin kendi talimatıyla).
+        Route::post('pk-report-analyses/electrical', [PkReportAnalysisTestController::class, 'storeElectrical']);
         Route::post('pk-report-analyses/{fixtureId}/tables', [PkReportAnalysisTestController::class, 'rereadTables']);
     });

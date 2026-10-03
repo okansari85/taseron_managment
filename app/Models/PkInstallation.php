@@ -43,12 +43,13 @@ class PkInstallation extends Model
         return $this->hasMany(PkInstallationReport::class, 'pk_installation_id');
     }
 
-    // Son kontrol: tesisatın genel durumu ve tarihleri bu raporun genel sonucundan.
+    // Son kontrol: tesisatın genel durumu ve tarihleri bu raporun genel sonucundan. Sistem raporları (dolap, pano…) sayılmaz;
+    // yalnızca kendi sistemlerini günceller.
     public function latestReport(): HasOne
     {
         return $this->hasOne(PkInstallationReport::class, 'pk_installation_id')->ofMany([
             'control_date' => 'max',
             'id' => 'max',
-        ]);
+        ], fn ($query) => $query->whereNull('report_scope'));
     }
 }
