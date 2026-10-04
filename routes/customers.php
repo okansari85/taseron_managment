@@ -25,6 +25,9 @@ use App\Http\Controllers\PkReportAnalysisHistoryController;
 use App\Http\Controllers\PkReportAnalysisTestController;
 use App\Http\Controllers\PeriodicEquipmentSpecRequestController;
 use App\Http\Controllers\PkAiSettingsController;
+use App\Http\Controllers\PkBillingController;
+use App\Http\Middleware\EnsurePkEquipmentLimit;
+use App\Http\Middleware\EnsurePkReadCredits;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('api')
@@ -69,7 +72,7 @@ Route::prefix('api')
         Route::get('pk-installation-catalog', [PkInstallationController::class, 'catalog']);
         Route::get('pk-installations', [PkInstallationController::class, 'index']);
         Route::post('pk-installations', [PkInstallationController::class, 'store']);
-        Route::post('pk-installations/report-analysis', [PkInstallationController::class, 'analyzeReport']);
+        Route::post('pk-installations/report-analysis', [PkInstallationController::class, 'analyzeReport'])->middleware(EnsurePkReadCredits::class . ':installation');
         Route::post('pk-installations/reports', [PkInstallationController::class, 'storeReport']);
         Route::get('pk-installations/{pkInstallation}', [PkInstallationController::class, 'show']);
         Route::patch('pk-installations/{pkInstallation}', [PkInstallationController::class, 'update']);
@@ -77,7 +80,7 @@ Route::prefix('api')
         Route::post('pk-installations/{pkInstallation}/pending', [PkInstallationController::class, 'storePending']);
         // Elektrik İç Tesisatı: kendi yapay zeka okuması ve kontrol kaydı; rapordaki ekipmanlar Ekipmanlar'a eklenmez.
         Route::post('pk-installations/electrical-reports', [PkElectricalReportController::class, 'store']);
-        Route::post('pk-installations/{pkInstallation}/electrical-analysis', [PkElectricalReportController::class, 'analyze']);
+        Route::post('pk-installations/{pkInstallation}/electrical-analysis', [PkElectricalReportController::class, 'analyze'])->middleware(EnsurePkReadCredits::class . ':installation');
         Route::get('pk-installations/{pkInstallation}/electrical-systems', [PkElectricalReportController::class, 'systems']);
         // Analiz geçmişi (Ayarlar): yapay zeka ile yapılan her rapor okuması.
         Route::get('pk-analysis-history', [PkReportAnalysisHistoryController::class, 'index']);
@@ -88,10 +91,10 @@ Route::prefix('api')
         Route::get('pk-installations/{pkInstallation}/reports/{pkInstallationReport}/analysis', [PkInstallationReportAnalysisController::class, 'show']);
         Route::delete('pk-installations/{pkInstallation}/reports/{pkInstallationReport}', [PkInstallationController::class, 'destroyReport']);
         Route::get('pk-equipment', [PkEquipmentController::class, 'index']);
-        Route::post('pk-equipment', [PkEquipmentController::class, 'store']);
+        Route::post('pk-equipment', [PkEquipmentController::class, 'store'])->middleware(EnsurePkEquipmentLimit::class . ':one');
         Route::post('pk-equipment/bulk-delete', [PkEquipmentController::class, 'bulkDestroy']);
         Route::post('pk-equipment/bulk-deactivate', [PkEquipmentController::class, 'bulkDeactivate']);
-        Route::post('pk-equipment/bulk-activate', [PkEquipmentController::class, 'bulkActivate']);
+        Route::post('pk-equipment/bulk-activate', [PkEquipmentController::class, 'bulkActivate'])->middleware(EnsurePkEquipmentLimit::class . ':activate');
         // Genel bakış ve durum raporu.
         Route::get('pk-dashboard', [PkDashboardController::class, 'overview']);
         Route::get('pk-dashboard/report', [PkDashboardController::class, 'report']);
@@ -107,12 +110,12 @@ Route::prefix('api')
         Route::get('pk-bulk-report-matches/pending-counts', [PkBulkReportMatchController::class, 'pendingCounts']);
         Route::get('pk-bulk-report-matches/board', [PkBulkReportMatchController::class, 'board']);
         Route::post('pk-bulk-report-matches/board/match', [PkBulkReportMatchController::class, 'boardMatch']);
-        Route::post('pk-bulk-report-matches/board/add', [PkBulkReportMatchController::class, 'boardAdd']);
+        Route::post('pk-bulk-report-matches/board/add', [PkBulkReportMatchController::class, 'boardAdd'])->middleware(EnsurePkEquipmentLimit::class . ':ids');
         Route::get('pk-bulk-report-matches/scopes', [PkBulkReportMatchController::class, 'scopes']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/scope', [PkBulkReportMatchController::class, 'setScope']);
         Route::get('pk-bulk-report-matches/{pkBulkReport}', [PkBulkReportMatchController::class, 'matching']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/{pendingRow}/match', [PkBulkReportMatchController::class, 'match']);
-        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/add', [PkBulkReportMatchController::class, 'add']);
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/add', [PkBulkReportMatchController::class, 'add'])->middleware(EnsurePkEquipmentLimit::class . ':ids');
         Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/skip', [PkBulkReportMatchController::class, 'skip']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/inspections/{pkInspection}/move', [PkBulkReportMatchController::class, 'move']);
         // Toplu rapor yükleme (raf, transpalet): dosya daha önce yüklendi mi (yapay zekaya gitmeden). Okuma/kayıt mevcut uçlarla.
@@ -137,12 +140,15 @@ Route::prefix('api')
         Route::delete('pk-areas/{pkArea}', [PkAreaController::class, 'destroy']);
         Route::post('pk-equipment/{pkEquipment}/area', [PkAreaController::class, 'equipmentArea']);
         Route::post('pk-installations/{pkInstallation}/area', [PkAreaController::class, 'installationArea']);
+        // pktakip paket ve kredi: "Paketim" ve Analiz geçmişi → Kredi hareketleri.
+        Route::get('pk-billing', [PkBillingController::class, 'status']);
+        Route::get('pk-billing/entries', [PkBillingController::class, 'entries']);
         Route::post('pk-bulk-analysis/duplicates', [PkBulkAnalysisController::class, 'duplicates']);
         Route::post('pk-bulk-analysis/reuse', [PkBulkAnalysisController::class, 'reuse']);
         Route::post('pk-bulk-analysis/{analysisId}/preview', [PkBulkAnalysisController::class, 'preview']);
-        Route::post('pk-equipment/report-analysis', [PkEquipmentController::class, 'analyzeNewReport']);
+        Route::post('pk-equipment/report-analysis', [PkEquipmentController::class, 'analyzeNewReport'])->middleware(EnsurePkReadCredits::class . ':equipment');
         Route::post('pk-equipment/report-analysis/{analysisId}/draft', [PkEquipmentController::class, 'previewDraft']);
-        Route::post('pk-equipment/from-report', [PkEquipmentController::class, 'storeFromReport']);
+        Route::post('pk-equipment/from-report', [PkEquipmentController::class, 'storeFromReport'])->middleware(EnsurePkEquipmentLimit::class . ':one');
         Route::get('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'show']);
         Route::patch('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'update']);
         Route::delete('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'destroy']);
@@ -151,7 +157,7 @@ Route::prefix('api')
         Route::patch('pk-equipment/{pkEquipment}/inspections/{pkInspection}', [PkEquipmentController::class, 'updateInspection']);
         Route::delete('pk-equipment/{pkEquipment}/inspections/{pkInspection}', [PkEquipmentController::class, 'destroyInspection']);
         Route::post('pk-equipment/{pkEquipment}/inspections/{pkInspection}/spec-requests', [PkEquipmentController::class, 'requestSpec']);
-        Route::post('pk-equipment/{pkEquipment}/report-analysis', [PkEquipmentController::class, 'analyzeReport']);
+        Route::post('pk-equipment/{pkEquipment}/report-analysis', [PkEquipmentController::class, 'analyzeReport'])->middleware(EnsurePkReadCredits::class . ':equipment');
         Route::post('pk-equipment/{pkEquipment}/report-analysis/{analysisId}', [PkEquipmentController::class, 'rebindAnalysis']);
         Route::post('pk-equipment/{pkEquipment}/properties', [PkEquipmentController::class, 'correctProperty']);
         Route::delete('pk-equipment/{pkEquipment}/properties/{key}', [PkEquipmentController::class, 'removeProperty']);

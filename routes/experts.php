@@ -7,6 +7,7 @@ use App\Http\Controllers\PkAccountOverviewController;
 use App\Http\Controllers\PkAccountUserController;
 use App\Http\Controllers\PkCompanyTitleController;
 use App\Http\Controllers\PkWorkplaceAssignmentController;
+use App\Http\Controllers\PkAdminBillingController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('experts/set-password', [ExpertController::class, 'setPassword']);
@@ -23,6 +24,17 @@ Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
     Route::post('pk-accounts/{tenant}/impersonate', [PkAccountController::class, 'impersonate']);
     Route::post('pk-accounts/{tenant}/resend-invitation', [PkAccountController::class, 'resendInvitation']);
     Route::post('pk-accounts/{tenant}/users/{user}/impersonate', [PkAccountUserController::class, 'impersonate']);
+});
+
+// pktakip paket ve kredi (süper admin): paket tanımları, hesaba paket atama, elle kredi, kredi hareketleri.
+Route::middleware(['auth:sanctum', 'web-role:super-admin'])->prefix('pk-admin')->group(function () {
+    Route::get('packages', [PkAdminBillingController::class, 'packages']);
+    Route::post('packages', [PkAdminBillingController::class, 'storePackage']);
+    Route::patch('packages/{package}', [PkAdminBillingController::class, 'updatePackage'])->whereNumber('package');
+    Route::get('accounts', [PkAdminBillingController::class, 'accounts']);
+    Route::post('accounts/{tenant}/assign', [PkAdminBillingController::class, 'assign'])->whereNumber('tenant');
+    Route::post('accounts/{tenant}/credit', [PkAdminBillingController::class, 'credit'])->whereNumber('tenant');
+    Route::get('accounts/{tenant}/entries', [PkAdminBillingController::class, 'entries'])->whereNumber('tenant');
 });
 
 // Oturumdaki kullanıcının hesabı (panelde hesap türüne göre yazılar).

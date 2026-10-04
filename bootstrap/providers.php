@@ -9,5 +9,6 @@ return [
     AppServiceProvider::class,
     TenancyServiceProvider::class,
     CustomerRoutesServiceProvider::class,
+    \App\Providers\PkBillingServiceProvider::class,
 
 ];
