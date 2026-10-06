@@ -8,9 +8,15 @@ use App\Http\Controllers\PkAccountUserController;
 use App\Http\Controllers\PkCompanyTitleController;
 use App\Http\Controllers\PkWorkplaceAssignmentController;
 use App\Http\Controllers\PkAdminBillingController;
+use App\Http\Controllers\PkSignupController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('experts/set-password', [ExpertController::class, 'setPassword']);
+
+// Tanıtım sitesinden herkese açık üyelik (bireysel uzman / OSGB / kurumsal); IP başına dakikada 5 istek.
+Route::post('pk-signup', [PkSignupController::class, 'store'])->middleware('throttle:5,1');
+// Ücretli paketle üyelik; şimdilik deneme ödemesi, yalnız PK_FAKE_PAYMENT=true ortamında çalışır.
+Route::post('pk-signup/checkout', [PkSignupController::class, 'checkout'])->middleware('throttle:5,1');
 
 Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
     Route::post('experts', [ExpertController::class, 'store']);
