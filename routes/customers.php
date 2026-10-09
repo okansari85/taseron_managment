@@ -9,6 +9,7 @@ use App\Http\Controllers\CustomerPurgeController;
 use App\Http\Controllers\ExpertCompanyController;
 use App\Http\Controllers\PeriodicEquipmentCatalogController;
 use App\Http\Controllers\PkAreaController;
+use App\Http\Controllers\PkFineController;
 use App\Http\Controllers\PkWorkplaceNameController;
 use App\Http\Controllers\PkOperationalUnitController;
 use App\Http\Controllers\PkBulkAnalysisController;
@@ -99,6 +100,11 @@ Route::prefix('api')
         Route::get('pk-dashboard', [PkDashboardController::class, 'overview']);
         Route::get('pk-dashboard/report', [PkDashboardController::class, 'report']);
         Route::get('pk-dashboard/due', [PkDashboardController::class, 'due']);
+        Route::get('pk-dashboard/types', [PkDashboardController::class, 'types']);
+        // Olası idari para cezası (6331 26/1-n, 2026): seçili işyeri; işyerlerinin çalışan sayısı aralığı.
+        Route::get('pk-dashboard/fines', [PkFineController::class, 'show']);
+        Route::get('pk-workplace-employee-bands', [PkFineController::class, 'bands']);
+        Route::post('pk-workplace-employee-bands/{workplace}', [PkFineController::class, 'setBand'])->whereNumber('workplace');
         // Tüp kontrol formları (toplu rapor).
         Route::get('pk-bulk-reports', [PkBulkReportController::class, 'index']);
         Route::post('pk-bulk-reports', [PkBulkReportController::class, 'store']);

@@ -23,3 +23,17 @@ Tek kelimelik ilişki adlarında (`location()`, `user()`, `businessEntity()` gib
 **Yaşanan örnek:** `LocationExpert::locationBusinessEntity()` ilişkisi `with(['locationBusinessEntity.location', 'locationBusinessEntity.businessEntity'])` ile yüklendi, ama gerçek JSON key'leri `location_business_entity` ve (onun içinde) `business_entity` çıktı. Frontend tipleri (`AuthorizationLocationExpert`, `AuthorizationLocationBusinessEntity`) camelCase yazılmıştı, bu yüzden "Atanmış Lokasyonlar" listesi lokasyon/firma/NACE/SGK alanlarının hepsini boş (`—`) gösterdi; backend'de hata yoktu, veri de doğruydu, sadece key ismi uyuşmuyordu.
 
 **Kural:** Backend'de yeni, birden fazla kelimeden oluşan bir ilişki eklediğinde (`locationBusinessEntity`, `businessEntityLocation` vb.), frontend tipini/mapping'ini YAZARKEN camelCase değil, `Str::snake()` sonucu olan snake_case key'i kullan (`location_business_entity`, `business_entity`). Emin değilsen, tahmin etme — gerçek response'u kontrol et (örn. tarayıcı DevTools → Network → ilgili istek → Response) ya da `php artisan tinker` ile `$model->load(...)->toArray()` çıktısına bak.
+
+## PKTakip (pk_ ile başlayan her şey)
+
+Bu backend canlıdaki Taşeron uygulamasıyla ortak; PKTakip (`C:\Users\zanba\Desktop\pktakip_front`) aynı backend'i kullanır.
+
+- **Yalnızca yeni kod ekle.** Yeni controller/servis/middleware/observer ve `routes/customers.php` / `routes/experts.php` içine yeni route satırları. Mevcut metot, route ve sınıfları değiştirme; var olan public servisleri çağır. Mevcut bir satıra dokunmak şartsa önce kullanıcıya sor.
+- Önce oku; değiştireceğin dosyaları ve etkisini listele, onay al.
+- Bireysel uzman (`tenant_type=expert`) davranışı değişmez; yeni kurallar osgb/corporate ile koşullanır.
+- Her sorguda tenant filtresi; filtresiz `::query()->get()` döngüsü yazma.
+- Şema değişikliği için açık onay; yalnızca o migration'ı çalıştır (`migrate --path=…`).
+- PHP: Laragon 8.4 (`/c/laragon/bin/php/php-8.4.12-nts-Win32-vs17-x64/php.exe`); `tinker --execute=… < /dev/null`.
+- Yapay zeka sağlayıcılarına (Gemini/OpenAI/NVIDIA) arka planda ya da testte istek atma, otomatik retry ekleme; fixture kullan (`storage/app/private/pk-report-fixtures/`).
+- Testler rollback içinde; kullanıcının kaydedilmemiş gerçek okumalarıyla kaydetme testi yapma.
+- Commit/push kullanıcıda.

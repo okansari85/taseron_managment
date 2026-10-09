@@ -13,13 +13,12 @@ use Illuminate\Validation\ValidationException;
  * ayrı aktif ekipman limiti vardır (pasif ekipman sayılmaz). Paket aylık kredi yükler; kredi yıl içinde birikir, yılda bir
  * sıfırlanır (yüklemeler zamanlayıcı olmadan, hesaba ilk bakışta geriye dönük yapılır).
  *
- * Abonelik türleri: unlimited (mevcut hesaplar, paket atanana kadar geçiş), package, promo (ilk 1000 yeni üyeye 20 kredi +
+ * Abonelik türleri: unlimited (mevcut hesaplar, paket atanana kadar geçiş), package, promo (ücretsiz deneme: denemek için üye olan herkese 20 kredi +
  * 20 ekipman), none (paketsiz). pktakip dışındaki hesaplar (Taşeron firmaları) hiç sınırlanmaz.
  */
 class PkBillingService
 {
     public const ACCOUNT_TYPES = ['expert', 'osgb', 'corporate'];
-    public const PROMO_LIMIT = 1000;
     public const PROMO_CREDITS = 20;
     public const PROMO_EQUIPMENT = 20;
 
@@ -39,7 +38,7 @@ class PkBillingService
         return $kind === 'installation' ? 5 : 1;
     }
 
-    /** Hesabın aboneliği; yoksa açılır (yeni üye: ilk 1000'e promosyon, sonrası paketsiz). Vadesi gelen yüklemeler yapılır. */
+    /** Hesabın aboneliği; yoksa açılır (yeni üye: ücretsiz deneme). Vadesi gelen yüklemeler yapılır. */
     public function subscription(int $tenantId): ?object
     {
         $type = DB::table('tenants')->where('id', $tenantId)->value('tenant_type');
@@ -203,17 +202,17 @@ class PkBillingService
     private function open(int $tenantId): object
     {
         return DB::transaction(function () use ($tenantId) {
-            $promos = DB::table('pk_credit_entries')->where('reason', 'promo')->distinct()->count('tenant_id');
-            $promo = $promos < self::PROMO_LIMIT;
+            // Ücretsiz deneme her yeni üyeye (kullanıcı, 2026-10-05: "denemek için üye olanlar"); sınır yok.
+            $promo = true;
             // Aynı anda iki istek açarsa ikincisi eklemez (tenant_id benzersiz); promosyon kredisi bir kez yüklenir.
             $created = DB::table('pk_subscriptions')->insertOrIgnore([
                 'tenant_id' => $tenantId, 'mode' => $promo ? 'promo' : 'none', 'monthly_credits' => 0,
                 'equipment_limit' => $promo ? self::PROMO_EQUIPMENT : 0, 'started_at' => now()->toDateString(),
-                'note' => $promo ? 'İlk 1000 üye: ücretsiz başlangıç' : null, 'created_at' => now(), 'updated_at' => now(),
+                'note' => $promo ? 'Ücretsiz deneme' : null, 'created_at' => now(), 'updated_at' => now(),
             ]);
             if ($created && $promo) {
                 DB::table('pk_credit_entries')->insert([
-                    'tenant_id' => $tenantId, 'amount' => self::PROMO_CREDITS, 'reason' => 'promo', 'note' => 'Ücretsiz başlangıç kredisi',
+                    'tenant_id' => $tenantId, 'amount' => self::PROMO_CREDITS, 'reason' => 'promo', 'note' => 'Ücretsiz deneme kredisi',
                     'created_at' => now(), 'updated_at' => now(),
                 ]);
             }

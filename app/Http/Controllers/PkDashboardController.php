@@ -29,6 +29,14 @@ class PkDashboardController extends Controller
         return response()->json($this->service->report($locationIds, $workplaceId));
     }
 
+    // Genel Bakış tür tablosu (Durum Raporu'nun tamamı yerine yalnızca türler).
+    public function types(Request $request): JsonResponse
+    {
+        [$locationIds, $workplaceId] = $this->scope($request);
+
+        return response()->json($this->service->typeRows($locationIds, $workplaceId));
+    }
+
     // Kontrol takviminde bir günün bir grubu (tesisat, tüp ya da tür; overview agenda'daki grup anahtarı): o gün kontrolü
     // dolan ekipmanlar.
     public function due(Request $request): JsonResponse

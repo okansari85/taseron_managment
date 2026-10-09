@@ -122,6 +122,12 @@ class PkDashboardService
         ];
     }
 
+    // Genel Bakış tür tablosu: Durum Raporu'ndaki types ile aynı hesap, tesisat ayrıntıları olmadan (hafif).
+    public function typeRows(array $locationIds, ?int $workplaceId): Collection
+    {
+        return $this->types($this->equipmentOf($locationIds, $workplaceId)->where('is_active', true)->values());
+    }
+
     // Kontrol takviminde bir günün ("2026-11-05") bir grubu (agenda grup anahtarı: tesisat, tüp ya da tür): o gün kontrolü
     // dolan aktif ekipmanlar.
     public function due(array $locationIds, ?int $workplaceId, string $date, string $group): Collection
