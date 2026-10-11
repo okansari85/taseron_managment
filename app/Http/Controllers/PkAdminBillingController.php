@@ -84,12 +84,12 @@ class PkAdminBillingController extends Controller
             'name' => ['required', 'string', 'max:100'],
             'account_type' => ['required', Rule::in(PkBillingService::ACCOUNT_TYPES)],
             'monthly_credits' => ['required', 'integer', 'min:0', 'max:1000000'],
-            'equipment_limit' => ['nullable', 'integer', 'min:0', 'max:1000000'],
+            'workplace_limit' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'monthly_price' => ['nullable', 'numeric', 'min:0'],
             'yearly_price' => ['nullable', 'numeric', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
         ]);
 
-        return $data + ['equipment_limit' => null, 'monthly_price' => null, 'yearly_price' => null];
+        return $data + ['workplace_limit' => null, 'monthly_price' => null, 'yearly_price' => null];
     }
 }

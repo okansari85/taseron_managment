@@ -9,18 +9,19 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * pktakip paket ve kredi (2026-10-03). Birim "kredi"; yalnızca başarılı rapor okuma kredi düşer: metin / OCR'lı taranmış PDF 1,
- * görüntü PDF 3, tesisat raporu ve tüp kontrol formu 5. Elle doldurma ve okunamayan rapor düşmez. Ekipman kredi düşmez; paketin
- * ayrı aktif ekipman limiti vardır (pasif ekipman sayılmaz). Paket aylık kredi yükler; kredi yıl içinde birikir, yılda bir
- * sıfırlanır (yüklemeler zamanlayıcı olmadan, hesaba ilk bakışta geriye dönük yapılır).
+ * görüntü PDF 3, tesisat raporu ve tüp kontrol formu 5. Elle doldurma ve okunamayan rapor düşmez. Paketin ayrı aktif işyeri
+ * limiti vardır (2026-10-10, ekipman limitinin yerine; her location_business_entity bir işyeri, pasif sayılmaz; bütün modüller
+ * aynı limiti kullanır, kullanıcı sayısı sınırsız). Paket aylık kredi yükler; kredi yıl içinde birikir, yılda bir sıfırlanır
+ * (yüklemeler zamanlayıcı olmadan, hesaba ilk bakışta geriye dönük yapılır).
  *
  * Abonelik türleri: unlimited (mevcut hesaplar, paket atanana kadar geçiş), package, promo (ücretsiz deneme: denemek için üye olan herkese 20 kredi +
- * 20 ekipman), none (paketsiz). pktakip dışındaki hesaplar (Taşeron firmaları) hiç sınırlanmaz.
+ * 3 işyeri), none (paketsiz). pktakip dışındaki hesaplar (Taşeron firmaları) hiç sınırlanmaz.
  */
 class PkBillingService
 {
     public const ACCOUNT_TYPES = ['expert', 'osgb', 'corporate'];
     public const PROMO_CREDITS = 20;
-    public const PROMO_EQUIPMENT = 20;
+    public const PROMO_WORKPLACES = 3;
 
     // Okumanın kredisi (Analiz geçmişi satırından).
     public static function costOf(string $kind, ?string $input): int
@@ -58,9 +59,11 @@ class PkBillingService
         return (int) DB::table('pk_credit_entries')->where('tenant_id', $tenantId)->sum('amount');
     }
 
-    public function activeEquipment(int $tenantId): int
+    // Hesabın lokasyonlarındaki aktif işyerleri (location_business_entities; pasif işyeri ya da pasif lokasyon sayılmaz).
+    public function activeWorkplaces(int $tenantId): int
     {
-        return DB::table('pk_equipment')->where('tenant_id', $tenantId)->where('is_active', true)->count();
+        return DB::table('location_business_entities as l')->join('locations as o', 'o.id', '=', 'l.location_id')
+            ->where('o.tenant_id', $tenantId)->where('o.is_active', true)->where('l.is_active', true)->count();
     }
 
     /** Panelde "Paketim" ve süper admin listesi için özet. */
@@ -78,8 +81,8 @@ class PkBillingService
             'package' => $package ? ['id' => $package->id, 'name' => $package->name] : null,
             'monthly_credits' => (int) $row->monthly_credits,
             'credits' => $this->balance($tenantId),
-            'equipment_limit' => $row->mode === 'unlimited' ? null : ($row->equipment_limit === null ? null : (int) $row->equipment_limit),
-            'active_equipment' => $this->activeEquipment($tenantId),
+            'workplace_limit' => $row->mode === 'unlimited' ? null : ($row->workplace_limit === null ? null : (int) $row->workplace_limit),
+            'active_workplaces' => $this->activeWorkplaces($tenantId),
             'started_at' => $row->started_at,
             'next_grant_at' => $row->next_grant_at,
             'resets_at' => $row->resets_at,
@@ -106,22 +109,19 @@ class PkBillingService
         }
     }
 
-    /** $count yeni aktif ekipman eklenebilir mi (paketin aktif ekipman limiti). */
-    public function assertCanAddEquipment(int $tenantId, int $count = 1): void
+    /** $count yeni aktif işyeri eklenebilir mi (paketin aktif işyeri limiti). */
+    public function assertCanAddWorkplace(int $tenantId, int $count = 1): void
     {
         $row = $this->subscription($tenantId);
-        if (!$row || $row->mode === 'unlimited' || $row->equipment_limit === null || $count < 1) {
+        if (!$row || $row->mode === 'unlimited' || $row->workplace_limit === null || $count < 1) {
             return;
         }
-        $limit = (int) $row->equipment_limit;
-        $active = $this->activeEquipment($tenantId);
+        $limit = (int) $row->workplace_limit;
+        $active = $this->activeWorkplaces($tenantId);
         if ($active + $count > $limit) {
-            $left = max(0, $limit - $active);
             abort(response()->json([
-                'message' => $left > 0
-                    ? "Paketinizde {$left} ekipmanlık yer kaldı ({$active} / {$limit}); {$count} ekipman eklenemez. Paketinizi yükseltin ya da kullanılmayan ekipmanları pasife alın."
-                    : "Ekipman limitiniz doldu ({$active} / {$limit}). Paketinizi yükseltin ya da kullanılmayan ekipmanları pasife alın.",
-                'code' => 'pk_equipment_limit',
+                'message' => "İşyeri limitiniz doldu ({$active} / {$limit}). Yeni işyeri eklemek için paketinizi yükseltin.",
+                'code' => 'pk_workplace_limit',
             ], 402));
         }
     }
@@ -148,7 +148,7 @@ class PkBillingService
             throw ValidationException::withMessages(['tenant' => 'Bu hesap pktakip hesabı değil.']);
         }
         $today = CarbonImmutable::today();
-        $values = ['mode' => $mode, 'pk_package_id' => null, 'monthly_credits' => 0, 'equipment_limit' => null, 'started_at' => $today->toDateString(),
+        $values = ['mode' => $mode, 'pk_package_id' => null, 'monthly_credits' => 0, 'workplace_limit' => null, 'started_at' => $today->toDateString(),
             'next_grant_at' => null, 'resets_at' => null, 'note' => $note, 'updated_at' => now()];
         if ($mode === 'package') {
             $package = DB::table('pk_packages')->where('id', $packageId)->first();
@@ -156,10 +156,10 @@ class PkBillingService
             if (!$package || $package->account_type !== $accountType) {
                 throw ValidationException::withMessages(['pk_package_id' => 'Paket bu hesap türü için değil.']);
             }
-            $values = ['pk_package_id' => $package->id, 'monthly_credits' => $package->monthly_credits, 'equipment_limit' => $package->equipment_limit,
+            $values = ['pk_package_id' => $package->id, 'monthly_credits' => $package->monthly_credits, 'workplace_limit' => $package->workplace_limit,
                 'next_grant_at' => $today->toDateString(), 'resets_at' => $today->addYear()->toDateString()] + $values;
         } elseif ($mode === 'none') {
-            $values['equipment_limit'] = 0;
+            $values['workplace_limit'] = 0;
         }
         DB::transaction(function () use ($tenantId, $values, $userId) {
             DB::table('pk_subscriptions')->where('tenant_id', $tenantId)->update($values);
@@ -207,7 +207,7 @@ class PkBillingService
             // Aynı anda iki istek açarsa ikincisi eklemez (tenant_id benzersiz); promosyon kredisi bir kez yüklenir.
             $created = DB::table('pk_subscriptions')->insertOrIgnore([
                 'tenant_id' => $tenantId, 'mode' => $promo ? 'promo' : 'none', 'monthly_credits' => 0,
-                'equipment_limit' => $promo ? self::PROMO_EQUIPMENT : 0, 'started_at' => now()->toDateString(),
+                'workplace_limit' => $promo ? self::PROMO_WORKPLACES : 0, 'started_at' => now()->toDateString(),
                 'note' => $promo ? 'Ücretsiz deneme' : null, 'created_at' => now(), 'updated_at' => now(),
             ]);
             if ($created && $promo) {

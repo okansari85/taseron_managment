@@ -27,7 +27,7 @@ use App\Http\Controllers\PkReportAnalysisTestController;
 use App\Http\Controllers\PeriodicEquipmentSpecRequestController;
 use App\Http\Controllers\PkAiSettingsController;
 use App\Http\Controllers\PkBillingController;
-use App\Http\Middleware\EnsurePkEquipmentLimit;
+use App\Http\Middleware\EnsurePkWorkplaceLimit;
 use App\Http\Middleware\EnsurePkReadCredits;
 use Illuminate\Support\Facades\Route;
 
@@ -51,7 +51,8 @@ Route::prefix('api')
         Route::post('customers/{customer}/organizations/{organization}/locations', [CustomerLocationController::class, 'store']);
 
         Route::get('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'index']);
-        Route::post('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'store']);
+        // pktakip: paketin işyeri limiti (Taşeron hesaplarında etkisiz).
+        Route::post('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'store'])->middleware(EnsurePkWorkplaceLimit::class);
         Route::delete('customers/{customer}/locations/{location}/companies/{locationBusinessEntity}', [CustomerLocationCompanyController::class, 'destroy']);
 
         Route::get('my-companies', [ExpertCompanyController::class, 'index']);
@@ -92,10 +93,10 @@ Route::prefix('api')
         Route::get('pk-installations/{pkInstallation}/reports/{pkInstallationReport}/analysis', [PkInstallationReportAnalysisController::class, 'show']);
         Route::delete('pk-installations/{pkInstallation}/reports/{pkInstallationReport}', [PkInstallationController::class, 'destroyReport']);
         Route::get('pk-equipment', [PkEquipmentController::class, 'index']);
-        Route::post('pk-equipment', [PkEquipmentController::class, 'store'])->middleware(EnsurePkEquipmentLimit::class . ':one');
+        Route::post('pk-equipment', [PkEquipmentController::class, 'store']);
         Route::post('pk-equipment/bulk-delete', [PkEquipmentController::class, 'bulkDestroy']);
         Route::post('pk-equipment/bulk-deactivate', [PkEquipmentController::class, 'bulkDeactivate']);
-        Route::post('pk-equipment/bulk-activate', [PkEquipmentController::class, 'bulkActivate'])->middleware(EnsurePkEquipmentLimit::class . ':activate');
+        Route::post('pk-equipment/bulk-activate', [PkEquipmentController::class, 'bulkActivate']);
         // Genel bakış ve durum raporu.
         Route::get('pk-dashboard', [PkDashboardController::class, 'overview']);
         Route::get('pk-dashboard/report', [PkDashboardController::class, 'report']);
@@ -116,19 +117,19 @@ Route::prefix('api')
         Route::get('pk-bulk-report-matches/pending-counts', [PkBulkReportMatchController::class, 'pendingCounts']);
         Route::get('pk-bulk-report-matches/board', [PkBulkReportMatchController::class, 'board']);
         Route::post('pk-bulk-report-matches/board/match', [PkBulkReportMatchController::class, 'boardMatch']);
-        Route::post('pk-bulk-report-matches/board/add', [PkBulkReportMatchController::class, 'boardAdd'])->middleware(EnsurePkEquipmentLimit::class . ':ids');
+        Route::post('pk-bulk-report-matches/board/add', [PkBulkReportMatchController::class, 'boardAdd']);
         Route::get('pk-bulk-report-matches/scopes', [PkBulkReportMatchController::class, 'scopes']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/scope', [PkBulkReportMatchController::class, 'setScope']);
         Route::get('pk-bulk-report-matches/{pkBulkReport}', [PkBulkReportMatchController::class, 'matching']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/{pendingRow}/match', [PkBulkReportMatchController::class, 'match']);
-        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/add', [PkBulkReportMatchController::class, 'add'])->middleware(EnsurePkEquipmentLimit::class . ':ids');
+        Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/add', [PkBulkReportMatchController::class, 'add']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/rows/skip', [PkBulkReportMatchController::class, 'skip']);
         Route::post('pk-bulk-report-matches/{pkBulkReport}/inspections/{pkInspection}/move', [PkBulkReportMatchController::class, 'move']);
         // Toplu rapor yükleme (raf, transpalet): dosya daha önce yüklendi mi (yapay zekaya gitmeden). Okuma/kayıt mevcut uçlarla.
         // pktakip işyeri adı (firmanın lokasyondaki kaydının adı) ve aynı firmanın lokasyondaki ek işyeri.
         Route::get('pk-workplace-names', [PkWorkplaceNameController::class, 'index']);
         Route::post('pk-workplace-names/{workplace}', [PkWorkplaceNameController::class, 'update'])->whereNumber('workplace');
-        Route::post('pk-workplaces/additional', [PkWorkplaceNameController::class, 'storeAdditional']);
+        Route::post('pk-workplaces/additional', [PkWorkplaceNameController::class, 'storeAdditional'])->middleware(EnsurePkWorkplaceLimit::class);
         // pktakip alanları: lokasyonun içindeki operasyonel / ortak alanlar, alan türleri, ekipmana ve tesisata alan seçimi.
         Route::get('pk-area-types', [PkAreaController::class, 'types']);
         Route::post('pk-area-types', [PkAreaController::class, 'storeType']);
@@ -154,7 +155,7 @@ Route::prefix('api')
         Route::post('pk-bulk-analysis/{analysisId}/preview', [PkBulkAnalysisController::class, 'preview']);
         Route::post('pk-equipment/report-analysis', [PkEquipmentController::class, 'analyzeNewReport'])->middleware(EnsurePkReadCredits::class . ':equipment');
         Route::post('pk-equipment/report-analysis/{analysisId}/draft', [PkEquipmentController::class, 'previewDraft']);
-        Route::post('pk-equipment/from-report', [PkEquipmentController::class, 'storeFromReport'])->middleware(EnsurePkEquipmentLimit::class . ':one');
+        Route::post('pk-equipment/from-report', [PkEquipmentController::class, 'storeFromReport']);
         Route::get('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'show']);
         Route::patch('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'update']);
         Route::delete('pk-equipment/{pkEquipment}', [PkEquipmentController::class, 'destroy']);
