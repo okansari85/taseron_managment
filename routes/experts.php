@@ -5,6 +5,7 @@ use App\Http\Controllers\PkAccountController;
 use App\Http\Controllers\PkAccountOrganizationController;
 use App\Http\Controllers\PkAccountOverviewController;
 use App\Http\Controllers\PkAccountUserController;
+use App\Http\Controllers\PkAccountStatusController;
 use App\Http\Controllers\PkCompanyTitleController;
 use App\Http\Controllers\PkWorkplaceAssignmentController;
 use App\Http\Controllers\PkAdminBillingController;
@@ -30,6 +31,14 @@ Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
     Route::post('pk-accounts/{tenant}/impersonate', [PkAccountController::class, 'impersonate']);
     Route::post('pk-accounts/{tenant}/resend-invitation', [PkAccountController::class, 'resendInvitation']);
     Route::post('pk-accounts/{tenant}/users/{user}/impersonate', [PkAccountUserController::class, 'impersonate']);
+});
+
+// pktakip hesabı pasife / aktife alma ve kalıcı silme (süper admin; silme yalnız pasif hesapta).
+Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
+    Route::post('pk-accounts/{tenant}/deactivate', [PkAccountStatusController::class, 'deactivate']);
+    Route::post('pk-accounts/{tenant}/activate', [PkAccountStatusController::class, 'activate']);
+    Route::get('pk-accounts/{tenant}/deletion-summary', [PkAccountStatusController::class, 'summary']);
+    Route::delete('pk-accounts/{tenant}', [PkAccountStatusController::class, 'destroy']);
 });
 
 // pktakip paket ve kredi (süper admin): paket tanımları, hesaba paket atama, elle kredi, kredi hareketleri.

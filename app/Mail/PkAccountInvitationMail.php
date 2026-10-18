@@ -15,7 +15,7 @@ class PkAccountInvitationMail extends Mailable
 {
     use Queueable, SerializesModels;
 
-    private const LABELS = ['osgb' => 'OSGB', 'corporate' => 'kurumsal'];
+    private const LABELS = ['osgb' => 'OSGB', 'corporate' => 'kurumsal', 'public' => 'kamu'];
 
     public function __construct(
         public readonly ExpertInvitation $invitation,

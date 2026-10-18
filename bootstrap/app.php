@@ -18,6 +18,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'web-role' => \App\Http\Middleware\EnsureWebRole::class,
         ]);
+        // pktakip: pasife alınan hesabın kullanıcıları API'yi kullanamaz (kullanıcı 19 Ekim 2026)
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnsurePkAccountActive::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

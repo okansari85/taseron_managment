@@ -23,10 +23,10 @@ use Illuminate\Support\Str;
 class PkAccountService
 {
     // Süper adminin girebildiği hesaplar.
-    public const TYPES = ['expert', 'osgb', 'corporate'];
+    public const TYPES = ['expert', 'osgb', 'corporate', 'public'];
 
-    // Burada açılan, birden çok kullanıcılı hesaplar.
-    public const MULTI_USER_TYPES = ['osgb', 'corporate'];
+    // Burada açılan, birden çok kullanıcılı hesaplar (public: kamu kurumu, kurumsal gibi işler).
+    public const MULTI_USER_TYPES = ['osgb', 'corporate', 'public'];
 
     public function __construct(
         private UserScopeRepository $scopes,
@@ -58,8 +58,12 @@ class PkAccountService
             $this->scopes->attach($user, 'tenant', $tenant->id);
 
             // Kurumsal hesapta müşteri menüsü yok: firmanın kendisi tek müşteri, organizasyonu bunun altında.
-            if ($type === 'corporate') {
-                Customer::query()->create(['tenant_id' => $tenant->id, 'name' => trim($accountName)]);
+            // Kamu hesabı da öyle; tek müşterinin türü kamu (işyeri kurumun kendisi, firma eklenmez; kullanıcı 18 Ekim 2026).
+            if (in_array($type, ['corporate', 'public'], true)) {
+                $customer = Customer::query()->create(['tenant_id' => $tenant->id, 'name' => trim($accountName)]);
+                if ($type === 'public') {
+                    $customer->forceFill(['customer_type' => 'public'])->save();
+                }
             }
             PkAccountUser::query()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id, 'role' => 'yonetici']);
 

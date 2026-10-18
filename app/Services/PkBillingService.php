@@ -19,7 +19,7 @@ use Illuminate\Validation\ValidationException;
  */
 class PkBillingService
 {
-    public const ACCOUNT_TYPES = ['expert', 'osgb', 'corporate'];
+    public const ACCOUNT_TYPES = ['expert', 'osgb', 'corporate', 'public'];
     public const PROMO_CREDITS = 20;
     public const PROMO_WORKPLACES = 3;
 
@@ -153,7 +153,8 @@ class PkBillingService
         if ($mode === 'package') {
             $package = DB::table('pk_packages')->where('id', $packageId)->first();
             $accountType = DB::table('tenants')->where('id', $tenantId)->value('tenant_type');
-            if (!$package || $package->account_type !== $accountType) {
+            // Kamu hesabı kurumsal paketleri kullanır (kullanıcı 18 Ekim 2026).
+            if (!$package || $package->account_type !== ($accountType === 'public' ? 'corporate' : $accountType)) {
                 throw ValidationException::withMessages(['pk_package_id' => 'Paket bu hesap türü için değil.']);
             }
             $values = ['pk_package_id' => $package->id, 'monthly_credits' => $package->monthly_credits, 'workplace_limit' => $package->workplace_limit,
