@@ -152,6 +152,37 @@ class PkTableDefinitionsTest extends TestCase
         $this->assertSame([], (new PkTableDefinitions($camelot))->build('x.pdf', $docling, $map));
     }
 
+    // PK.239 pompa listesi: her pompa iki alt sütun (P: proje / U: uygulama); ekipmanın grubu bütün hücreleriyle, lejant notlarda.
+    // #18 dolap listesi gibi alt sütunsuz liste ve iki bloklu tablo alt sütunlu sayılmaz.
+    public function test_sub_columns_of_equipment_are_grouped(): void
+    {
+        $sub = new \ReflectionMethod(PkTableDefinitions::class, 'subColumns');
+        $definitions = (new \ReflectionClass(PkTableDefinitions::class))->newInstanceWithoutConstructor();
+        $pumps = [
+            ['2.1. YANGIN POMPALARI', '', '', '', ''],
+            ['Pompa No', '1', '', 'Jokey', ''],
+            ['Marka', 'MAS', '', '-', ''],
+            ['Yakıt', 'P: -', 'U: ELEKTRİK', 'P: -', 'U: ELEKTRİK'],
+            ['İşaretler: P: Proje Değeri U: Uygulamadaki Ekipmanın Değeri', '', '', '', ''],
+        ];
+
+        $groups = $sub->invoke($definitions, $pumps, 'Pompa No');
+        $this->assertSame(['Marka' => ['MAS', ''], 'Yakıt' => ['P: -', 'U: ELEKTRİK']], $groups['equipment']['1']);
+        $this->assertSame(['Marka' => ['-', ''], 'Yakıt' => ['P: -', 'U: ELEKTRİK']], $groups['equipment']['Jokey']);
+        $this->assertSame(['2.1. YANGIN POMPALARI', 'İşaretler: P: Proje Değeri U: Uygulamadaki Ekipmanın Değeri'], $groups['notes']);
+
+        $this->assertNull($sub->invoke($definitions, [['Dolap No', '1', '2'], ['Bulunduğu Yer', 'Bodrum', 'Zemin']], 'Dolap No'));
+        $this->assertNull($sub->invoke($definitions, [['Dolap No', '1', ''], ['Yer', 'A', 'B'], ['Dolap No', '2', '']], 'Dolap No'));
+
+        // Ajan 2. alt sütun, işaret "U:" dedi: değer işaretsiz; birleşik hücre (marka) tek dolu hücreden; "-" boş.
+        $value = new \ReflectionMethod(PkTableDefinitions::class, 'subValue');
+        $this->assertSame('55', $value->invoke($definitions, ['P: -', 'U: 55'], 1, 'U:', 'Güç (kw)'));
+        $this->assertSame('DİZEL', $value->invoke($definitions, ['P: -', 'U: DİZEL'], 1, 'U', 'Yakıt'));
+        $this->assertSame('MAS', $value->invoke($definitions, ['MAS', ''], 1, 'U:', 'Marka'));
+        $this->assertNull($value->invoke($definitions, ['P: -', 'U: -'], 1, 'U:', 'Debi (m3/h)'));
+        $this->assertNull($value->invoke($definitions, ['P: 5', 'U: 6'], null, '', 'Debi (m3/h)'));
+    }
+
     // #18 3 numaralı pompa: komşu hücreden taşan birim ("- m³/h") değer değildir; rakam ya da gerçek sözcük olan değer kalır.
     public function test_overflowing_unit_is_blank(): void
     {

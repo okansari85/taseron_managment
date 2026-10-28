@@ -48,12 +48,14 @@ class PkTableDefinitions
                     // Kimlik etiketi tabloda varsa (boş pompa yuvası gibi) devam tablosu değildir; geride tek ekipmanlı bilgi tablosu
                     // çıkarsa da değildir (ajanın yanlış kimlik etiketi #18 pano listesini önceki pompa tablosuna kaydırıyordu).
                     $continuation = $definition === null && $grid && !$this->labelPositions($grid, [$identity]);
+                    $source = $grid;
                     for ($prev = (int) $no - 1; $continuation && $definition === null && $prev > 0; $prev--) {
                         $before = isset($areas[$prev]) ? $this->grid($camelot, (int) $areas[$prev]['page'], (string) $areas[$prev]['area']) : [];
                         if (count($before[0] ?? []) !== count($grid[0])) {
                             break;
                         }
                         $definition = $this->definition($before, (string) $list['equipment_name'], $identity, $labels);
+                        $source = $before;
                         if ($definition && $definition['instance_structure']['equipment_axis'] === 'none') {
                             $definition = null;
                             break;
@@ -61,6 +63,14 @@ class PkTableDefinitions
                     }
                     if ($definition === null) {
                         continue;
+                    }
+                    // Alt sütunlu liste (PK.239 pompa: her pompa "P: - | U: ELEKTRİK" iki sütun; okuyucu yalnız ilkini, proje değerini
+                    // alıyordu): her ekipman tek ekipman tarifi olur, değerini tablonun lejantıyla değer ajanı seçer.
+                    $groups = $definition['instance_structure']['equipment_axis'] === 'columns' ? $this->subColumns($source, $identity) : null;
+                    if ($groups) {
+                        $out[$system] = [...($out[$system] ?? []), ...$this->groupDefinitions((string) $list['equipment_name'], $identity, $groups)];
+                        $covered = [...$covered, ...array_map('intval', (array) $list['tables'])];
+                        break;
                     }
                     $out[$system][] = $definition;
                     // Liste tarifi bir kez yeter: tablo okuyucu devam sayfalarını başlıktan bulur. Tek ekipmanlılar her tablo için.
@@ -237,6 +247,94 @@ class PkTableDefinitions
         }
 
         return $best ? array_map(fn ($row) => array_map(fn ($cell) => trim((string) $cell), array_values((array) $row)), $best['data']) : [];
+    }
+
+    /**
+     * Kimlik satırında ekipmanlar arasında boş sütun var ve başka satırlar o sütunları dolduruyorsa ekipmanın alt sütunları vardır
+     * (proje / uygulama değeri gibi): ['equipment' => [kimlik => [etiket => grubun hücreleri (alt sütun sırasıyla)]], 'notes' =>
+     * yalnız etiket hücresi dolu satırlar (lejant, başlık)]; yoksa null.
+     * shortcut: yalnız tek bloklu tablo (kimlik etiketi bir kez); bloklu alt sütunlu form çıkarsa bloklara bölünmeli.
+     */
+    private function subColumns(array $grid, string $identity): ?array
+    {
+        if (collect($grid)->flatten()->filter(fn ($cell) => $cell === $identity)->count() !== 1) {
+            return null;
+        }
+        [$r, $c] = $this->labelPositions($grid, [$identity])[$identity];
+        $spans = $this->spans($grid[$r], $c);
+        $equipment = [];
+        $notes = [];
+        $split = false;
+        foreach ($grid as $i => $row) {
+            $label = $row[$c] ?? '';
+            if ($i === $r || $label === '') {
+                continue;
+            }
+            if (!array_filter(array_slice($row, $c + 1), fn ($cell) => $cell !== '')) {
+                $notes[] = $label;
+                continue;
+            }
+            foreach ($spans as $k => [$start, $width, $id]) {
+                $cells = array_slice($row, $start, ($spans[$k + 1][0] ?? count($row)) - $start);
+                $split = $split || (bool) array_filter(array_slice($cells, $width), fn ($cell) => $cell !== '');
+                $equipment[$id][$label] = array_values($cells);
+            }
+        }
+
+        return $split ? ['equipment' => $equipment, 'notes' => $notes] : null;
+    }
+
+    // Alt sütunlu listenin ekipmanları. Ajan yalnız lejantın işaretlerini anlamlandırır (P: proje, U: uygulama); ekipmanın kendi
+    // (uygulamadaki) değerinin alt sütunu, hücreleri o işaretle başlayan sütundur, hücreleri kod seçer. Küçük model hücre hücre
+    // seçerken sayıları boş bıraktı, sütun numarası sorulunca lejanta rağmen proje sütununu seçti (PK.239). İşaret bulunamazsa
+    // eski okuma gibi ilk alt sütun. Ekipman her durumda listelenir (eski okumada da her kimlik bir ekipmandı).
+    private function groupDefinitions(string $name, string $identity, array $groups): array
+    {
+        $marker = $groups['notes'] ? $this->actualValueMarker($groups['notes']) : '';
+        $cells = array_merge(...array_map('array_values', array_values($groups['equipment'])));
+        $hits = [];
+        foreach ($cells as $row) {
+            foreach ($row as $i => $cell) {
+                $hits[$i] = ($hits[$i] ?? 0) + ($marker !== '' && str_starts_with($cell, $marker) ? 1 : 0);
+            }
+        }
+        $position = $hits && max($hits) > 0 ? array_search(max($hits), $hits, true) : 0;
+        $marker = $position === 0 && !($hits[0] ?? 0) ? '' : $marker;
+
+        return collect($groups['equipment'])->map(function (array $values, $id) use ($name, $identity, $position, $marker) {
+            $chosen = collect($values)->map(fn (array $cells, $label) => $this->subValue($cells, $position, $marker, (string) $label))->all();
+
+            return $this->contract($name, 'none', $identity, (string) $id, null, [], $chosen);
+        })->values()->all();
+    }
+
+    // Lejanttaki "uygulamadaki / tespit edilen değer" işareti (hücrede yazdığı gibi, örn. "U:"); yoksa ''.
+    private function actualValueMarker(array $notes): string
+    {
+        $found = PkLocalRetry::client(null, fn () => false)->extract(
+            "Sana bir ekipman tablosunun işaret / lejant açıklaması verilecek. Açıklamadaki HER işaret için anlamını yaz.\n- marker = işaret, açıklamada yazdığı gibi (örn. \"P:\").\n- meaning = \"proje\" (projedeki / tasarım değeri), \"uygulama\" (uygulamadaki / mevcut / tespit edilen ekipmanın değeri) ya da \"diger\".",
+            implode("\n", $notes),
+            300,
+            schema: ['type' => 'object', 'properties' => ['markers' => ['type' => 'array', 'maxItems' => 6, 'items' => ['type' => 'object', 'properties' => [
+                'marker' => ['type' => 'string'],
+                'meaning' => ['type' => 'string', 'enum' => ['proje', 'uygulama', 'diger']],
+            ], 'required' => ['marker', 'meaning']]]], 'required' => ['markers']]
+        );
+
+        return trim((string) (collect((array) ($found['markers'] ?? []))->firstWhere('meaning', 'uygulama')['marker'] ?? ''));
+    }
+
+    // Grubun seçilen alt sütunundaki değer, işareti ("U:") atılmış; o hücre boşsa birleşik hücre (marka, seri no iki alt sütuna
+    // yayılır): grubun tek dolu hücresi. Boş değer ("-") null.
+    private function subValue(array $cells, ?int $position, string $marker, string $label): ?string
+    {
+        $filled = array_values(array_filter($cells, fn ($cell) => $cell !== ''));
+        $value = $position === null ? null : (($cells[$position] ?? '') !== '' ? $cells[$position] : (count($filled) === 1 ? $filled[0] : null));
+        if ($value !== null && $marker !== '' && str_starts_with($value, $marker)) {
+            $value = trim(substr($value, strlen($marker)), " :");
+        }
+
+        return $value === null || $this->blank([$label => $value]) ? null : $value;
     }
 
     // Etiketlerin tablodaki yeri [satır, sütun] (ilk görülen).
