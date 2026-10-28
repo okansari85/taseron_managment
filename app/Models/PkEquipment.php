@@ -19,7 +19,8 @@ class PkEquipment extends Model
         'deactivated_at', 'deactivation_reason', 'deactivation_note', 'created_by',
     ];
 
-    protected $casts = ['properties' => 'array', 'is_active' => 'boolean', 'deactivated_at' => 'date:Y-m-d'];
+    // last_*: son kontrol özeti (PkInspectionObserver yazar; fillable değil).
+    protected $casts = ['properties' => 'array', 'is_active' => 'boolean', 'deactivated_at' => 'date:Y-m-d', 'last_control_date' => 'date:Y-m-d', 'next_control_date' => 'date:Y-m-d', 'last_findings' => 'array'];
 
     protected static function booted(): void
     {

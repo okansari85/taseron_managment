@@ -3,11 +3,14 @@
 namespace App\Models;
 
 use App\Domain\Tenancy\TenantScope;
+use App\Observers\PkInspectionObserver;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
-// pktakip ekipman kontrol kaydı (rapordan yapay zeka ile ya da elle).
+// pktakip ekipman kontrol kaydı (rapordan yapay zeka ile ya da elle). Ekipmanın son kontrol özeti PkInspectionObserver'da.
+#[ObservedBy(PkInspectionObserver::class)]
 class PkInspection extends Model
 {
     protected $fillable = [

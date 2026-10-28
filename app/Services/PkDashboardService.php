@@ -140,15 +140,22 @@ class PkDashboardService
             ->values();
     }
 
+    // Kontrol zamanı (bucket) her ekipman için bir kez hesaplanır; sayımlar onu okur.
     private function equipmentOf(array $locationIds, ?int $workplaceId): Collection
     {
-        return $locationIds ? $this->equipment->list(['location_ids' => $locationIds, 'workplace_id' => $workplaceId]) : collect();
+        return $locationIds
+            ? $this->equipment->list(['location_ids' => $locationIds, 'workplace_id' => $workplaceId])->map(fn (array $item) => $item + ['bucket' => $this->bucketOf($item['days_left'])])
+            : collect();
+    }
+
+    private function bucket(array $item): string
+    {
+        return $item['bucket'] ?? $this->bucketOf($item['days_left']);
     }
 
     // Kontrol zamanı: gecikmiş / 30 gün içinde / 31–60 gün / 60 günden sonra / tarihi yok.
-    private function bucket(array $item): string
+    private function bucketOf(?int $days): string
     {
-        $days = $item['days_left'];
 
         return match (true) {
             $days === null => 'none',
@@ -296,9 +303,11 @@ class PkDashboardService
     {
         // İl (Türkiye haritası için; il kimliği plaka kodu).
         $cities = Location::query()->with('city:id,name')->whereIn('id', $names->keys())->get(['id', 'city_id'])->keyBy('id');
+        // Bir kez grupla: her lokasyon için bütün ekipmanı baştan taramasın (çok lokasyonda karesel büyürdü).
+        $byLocation = $active->groupBy(fn ($item) => $item['location']['id'] ?? 0);
 
-        return $names->map(function (string $name, int $id) use ($active, $cities) {
-            $items = $active->where('location.id', $id);
+        return $names->map(function (string $name, int $id) use ($byLocation, $cities) {
+            $items = $byLocation->get($id, collect());
 
             return [
                 'location_id' => $id,
