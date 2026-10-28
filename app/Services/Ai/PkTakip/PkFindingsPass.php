@@ -57,12 +57,15 @@ PROMPT;
         if (!$measurementRows) {
             // Bölüm verildiyse (harita / Docling) başlık aranmaz, bölümdeki kusur satırları kopyalanır: başlık kipinde ajan bölümün
             // içindeki ilk başlıktan sonrasını alıyordu (PK.239: "7. NOTLAR" mevzuat notu kopyalandı, 35 bulgu düştü).
-            $section = $this->kusurSection($documentText, $provider, inSection: $sectionOnly);
+            // Docling'in kusur bölümü yalnız başlıktan ibaretse bölüm boştur: bulgu yok, yedek metne gidilmez. Bütün metindeki başlık
+            // kipi ajanı boş başlıktan sonraki sonuç cümlesini kusur diye kopyalıyordu (#126: "YAZILI EKSİKLER GİDERİLMELİDİR…").
+            $headingOnly = $sectionOnly && collect(explode("\n", $documentText))->every(fn ($line) => trim($line) === '' || str_starts_with($line, '## '));
+            $section = $headingOnly ? null : $this->kusurSection($documentText, $provider, inSection: $sectionOnly);
             // Seçilmiş bölümden kopyalanan kusur satırları doğrudan bulgu (kullanıcı kuralı: bölüm doğruysa içindekiler bulgudur);
             // ikinci ajan cümleyi bölüyordu (#122: "Not 1: … UYGUN DEĞİLDİR…" → yalnız "10.c.6.3.").
             // Madde işareti ("-PROJEYE ULAŞILAMADI.") bulgu metnine girmez.
-            $copied = $sectionOnly && $section !== null ? array_values(array_filter(array_map(fn ($line) => ltrim(trim($line), "-* \t"), explode("\n", $section)), fn ($line) => $line !== '')) : null;
-            if ($section === null && $sectionOnly && $wholeText !== null) {
+            $copied = $headingOnly ? [] : ($sectionOnly && $section !== null ? array_values(array_filter(array_map(fn ($line) => ltrim(trim($line), "-* \t"), explode("\n", $section)), fn ($line) => $line !== '')) : null);
+            if (!$headingOnly && $section === null && $sectionOnly && $wholeText !== null) {
                 $documentText = $wholeText;
                 $section = $this->kusurSection($documentText, $provider);
             }
