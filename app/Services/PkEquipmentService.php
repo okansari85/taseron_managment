@@ -41,7 +41,8 @@ class PkEquipmentService
     public function list(array $filters): Collection
     {
         $items = PkEquipment::query()
-            ->with(['type.category', 'location:id,name', 'workplace.businessEntity.company', 'latestInspection'])
+            // Son kontrol özeti ekipman satırında (last_*, PkInspectionObserver): kontrol tablosuna alt sorgu yok.
+            ->with(['type.category', 'location:id,name', 'workplace.businessEntity.company'])
             ->withCount('inspections')
             ->when($filters['location_id'] ?? null, fn ($query, $locationId) => $query->where('location_id', $locationId))
             // Genel bakış / durum raporu: birden çok lokasyon.
@@ -64,7 +65,7 @@ class PkEquipmentService
 
     public function show(PkEquipment $equipment): array
     {
-        $equipment->load(['type.category', 'location:id,name', 'workplace.businessEntity.company', 'latestInspection'])->loadCount('inspections');
+        $equipment->load(['type.category', 'location:id,name', 'workplace.businessEntity.company'])->loadCount('inspections');
 
         return $this->present($equipment) + [
             'installation' => $this->installationOf($equipment),
@@ -644,11 +645,12 @@ class PkEquipmentService
             ->whereIn('location_id', $equipment->pluck('location_id')->unique()->values())
             ->with(['type:id,name', 'systems.catalog.equipmentTypes'])
             ->orderByRaw('location_business_entity_id is not null')->orderBy('id')
-            ->get();
+            ->get()
+            // Lokasyona göre: her ekipman yalnız kendi lokasyonunun tesisatlarına bakar (çok lokasyonda karesel büyümesin).
+            ->groupBy('location_id');
 
         return function (PkEquipment $item) use ($installations): ?array {
-            $installation = $installations->first(fn (PkInstallation $installation) => (int) $installation->location_id === (int) $item->location_id
-                && ($installation->location_business_entity_id === null || $item->location_business_entity_id === null
+            $installation = $installations->get($item->location_id, collect())->first(fn (PkInstallation $installation) => ($installation->location_business_entity_id === null || $item->location_business_entity_id === null
                     || (int) $installation->location_business_entity_id === (int) $item->location_business_entity_id)
                 && $installation->systems->contains(fn ($system) => (bool) $system->catalog?->equipmentTypes->contains('id', $item->equipment_type_id)));
 
@@ -658,8 +660,7 @@ class PkEquipmentService
 
     private function present(PkEquipment $equipment): array
     {
-        $latest = $equipment->latestInspection;
-        $nextDate = $latest?->next_control_date ? CarbonImmutable::parse($latest->next_control_date) : null;
+        $nextDate = $equipment->next_control_date ? CarbonImmutable::parse($equipment->next_control_date) : null;
         $business = $equipment->workplace?->businessEntity;
 
         return [
@@ -678,7 +679,7 @@ class PkEquipmentService
             'category' => $equipment->type?->category ? ['slug' => $equipment->type->category->slug, 'name' => $equipment->type->category->name] : null,
             'location' => $equipment->location ? ['id' => $equipment->location->id, 'name' => $equipment->location->name] : null,
             'workplace' => $equipment->workplace ? ['id' => $equipment->workplace->id, 'company_name' => $business?->company?->name ?? $business?->name] : null,
-            'last_control_date' => $latest?->control_date?->format('Y-m-d'),
+            'last_control_date' => $equipment->last_control_date?->format('Y-m-d'),
             'next_control_date' => $nextDate?->format('Y-m-d'),
             // Pasif ekipman kalan gün / süresi geçmiş hesabına girmez.
             'days_left' => $nextDate && $equipment->is_active !== false ? (int) CarbonImmutable::today()->diffInDays($nextDate, false) : null,
@@ -687,7 +688,10 @@ class PkEquipmentService
             'deactivation_reason' => $equipment->deactivation_reason,
             'deactivation_note' => $equipment->deactivation_note,
             // rapor_yok: hiç kontrol kaydı yok.
-            'status' => $latest?->status ?? 'rapor_yok',
+            'status' => $equipment->last_status ?? 'rapor_yok',
+            // Son raporun bulguları (listede "Uygun değil · 3 bulgu" ve fareyle üstüne gelince).
+            'findings_count' => (int) $equipment->last_findings_count,
+            'findings' => $equipment->last_findings ?? [],
             'inspections_count' => $equipment->inspections_count ?? 0,
         ];
     }
