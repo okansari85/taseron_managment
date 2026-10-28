@@ -88,7 +88,7 @@ class PkBulkReportReader
             $rows[] = $this->row($row, $index, $identityIsPlace[$this->key((string) $row['system_name'], (string) $row['equipment_name'])] ?? false, (array) ($type->variants ?? []));
         }
 
-        $findings = collect((array) ($semantic['extracted_data']['findings'] ?? []))->filter('is_array');
+        $findings = collect((array) ($semantic['extracted_data']['findings'] ?? []))->filter(fn ($finding) => is_array($finding));
         $text = fn (array $finding) => trim(trim((string) ($finding['description'] ?? '')) . (filled($finding['severity'] ?? null) && filled($finding['description'] ?? null) ? ' (' . trim((string) $finding['severity']) . ')' : ''));
         $systems = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->map(fn ($system) => [
             'name' => (string) ($system['system_name'] ?? ''),

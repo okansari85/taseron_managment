@@ -18,6 +18,7 @@ final class PkGeminiError
         $provider = match (true) {
             str_starts_with($message, 'OpenAI') => 'OpenAI',
             str_starts_with($message, 'NVIDIA') => 'NVIDIA',
+            str_starts_with($message, 'Yerel sunucu') => 'Yerel sunucu',
             default => 'Gemini',
         };
         if (!preg_match('/\(HTTP (402|429|500|502|503|504)\)/', $message, $status)) {

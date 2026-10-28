@@ -25,6 +25,7 @@ use App\Http\Controllers\PkInstallationReportAnalysisController;
 use App\Http\Controllers\PkInstallationSystemRequestController;
 use App\Http\Controllers\PkReportAnalysisHistoryController;
 use App\Http\Controllers\PkReportAnalysisTestController;
+use App\Http\Controllers\PkShortPromptTestController;
 use App\Http\Controllers\PeriodicEquipmentSpecRequestController;
 use App\Http\Controllers\PkAiSettingsController;
 use App\Http\Controllers\PkBillingController;
@@ -189,6 +190,8 @@ Route::prefix('api')
         // Test sayfası: elektrik iç tesisatı raporu (elektriğin kendi talimatıyla).
         Route::post('pk-report-analyses/electrical', [PkReportAnalysisTestController::class, 'storeElectrical']);
         Route::post('pk-report-analyses/{fixtureId}/tables', [PkReportAnalysisTestController::class, 'rereadTables']);
+        // Test sayfası denemesi: tek ekipman raporu kısa talimatla (tür seçilir, metin pdfium).
+        Route::post('pk-report-analyses/short', [PkShortPromptTestController::class, 'store']);
         // Müşteri türü (kurumsal / şahıs / kamu): OSGB ve bireysel uzman; "Lokasyona Firma Ata" sihirbazı soruyu buna göre sorar.
         Route::get('pk-customer-types', [PkCustomerTypeController::class, 'index']);
         Route::patch('pk-customer-types/{customer}', [PkCustomerTypeController::class, 'update'])->whereNumber('customer');

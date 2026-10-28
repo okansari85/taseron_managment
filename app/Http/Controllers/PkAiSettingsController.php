@@ -32,7 +32,10 @@ class PkAiSettingsController extends Controller
             'keys.*' => ['nullable', 'string', 'max:500', 'regex:/^\S+$/'],
             'clear_keys' => ['nullable', 'array'],
             'clear_keys.*' => [Rule::in($providers)],
+            'agents' => ['nullable', 'boolean'],
+            'local_url' => ['nullable', 'url:http,https', 'max:255'],
         ], [
+            'local_url.url' => 'Yerel sunucu adresi http:// ya da https:// ile başlamalı (örn. http://127.0.0.1:8090/v1).',
             'provider.in' => 'Geçersiz yapay zeka istemcisi.',
             'models.*.regex' => 'Model adında boşluk ya da geçersiz karakter var.',
             'keys.*.regex' => 'API anahtarında boşluk olamaz.',
@@ -44,13 +47,16 @@ class PkAiSettingsController extends Controller
 
         // Seçilen istemcinin (kayıttan sonra) bir anahtarı olmalı.
         $selected = $data['provider'];
-        $willHaveKey = isset($keys[$selected]) || (!in_array($selected, $clear, true) && PkAiProvider::keySource($selected) === 'db')
+        $willHaveKey = !empty(PkAiProvider::PROVIDERS[$selected]['key_optional']) || isset($keys[$selected]) || (!in_array($selected, $clear, true) && PkAiProvider::keySource($selected) === 'db')
             || filled(PkAiProvider::envKey($selected));
         if (!$willHaveKey) {
             throw ValidationException::withMessages(['provider' => PkAiProvider::PROVIDERS[$selected]['label'] . ' için API anahtarı yok. Anahtarı girin ya da başka bir istemci seçin.']);
         }
 
-        PkAiProvider::save($selected, $models, $keys, $clear, $request->user());
+        PkAiProvider::save($selected, $models, $keys, $clear, $request->user(), [
+            'agents' => isset($data['agents']) ? (bool) $data['agents'] : null,
+            'local_url' => filled($data['local_url'] ?? null) ? rtrim(trim($data['local_url']), '/') : null,
+        ]);
 
         return response()->json($this->present());
     }
@@ -74,7 +80,14 @@ class PkAiSettingsController extends Controller
                 'custom_model' => (bool) ($setting?->value['models'][$key] ?? null),
                 'default_model' => PkAiProvider::defaultModel($key),
                 'suggestions' => $meta['models'],
+                'key_optional' => !empty($meta['key_optional']),
             ])->values(),
+            'agents' => PkAiProvider::agents(),
+            // Adres alanı: yalnız sayfadan girilmişse dolu; boşsa .env'deki geçerli.
+            'local_url' => $setting?->value['local_url'] ?? null,
+            'local_url_default' => config('pktakip.local.base_url'),
+            // Çok ajanlı okuma tesisat raporlarında Docling ister (servis adresi ya da kurulu Python).
+            'docling_ready' => filled(config('pktakip.docling_url')) || filled(config('pktakip.docling_python')),
             'updated_by' => $setting?->updater?->name,
             'updated_at' => $setting?->updated_at,
         ];

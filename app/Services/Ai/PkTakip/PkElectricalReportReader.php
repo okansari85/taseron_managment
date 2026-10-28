@@ -41,7 +41,7 @@ class PkElectricalReportReader
         $document = $this->text->read($pdf, false, ' ya da "Elle doldur" ile devam edin');
         try {
             try {
-                $semantic = $this->analyzer->analyze($document['pages'], self::promptCatalog($types), $document['input'] === 'ocr', (string) $type?->slug, self::otherTypes($allTypes, $type));
+                $semantic = $this->analyzer->analyze($document['text_pages'] ?? $document['pages'], self::promptCatalog($types), $document['input'] === 'ocr', (string) $type?->slug, self::otherTypes($allTypes, $type), $document['structured_pages'] ?? null, $document['table_labels'] ?? [], $document['docling_tables'] ?? [], (string) $pdf->getRealPath());
             } catch (RuntimeException $exception) {
                 throw PkGeminiError::friendly($exception, ' ya da "Elle doldur" ile devam edin');
             }

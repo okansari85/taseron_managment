@@ -15,7 +15,8 @@ class PkReportAnalyzer
     public function __construct(
         private PkGeminiReportClient $gemini,
         private PkOpenAiReportClient $openai,
-        private PkNvidiaReportClient $nvidia
+        private PkNvidiaReportClient $nvidia,
+        private PkLocalReportClient $local
     ) {
     }
 
@@ -25,8 +26,18 @@ class PkReportAnalyzer
      *  'specs' => [['key' => 'kaldirma_kapasitesi', 'name' => 'Kaldırma kapasitesi', 'unit' => 'kg'], ...]]
      * Rapordan ekipman tanımlarken (tür bilinmiyor): ['catalog' => PeriodicEquipmentSpecCatalog::promptCatalog()].
      */
-    public function analyze(array $pages, array $equipment = [], ?array $image = null, bool $ocr = false): array
+    public function analyze(array $pages, array $equipment = [], ?array $image = null, bool $ocr = false, ?array $structuredPages = null, array $tableLabels = [], array $doclingTables = [], ?string $pdfPath = null): array
     {
+        // Kısa talimatlar (config pktakip.short_prompts): tek ekipman raporu kendi talimatıyla; yönlendirici okuyamazsa
+        // (tesisat, tür bulunamadı) aşağıdaki mevcut akış, toplu tüp formunda katalog yalnızca o türe daraltılmış.
+        if (PkAiProvider::agents() && !$image) {
+            $routed = app(PkShortPromptRouter::class)->route($pages, $equipment, $pdfPath);
+            if (isset($routed['semantic'])) {
+                return $routed['semantic'];
+            }
+            $equipment = $routed['equipment'] ?? $equipment;
+        }
+
         // Görüntü PDF (PkReportText::read): metin yok, PDF'in kendisi gönderilir; sayfalar görüntüden okunur.
         // OCR: taranmış PDF'in dijital ikizinin metni; yapay zekaya nereden geldiği ve işaret kutusu gösterimi söylenir.
         $text = $image ? $this->imageInstruction($image) : ($ocr ? $this->ocrNote() . "\n\n" : '') . $this->buildDocumentText($pages);
@@ -45,10 +56,12 @@ class PkReportAnalyzer
         $client = match (PkAiProvider::name()) {
             'openai' => $this->openai,
             'nvidia' => $this->nvidia,
+            'local' => $this->local,
             default => $this->gemini,
         };
 
-        $systemPrompt = $this->systemPrompt() . "\n\n" . $this->systemHierarchyRules() . "\n\n" . $equipmentInstructions;
+        $systemPrompt = $this->systemPrompt() . "\n\n" . $this->systemHierarchyRules() . "\n\n" . $equipmentInstructions
+            . (PkAiProvider::agents() ? "\n\n" . PkSingleEquipmentPrompt::LOCAL_RULES . (isset($equipment['note']) ? "\n\n" . $equipment['note'] : '') : '');
         if ($image) {
             if ($client !== $this->openai) {
                 throw new RuntimeException('Görüntü PDF okuma şu an yalnızca OpenAI ile yapılıyor (Ayarlar → Yapay zeka).');
@@ -57,7 +70,40 @@ class PkReportAnalyzer
             return $this->openai->extract($systemPrompt, $text, 50000, $image);
         }
 
-        return $client->extract($systemPrompt, $text, 50000);
+        // Yerel model, tesisat, Docling akışı: uzun ana okuma yok (tam metni dört kez okutmak yavaştı — 23 Eki, #18 327 sn).
+        // Tür küçük adımla; bilgiler, sistemler, ekipman tarifleri ve bulgular aşağıdaki alt ajanlardan. Sözleşme aynı.
+        $direct = PkAiProvider::agents() && !empty($equipment['installation_catalog']) && $structuredPages;
+        if ($direct) {
+            $type = app(PkReportClassifier::class)->installationType($equipment['installation_catalog'], $structuredPages);
+            $semantic = [
+                'template' => ['fire_systems' => ['systems' => []]],
+                'extracted_data' => ['extraction_mode' => 'structured', 'equipment_type' => $type, 'report_information' => [], 'findings' => []],
+            ];
+        } else {
+            $semantic = $client->extract($systemPrompt, $text, 50000);
+        }
+        // Yerel model, tesisat: ana okumadan sonra bölüm alt ajanları (önce sistemler; bulgular sistem listesinden eşleşir).
+        if (PkAiProvider::agents() && !empty($equipment['installation_catalog'])) {
+            // Bölüm alt ajanları (Docling bölümleri): bilgi / sonuç / kuruluş ve kusurlar. Sistem adımı ve Camelot şablonu tam ham
+            // metinle (yönlendiricinin seçtiği bölümler sistemlerin çoğunu kaçırdı; Docling yoğun ters tabloda satır kaybediyor — 23 Eki).
+            $structuredText = $structuredPages ? $this->buildDocumentText($structuredPages) : $text;
+            $systemNames = array_keys(PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null));
+            $parts = $structuredPages ? app(PkDocumentSections::class)->texts($structuredPages, $systemNames) : [];
+            // Bilgi / sonuç, tesis ve kusur bölümleri okuma modelinin sayfa sayfa haritasından (varsa); Docling bölümleri yedek.
+            [$parts, $findingsFallback] = PkPageSections::merge($parts, $structuredPages ? app(PkPageSections::class)->parts($structuredPages) : [], $structuredText);
+            $semantic = app(PkHeaderPass::class)->apply($semantic, PkHeaderPass::input($parts, $structuredText));
+            $semantic = app(PkInstallationSystemsPass::class)->apply($semantic, $text, $equipment['installation_catalog'], tableLabels: $tableLabels, doclingTables: $doclingTables, pdfPath: $pdfPath);
+            // Proje bilgileri kartı ve lejant (ana okuma yokken kimse yazmıyordu): talimatın 2. ve 6. bölümleriyle ayrı ajan.
+            if ($direct) {
+                $facility = app(PkElectricalAgents::class)->facility(PkElectricalAgents::sections($this->systemPrompt(), [2, 6], false), $parts['facility'] ?? $structuredText);
+                $semantic['template']['facility_or_project_information'] = $facility['facility_or_project_information'] ?? null;
+                $semantic['extracted_data']['facility_information'] = (array) ($facility['facility_information'] ?? []);
+                $semantic['extracted_data']['result_legend'] = (array) ($facility['result_legend'] ?? []);
+            }
+            $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback);
+        }
+
+        return $semantic;
     }
 
     private function ocrNote(): string

@@ -18,7 +18,8 @@ class PkNvidiaReportClient
     {
     }
 
-    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000): array
+    // $schema: verilmezse rapor şeması (tür bulma gibi küçük istekler kendi şemasını verir).
+    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000, ?array $schema = null): array
     {
         // Anahtar ve model: Ayarlar → Yapay zeka (yoksa .env).
         $apiKey = PkAiProvider::apiKey('nvidia');
@@ -41,7 +42,7 @@ class PkNvidiaReportClient
         ];
         // Şema zorlaması (guided decoding); modeli desteklemiyorsa PKTAKIP_NVIDIA_GUIDED_JSON=false ile yalnızca JSON istenir.
         if (config('pktakip.nvidia.guided_json')) {
-            $payload['nvext'] = ['guided_json' => PkJsonSchema::strict($this->gemini->responseSchema())];
+            $payload['nvext'] = ['guided_json' => PkJsonSchema::strict($schema ?? $this->gemini->responseSchema())];
         } else {
             $payload['response_format'] = ['type' => 'json_object'];
         }

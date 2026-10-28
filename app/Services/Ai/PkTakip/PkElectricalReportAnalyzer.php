@@ -28,7 +28,8 @@ class PkElectricalReportAnalyzer
     public function __construct(
         private PkGeminiReportClient $gemini,
         private PkOpenAiReportClient $openai,
-        private PkNvidiaReportClient $nvidia
+        private PkNvidiaReportClient $nvidia,
+        private PkLocalReportClient $local
     ) {
     }
 
@@ -36,7 +37,7 @@ class PkElectricalReportAnalyzer
      * $catalog: PkInstallationReportReader::promptCatalog() biçiminde tesisatın türü ve sistemleri. $typeSlug: talimatın türü
      * (elektrik iç tesisatı / topraklama). $otherTypes: [['slug', 'name'], ...] diğer tesisat türleri (yalnızca tür kararı).
      */
-    public function analyze(array $pages, array $catalog, bool $ocr = false, string $typeSlug = 'elektrik-ic-tesisati', array $otherTypes = []): array
+    public function analyze(array $pages, array $catalog, bool $ocr = false, string $typeSlug = 'elektrik-ic-tesisati', array $otherTypes = [], ?array $structuredPages = null, array $tableLabels = [], array $doclingTables = [], ?string $pdfPath = null): array
     {
         $text = ($ocr ? $this->ocrNote() . "\n\n" : '') . $this->buildDocumentText($pages);
         if (trim($text) === '') {
@@ -47,6 +48,7 @@ class PkElectricalReportAnalyzer
         $client = match (PkAiProvider::name()) {
             'openai' => $this->openai,
             'nvidia' => $this->nvidia,
+            'local' => $this->local,
             default => $this->gemini,
         };
         // Türün kendi talimatı: topraklama (ZPKR01), yangın algılama (ZPKR04), havalandırma ve klima (standart format yok; projeye
@@ -60,12 +62,61 @@ class PkElectricalReportAnalyzer
             self::TRANSFORMER => [$this->familyPrompt($this->transformerParts()), $this->familyContract($this->transformerParts())],
             default => [$this->systemPrompt(), $this->contract()],
         };
-        $prompt = $instruction
+        // Kısa talimat (yerel model): türün talimatı aynen, yalnız rapor bilgisi / genel sonuç / bulgular / kuruluş bölümleri
+        // (5, 8, 9, 11) ayrı ajanlara gider (PkHeaderPass, PkFindingsPass); tür ajanı sistemleri ve ölçüm listelerini yazar.
+        $prompt = (PkAiProvider::agents() ? $this->withoutAgentSections($instruction) : $instruction)
             . "\n\n" . $this->catalogInstruction($catalog)
             . "\n\n" . $this->otherTypesInstruction($otherTypes)
             . "\n\n" . $contract;
 
-        return $client->extract($prompt, $text, 50000);
+        // Docling akışında tür talimatı bölüm bölüm ajanlara (PkElectricalAgents): sistemler Docling özetinden (tam metinle
+        // sistemler ajanı katalogdaki bütün sistemleri yazdı, #126 23 Eki), ölçüm listeleri sistem başına tablo haritasından.
+        // Docling yoksa tür talimatı bütün halde (rapor bilgisi / sonuç / bulgu / kuruluş bölümleri çıkarılmış).
+        // Bölümler bir kez: hangi başlık hangi sistem (türün 2. bölüm kuralıyla; kendi formu / tablosu olmayan kontrol listesi
+        // "Tesisat Geneli"), kusur, bilgi; her ajan yalnız kendi bölümünü okur.
+        $agents = PkAiProvider::agents() && $structuredPages && $doclingTables && $pdfPath;
+        $catalogNames = array_keys(PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug));
+        $parts = PkAiProvider::agents() && $structuredPages
+            ? app(PkDocumentSections::class)->texts($structuredPages, $agents ? [...$catalogNames, 'Tesisat Geneli'] : $catalogNames, rules: $agents ? PkElectricalAgents::sections($instruction, [2], false) : '')
+            : [];
+        $semantic = $agents
+            ? app(PkElectricalAgents::class)->read($instruction, $parts + ['all' => $this->buildDocumentText($structuredPages)], $doclingTables, $pdfPath, $tableLabels, $typeSlug)
+            : $client->extract($prompt, $text, 50000);
+
+        // Yerel model: sistemler ve bulgular ayrı kısa isteklerle ikinci kez okunur (önce sistemler; bulgular sistem listesinden eşleşir).
+        if (!PkAiProvider::agents()) {
+            return $semantic;
+        }
+        // Bölüm alt ajanları (Docling bölümleri): bilgi / sonuç / kuruluş, kusurlar; havalandırmada bulgular ölçüm tablosundan da
+        // çıktığı için bütün yapılı metin. Sistem adımı yalnız havalandırmada: diğer elektrik türlerinin talimatı kontrol listesini
+        // bilerek tek "Tesisat Geneli" kaydında tutar (OpenAI okuması ve uzman kaydı da böyle).
+        $structuredText = $structuredPages ? $this->buildDocumentText($structuredPages) : $text;
+        // Bilgi / sonuç ve kusur bölümleri okuma modelinin sayfa sayfa haritasından (varsa); Docling bölümleri yedek.
+        [$parts, $findingsFallback] = PkPageSections::merge($parts, $structuredPages ? app(PkPageSections::class)->parts($structuredPages) : [], $structuredText);
+        $semantic = app(PkHeaderPass::class)->apply($semantic, PkHeaderPass::input($parts, $structuredText));
+        // Sistemleri ve ölçüm / cihaz listelerini türün talimatı yazar (eski mantık); ayrı sistem adımı fazla sistem açıp
+        // havalandırmada fan tablosunu düşürüyordu (#141, 23 Eki; gpt-luna kaydıyla karşılaştırma).
+        // Diğer türlerde ölçüm tablolarını tür talimatı tarif eder (eski, çalışan mantık); ayrı tablo denetimi yok.
+
+        return app(PkFindingsPass::class)->apply($semantic, $typeSlug === self::VENTILATION ? $structuredText : ($parts['findings'] ?? $structuredText), measurementRows: $typeSlug === self::VENTILATION, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug), sectionOnly: $typeSlug !== self::VENTILATION && isset($parts['findings']), wholeText: $findingsFallback);
+    }
+
+    // Talimatın 5, 8, 9, 11 numaralı bölümleri (rapor bilgisi, genel sonuç, bulgular, kuruluş) çıkarılır; yerine bu alanların
+    // ayrı adımda okunduğu notu. Bölüm başlığı satır başındaki "N. " (kendi talimat metnimiz).
+    private function withoutAgentSections(string $instruction): string
+    {
+        $out = [];
+        $skip = false;
+        foreach (explode("\n", $instruction) as $line) {
+            if (preg_match('/^(\d{1,2})\. /', $line, $match)) {
+                $skip = in_array((int) $match[1], [5, 8, 9, 11], true);
+            }
+            if (!$skip) {
+                $out[] = $line;
+            }
+        }
+
+        return implode("\n", $out) . "\n\nAYRI ADIMDA OKUNANLAR: rapor bilgileri, genel sonuç, bulgular ve kontrolü yapan kuruluş ayrı adımlarda okunur. Bu yanıtta extracted_data.report_information = [], extracted_data.findings = [], overall_result ve inspection_body alanları null.";
     }
 
     // Diğer tesisat türleri: rapor başka bir tesisata aitse equipment_type.slug bunlardan biri olur (sistemleri yazılmaz).

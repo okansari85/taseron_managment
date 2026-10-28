@@ -43,7 +43,7 @@ class PkInstallationReportReader
         $document = $this->text->read($pdf, false, ' ya da "Elle doldur" ile devam edin');
         try {
             try {
-                $semantic = $this->analyzer->analyze($document['pages'], ['installation_catalog' => self::promptCatalog($types)], null, $document['input'] === 'ocr');
+                $semantic = $this->analyzer->analyze($document['pages'], ['installation_catalog' => self::promptCatalog($types)], null, $document['input'] === 'ocr', $document['structured_pages'] ?? null, $document['table_labels'] ?? [], $document['docling_tables'] ?? [], (string) $pdf->getRealPath());
             } catch (RuntimeException $exception) {
                 throw PkGeminiError::friendly($exception, ' ya da "Elle doldur" ile devam edin');
             }
@@ -162,6 +162,10 @@ class PkInstallationReportReader
         foreach ((array) ($tables['equipment_summary'] ?? []) as $row) {
             if ($key = $keyOf[trim((string) ($row['system_name'] ?? ''))] ?? null) {
                 $groups[$key]['equipment_summary'][] = array_intersect_key((array) $row, array_flip(['equipment_name', 'total', 'uygun', 'uygun_degil', 'unknown']));
+                // Kullanıcı kuralı: ekipmanlardan biri uygun değilse sistem de uygun değil (yalnız bu yönde; uygun ekipman sistemi uygun yapmaz).
+                if ((int) ($row['uygun_degil'] ?? 0) > 0) {
+                    $groups[$key]['statuses'][] = 'uygun_degil';
+                }
             }
         }
         foreach ((array) ($tables['equipment'] ?? []) as $row) {

@@ -10,5 +10,6 @@ return [
     TenancyServiceProvider::class,
     CustomerRoutesServiceProvider::class,
     \App\Providers\PkBillingServiceProvider::class,
+    \App\Providers\PkTakipServiceProvider::class,
 
 ];

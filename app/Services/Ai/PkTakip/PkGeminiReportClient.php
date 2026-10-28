@@ -14,7 +14,8 @@ use RuntimeException;
  */
 class PkGeminiReportClient
 {
-    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000): array
+    // $schema: verilmezse rapor şeması (tür bulma gibi küçük istekler kendi şemasını verir).
+    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000, ?array $schema = null): array
     {
         // Anahtar ve model: Ayarlar → Yapay zeka (yoksa .env).
         $apiKey = PkAiProvider::apiKey('gemini');
@@ -30,7 +31,7 @@ class PkGeminiReportClient
             'response_format' => [
                 'type' => 'text',
                 'mime_type' => 'application/json',
-                'schema' => $this->schema(),
+                'schema' => $schema ?? $this->schema(),
             ],
             'generation_config' => [
                 'temperature' => 0.1,

@@ -168,7 +168,7 @@ class PkInspectionReportReader
     private function analyze(array $document, array $equipmentTag, bool $forgetOcr = true): array
     {
         try {
-            return $this->analyzer->analyze($document['pages'], $equipmentTag, $document['image'], $document['input'] === 'ocr');
+            return $this->analyzer->analyze($document['pages'], $equipmentTag, $document['image'], $document['input'] === 'ocr', pdfPath: $document['pdf_path'] ?? null);
         } catch (RuntimeException $exception) {
             throw PkGeminiError::friendly($exception, ' ya da "Elle doldur" ile devam edin');
         } finally {

@@ -17,7 +17,8 @@ class PkOpenAiReportClient
     }
 
     // $file: görüntü PDF (PkReportText::read) — PDF'in kendisi gönderilir, model sayfaları görüntüden okur.
-    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000, ?array $file = null): array
+    // $schema: verilmezse rapor şeması (tür bulma gibi küçük istekler kendi şemasını verir).
+    public function extract(string $systemPrompt, string $userContent, int $maxTokens = 50000, ?array $file = null, ?array $schema = null): array
     {
         // Anahtar ve model: Ayarlar → Yapay zeka (yoksa .env).
         $apiKey = PkAiProvider::apiKey('openai');
@@ -39,7 +40,7 @@ class PkOpenAiReportClient
                 'format' => [
                     'type' => 'json_schema',
                     'name' => 'pk_report',
-                    'schema' => PkJsonSchema::strict($this->gemini->responseSchema()),
+                    'schema' => PkJsonSchema::strict($schema ?? $this->gemini->responseSchema()),
                     'strict' => true,
                 ],
             ],

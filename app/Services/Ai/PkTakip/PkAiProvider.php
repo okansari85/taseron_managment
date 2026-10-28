@@ -48,6 +48,18 @@ final class PkAiProvider
                 ['id' => 'openai/gpt-oss-120b', 'note' => 'ücretsiz, daha güçlü'],
             ],
         ],
+        'local' => [
+            'label' => 'Yerel sunucu',
+            'note' => 'Kurumun kendi makinesindeki model (llama-server, vLLM, Ollama); veri dışarı çıkmaz. Çok ajanlı okumayla kullanılır.',
+            'key_env' => 'PKTAKIP_LOCAL_API_KEY',
+            // llama-server / Ollama anahtar istemez.
+            'key_optional' => true,
+            'models' => [
+                ['id' => 'nuextract3', 'note' => 'llama-server, laptop 4 GB kart (masaüstündeki başlat dosyası)'],
+                ['id' => 'openai/gpt-oss-20b', 'note' => 'vLLM adı, 16 GB kart'],
+                ['id' => 'gpt-oss:20b', 'note' => 'Ollama adı'],
+            ],
+        ],
     ];
 
     private static ?array $settings = null;
@@ -57,6 +69,18 @@ final class PkAiProvider
         $name = (string) (self::settings()['provider'] ?? config('pktakip.ai_provider'));
 
         return array_key_exists($name, self::PROVIDERS) ? $name : 'gemini';
+    }
+
+    // Okuma yöntemi: true = çok ajanlı (Docling + küçük ajanlar), false = tek uzun talimat. Ayar yoksa .env (PKTAKIP_SHORT_PROMPTS).
+    public static function agents(): bool
+    {
+        return (bool) (self::settings()['agents'] ?? config('pktakip.short_prompts'));
+    }
+
+    // Yerel sunucu adresi: sayfadan girilen, yoksa .env (PKTAKIP_LOCAL_BASE_URL).
+    public static function localUrl(): ?string
+    {
+        return (self::settings()['local_url'] ?? null) ?: config('pktakip.local.base_url');
     }
 
     public static function model(?string $provider = null): ?string
@@ -72,6 +96,7 @@ final class PkAiProvider
         return match ($provider) {
             'openai' => config('pktakip.openai.model'),
             'nvidia' => config('pktakip.nvidia.model') ?: config('services.nvidia_nim.text_model'),
+            'local' => config('pktakip.local.model'),
             default => config('services.gemini.text_model'),
         };
     }
@@ -102,9 +127,10 @@ final class PkAiProvider
 
     /**
      * $models: [sağlayıcı => model|null] (null: .env'deki model); $keys: [sağlayıcı => yeni anahtar] (girilenler);
-     * $clearKeys: ayardaki anahtarı silinecek sağlayıcılar (.env'dekine döner).
+     * $clearKeys: ayardaki anahtarı silinecek sağlayıcılar (.env'dekine döner); $options: agents (okuma yöntemi), local_url
+     * (null: .env'deki).
      */
-    public static function save(string $provider, array $models, array $keys, array $clearKeys, User $user): void
+    public static function save(string $provider, array $models, array $keys, array $clearKeys, User $user, array $options = []): void
     {
         $current = self::settings();
         $stored = (array) ($current['keys'] ?? []);
@@ -118,10 +144,21 @@ final class PkAiProvider
         }
 
         PkSetting::query()->updateOrCreate(['key' => self::SETTING], [
-            'value' => ['provider' => $provider, 'models' => array_filter($models), 'keys' => $stored],
+            'value' => ['provider' => $provider, 'models' => array_filter($models), 'keys' => $stored] + array_filter($options, fn ($value) => $value !== null),
             'updated_by' => $user->id,
         ]);
         self::flush();
+    }
+
+    // Seçili (ya da verilen) sağlayıcının rapor okuma istemcisi.
+    public static function client(?string $provider = null): object
+    {
+        return app(match ($provider ?? self::name()) {
+            'openai' => PkOpenAiReportClient::class,
+            'nvidia' => PkNvidiaReportClient::class,
+            'local' => PkLocalReportClient::class,
+            default => PkGeminiReportClient::class,
+        });
     }
 
     public static function flush(): void
@@ -148,6 +185,7 @@ final class PkAiProvider
         return match ($provider) {
             'openai' => config('pktakip.openai.api_key'),
             'nvidia' => config('services.nvidia_nim.api_key'),
+            'local' => config('pktakip.local.api_key'),
             default => config('services.gemini.api_key'),
         };
     }
