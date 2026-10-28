@@ -28,8 +28,12 @@ class PkBulkListPrompt
         }
         // Tüp satırlarını Camelot okur; modele ilk iki sayfa (rapor bilgisi, tablo başlığı ve ilk satırlar) ve son sayfa (sonuç,
         // imza) yeter. Bütün satırlar küçük modelin penceresini aşıyordu (toplu form #6 / #7: ~28 bin token).
+        // Son sayfadan yalnız alt kısım (sonuç, imza): tam son sayfayla girdi + çıktı yerel modelin penceresini aşıyordu (#6: son
+        // sayfa baştan sona tüp satırı, cevap kuruluş bilgisinde kesildi). Tablo sayfası tam kalır: uzun soru başlıkları satırlara
+        // bölündüğü için sayfanın başı yalnız başlıktan ibaret olabiliyor (#7: ilk 40 satırla 0 tüp).
         if (count($parts) > 3) {
-            $parts = [...array_slice($parts, 0, 2), '--- (ara sayfalar: aynı tablonun devamı; satırları tablo okuyucu okur) ---', end($parts)];
+            $tail = implode("\n", array_slice(explode("\n", end($parts)), -40));
+            $parts = [...array_slice($parts, 0, 2), '--- (ara sayfalar: aynı tablonun devamı; satırları tablo okuyucu okur) ---', $tail];
         }
         $catalog = $this->catalog->promptCatalog();
         $type = collect((array) ($catalog['types'] ?? []))->firstWhere('slug', $typeSlug);
@@ -45,6 +49,10 @@ class PkBulkListPrompt
             . "\n\n13. SON JSON SÖZLEŞMESİ" . str($system)->after('13. SON JSON SÖZLEŞMESİ');
 
         $semantic = PkAiProvider::client($provider)->extract($prompt, implode("\n\n", $parts));
+        // Toplu form olduğuna yönlendirici karar verdi: kategori koddan ve şablonda yalnız tüp listesi. Küçük model "yangin_tesisati"
+        // yazıp başka sistemler uyduruyordu (#10 Koç Medikal: tablo okunmadı, 27 yerine 0 tüp).
+        $semantic['extracted_data']['report_category'] = PkBulkReportReader::CATEGORY;
+        $semantic['template']['fire_systems']['systems'] = array_slice((array) ($semantic['template']['fire_systems']['systems'] ?? []), 0, 1);
 
         return $this->withHeaders($semantic, implode("\n\n", $parts), $provider);
     }

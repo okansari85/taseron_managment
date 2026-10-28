@@ -59,12 +59,20 @@ Rapor 1 sistem ve 1 ekipman içerir; girdi pdfium metnidir. Docling bu formda b�
 | `PkFindingsPass::kusurSection` | Kusur bölümünü aynen kopyalar; boşsa bulgu yoktur ve başka çağrı yapılmaz |
 | `PkFindingsPass` | Yalnız kusur bölümünden bulgular |
 | Asansör: `elevatorResult` / `elevatorFindings` / `elevatorCustomer` | Sonuç (1. sayfa), K/S/M maddeleri (no ile tekilleştirilir), müşteri |
+| Asansör: `ELEVATOR_HAS_ITEMS_PROMPT` | Her sayfa için önce "bu sayfada numaralı madde var mı?"; yalnız "evet" denen sayfadan madde istenir. Maddesiz kapak sayfasında küçük model bir cümleyi 1'den 50'ye numaralandırıyordu (#63). Cevap gelmezse sayfa okunur. |
 
 ### Toplu tüp formu (`PkBulkListPrompt`)
 
 - Tüp satırlarını Camelot okur.
-- Ajan yalnız rapor bilgilerini ve tablo başlıklarını okur.
-- Rapor 3 sayfadan uzunsa ajana yalnız ilk 2 sayfa ve son sayfa gönderilir.
+- Ajan yalnız rapor bilgilerini ve tablo yapısını okur; tablo başlıkları ayrı ajanla, harfi harfine (`withHeaders`).
+- Toplu form olduğuna yönlendirici karar verdiği için `report_category = "ysc"` ve tek sistem (tüp listesi) koddan yazılır.
+  Küçük model "yangin_tesisati" yazıp sistem uyduruyordu, tablo hiç okunmuyordu (#10).
+- Rapor 3 sayfadan uzunsa ajana ilk 2 sayfa ve son sayfanın son 40 satırı gider (#6 bağlam penceresi).
+  Tablo sayfası tam kalır: soru başlıkları satırlara bölündüğü için sayfanın başı yalnız başlık olabiliyor (#7).
+- Girdi sayfa sayısından bağımsızdır (1. sayfa + tablo sayfası + son sayfanın sonu). Docling metnine geçmek (uzun tablo
+  `sampleTables` ile başına iner) konuşuldu; doğruluk kazancı olmadığı, Docling süresi ve belleği ekleyeceği için yapılmadı.
+  Yapılırsa tablo başlıkları ajanı pdfium'da kalmalı: Docling çok satırlı başlığı birleştiriyor, okuyucu sütunu Camelot
+  başlığıyla buluyor.
 
 ### Yangın tesisatı (`PkReportAnalyzer` doğrudan yol → `PkInstallationSystemsPass` → `PkFireAgents`)
 
@@ -87,6 +95,14 @@ Rapor 1 sistem ve 1 ekipman içerir; girdi pdfium metnidir. Docling bu formda b�
      (satırlar, sütunlar ya da tek etiket→değer).
      - Docling alanı Camelot tablosuyla IoU üzerinden eşlenir.
      - Satırları mevcut `PkReportTableReader` okur.
+     - **Sayfa kayması:** haritada bölünmüş listenin yalnız başlıksız devamı varsa tarif, geriye doğru aynı sütun
+       sayılı ilk başlıklı liste tablosundan kurulur (#122). Kimlik etiketi tabloda varsa (boş pompa yuvası) ya da
+       geride tek ekipmanlı bilgi tablosu çıkarsa devam tablosu sayılmaz (#18 pano).
+     - **Kopyalar:** aynı tablolar + aynı kimlik etiketli ikinci liste atılır; tarifi kurulan listenin tablolarındaki
+       tek ekipman kayıtları listenin satırlarıdır, atılır (#141: 14 tek + 2 liste = 22 kayıt).
+     - **Alt sütunlar:** ekipmanın değeri alt sütunlara bölünmüşse (PK.239 pompa "P: - | U: ELEKTRİK") her ekipman
+       tek ekipman tarifi olur. Lejantın işaretlerini küçük ajan anlamlandırır (P proje, U uygulama); uygulama
+       işaretiyle başlayan alt sütunu ve hücreleri kod seçer. Yalnız tek bloklu tabloda.
 5. **Proje Bilgileri:** `PkElectricalAgents::facility` (yangın talimatının 2. ve 6. bölümü).
 6. **Bulgular:** `PkFindingsPass` yalnız kusur bölümünü okur. Bulguyu sisteme bağlarken madde kodunun grup harfi
    kullanılır ("6.D.9" → D grubu).
@@ -102,6 +118,15 @@ Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrol
 - Ardından ortak tesis bilgisi ajanı `facility` çalışır.
 - Kısa talimatlar için `withoutAgentSections()` 5, 8, 9 ve 11. bölümleri çıkarır.
 - Ana talimat Docling değil düz metin (`text_pages`) alır: Docling metni elektrikte gerilemeye yol açtı.
+- Havalandırma bulguları: kusur bölümü + sistem tablolarının Camelot satırları (`ventilationFindingsText`; sayfaya
+  taşan devamı dahil). Bütün metinde küçük model ikinci "UYGUN DEĞİL" ölçüm satırını kaçırıyordu (#141).
+
+### Bölümler: Docling yerleşim tuhaflıkları (`PkDocumentSections`, bütün tesisatlar)
+
+- **Tek hücreli tablo başlıktır:** Docling bazı çerçeveli başlıkları ("5.2. ÖLÇÜM VERİLERİ") tek hücreli tablo veriyor.
+- **Sayfa üst bilgisi zinciri koparmaz:** birden çok sayfada aynen tekrar eden ve sistem etiketi almamış başlık (kuruluş
+  adı, tesisat adı) önceki sayfadaki sistemin devamını kesmez; altındaki tablo sisteme eklenir.
+- "diğer" etiketli bölümdeki tablo önceki sistemin devamıdır (önceden vardı).
 
 ## 4. Yerel model ve istemci
 
@@ -147,7 +172,9 @@ Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrol
    - aynı anda tek rapor oku.
 6. Eski yola dönmek için okuma yöntemini **Tek talimat** yap, istemciyi Gemini / OpenAI seç.
 
-## 5. Test durumu (NuExtract3, laptop, 24 Eki 2026)
+## 5. Test durumu (NuExtract3, laptop)
+
+İlk tur (24 Eki 2026):
 
 | Tür | Sonuç |
 |---|---|
@@ -155,11 +182,26 @@ Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrol
 | Elektrik | #122, #125, #126, #128, #129 doğru (~60 sn). #141'de sistem eşleme düzeltildi, yeniden test bekliyor. |
 | Yangın tesisatı | OKCO PK.239: bulgu 35/35, dolap 20/20. PK25 ve #18 yeni `PkFireAgents` ile yeniden test bekliyor. |
 
-Açık sorunlar ve yeniden test listesi:
-- Asansör #63
-- Aktaş tüp sayısı
-- Toplu form #6, #7, #10
-- Tekli model alanına yan tablonun karışması: ekipman ajanına Camelot satırları verilecek.
+**28 Eki 2026 güncel durum** (gerileme: #18, PK25, PK.239, elektrik önceki temiz turla aynı):
+
+| Rapor | Sonuç |
+|---|---|
+| #122 topraklama | Sistemler 2/2, ölçüm 35/35 (eski önbellek yüzünden uydurma "Gözle Kontroller" vardı; sayfa kayması düzeltildi) |
+| #141 havalandırma | Debi sistemi ve sonucu doğru, 2 "UYGUN DEĞİL" bulgusu bulunuyor (birinde cihaz no yerine sıra no) |
+| Asansör #63 | 93 madde, K11 / S10 / M72 (PDF: 94; önce 138-152) |
+| PK.239 pompa | Özellikler uygulamadaki değerle (yakıt, güç, debi, basınç), PDF ile aynı |
+| Toplu #6, #7, #10 | 468/468, 458/458, 27/27 tüp; uygunsuz, rapor no, tarih doğru |
+
+Açık:
+- #126: sonuç cümlesi kusur sanılıyor (eski).
+- Bırakıldı (talimat kurcalamak gerekir): #18 bez hortum bulgusu sprinkler'e; #141 tesis kartı ve "Proje Bilgileri".
+- Ortak okuyucu (`FireSuppressionUnifiedNormalizer`) başlıksız devam sayfasını okumuyor (#141 debi 14 yerine 5). Canlıda da
+  böyle; okuyucuya dokunulmadı.
+
+Dersler:
+- Talimattaki örnekler test raporunun kendi verisi olabiliyor; küçük model örneği kopyalıyor (#141, #63). Örneği silmek
+  #63'te başka sayfayı bozdu, geri alındı: örneklere dokunmadan önce test.
+- Docling önbelleği `.tables.json` olmadan kalmışsa akış sessizce eski uzun talimata düşer.
 
 Test yöntemi:
 - Rapor rapor test edilir, paralel değil.
