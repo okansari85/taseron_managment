@@ -98,7 +98,19 @@ class PkElectricalReportAnalyzer
         // havalandırmada fan tablosunu düşürüyordu (#141, 23 Eki; gpt-luna kaydıyla karşılaştırma).
         // Diğer türlerde ölçüm tablolarını tür talimatı tarif eder (eski, çalışan mantık); ayrı tablo denetimi yok.
 
-        return app(PkFindingsPass::class)->apply($semantic, $typeSlug === self::VENTILATION ? $structuredText : ($parts['findings'] ?? $structuredText), measurementRows: $typeSlug === self::VENTILATION, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug), sectionOnly: $typeSlug !== self::VENTILATION && isset($parts['findings']), wholeText: $findingsFallback);
+        return app(PkFindingsPass::class)->apply($semantic, $typeSlug === self::VENTILATION ? $this->ventilationFindingsText($parts, $doclingTables, $pdfPath) ?? $structuredText : ($parts['findings'] ?? $structuredText), measurementRows: $typeSlug === self::VENTILATION, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug), sectionOnly: $typeSlug !== self::VENTILATION && isset($parts['findings']), wholeText: $findingsFallback);
+    }
+
+    // Havalandırma bulgularının girdisi: kusur bölümü + sistem tablolarının Camelot satırları (sayfaya taşan devamı dahil). Bütün
+    // metinde küçük model ikinci "UYGUN DEĞİL" ölçüm satırını kaçırıp kaynağını kontrol listesi yazıyordu (#141). Tablo yoksa null.
+    private function ventilationFindingsText(array $parts, array $doclingTables, ?string $pdfPath): ?string
+    {
+        $tables = collect((array) ($parts['by_system'] ?? []))
+            ->flatMap(fn (string $text) => collect(explode("\n", $text))->filter(fn ($line) => str_starts_with($line, '### Tablo '))->map(fn ($line) => (int) substr($line, 10)))
+            ->unique()->values()->all();
+        $rows = $tables && $doclingTables && $pdfPath ? app(PkTableDefinitions::class)->rows($pdfPath, $doclingTables, $tables) : '';
+
+        return $rows === '' ? null : "## KUSUR BÖLÜMÜ\n" . trim($parts['findings'] ?? '-') . "\n\n## ÖLÇÜM TABLOLARI\n" . $rows;
     }
 
     // Talimatın 5, 8, 9, 11 numaralı bölümleri (rapor bilgisi, genel sonuç, bulgular, kuruluş) çıkarılır; yerine bu alanların

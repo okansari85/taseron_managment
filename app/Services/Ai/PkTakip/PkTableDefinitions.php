@@ -26,24 +26,54 @@ class PkTableDefinitions
         $areas = collect($doclingTables)->keyBy('no');
         $out = [];
         foreach ($map as $system => $found) {
+            // Ajan bir listeyi hem satır satır tek ekipman hem de tipe göre birkaç liste diye verebiliyor (#141 debi tablosu: 14
+            // tek + "ASPİRATÖR" / "VANTİLATÖR" listeleri, 22 kayıt). Aynı tablolar + aynı kimlik etiketli ikinci liste kopyadır;
+            // tarifi kurulan listenin tablolarındaki tek ekipmanlar listenin satırlarıdır.
+            $seen = [];
+            $covered = [];
             foreach ((array) ($found['lists'] ?? []) as $list) {
                 $identity = (string) ($list['identity_label'] ?? '');
                 $labels = array_values((array) ($list['property_labels'] ?? []));
+                $key = json_encode([collect((array) ($list['tables'] ?? []))->map(fn ($no) => (int) $no)->sort()->values(), $identity]);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
                 foreach ((array) ($list['tables'] ?? []) as $no) {
                     $area = $areas[$no] ?? null;
                     $grid = $area ? $this->grid($camelot, (int) $area['page'], (string) $area['area']) : [];
                     $definition = $this->definition($grid, (string) $list['equipment_name'], $identity, $labels);
+                    // Sayfa kayması: haritada bölünmüş listenin yalnız başlıksız devamı varsa başlık geride, aynı sütun sayılı tablodadır
+                    // (#122: başlık 2. sayfada, satırların devamı 3. sayfada; başlıklı tabloyu bölüm etiketleyici rapor bilgisine saymıştı).
+                    // Kimlik etiketi tabloda varsa (boş pompa yuvası gibi) devam tablosu değildir; geride tek ekipmanlı bilgi tablosu
+                    // çıkarsa da değildir (ajanın yanlış kimlik etiketi #18 pano listesini önceki pompa tablosuna kaydırıyordu).
+                    $continuation = $definition === null && $grid && !$this->labelPositions($grid, [$identity]);
+                    for ($prev = (int) $no - 1; $continuation && $definition === null && $prev > 0; $prev--) {
+                        $before = isset($areas[$prev]) ? $this->grid($camelot, (int) $areas[$prev]['page'], (string) $areas[$prev]['area']) : [];
+                        if (count($before[0] ?? []) !== count($grid[0])) {
+                            break;
+                        }
+                        $definition = $this->definition($before, (string) $list['equipment_name'], $identity, $labels);
+                        if ($definition && $definition['instance_structure']['equipment_axis'] === 'none') {
+                            $definition = null;
+                            break;
+                        }
+                    }
                     if ($definition === null) {
                         continue;
                     }
                     $out[$system][] = $definition;
                     // Liste tarifi bir kez yeter: tablo okuyucu devam sayfalarını başlıktan bulur. Tek ekipmanlılar her tablo için.
                     if ($definition['instance_structure']['equipment_axis'] !== 'none') {
+                        $covered = [...$covered, ...array_map('intval', (array) $list['tables'])];
                         break;
                     }
                 }
             }
             foreach ((array) ($found['singles'] ?? []) as $single) {
+                if (in_array((int) ($single['table'] ?? 0), $covered, true)) {
+                    continue;
+                }
                 $values = collect((array) ($single['properties'] ?? []))->filter(fn ($pair) => is_array($pair) && filled($pair['label'] ?? null))->mapWithKeys(fn ($pair) => [$pair['label'] => $pair['value'] ?? null])->all();
                 // Değer Camelot hücresinden (etiketin sağındaki hücre); etiket tabloda yoksa ajanın yazdığı. Ajan boş pompa yuvasında
                 // komşu hücrenin birimini ("m³/h -") değer yazıyordu, yuva boş sayılmıyordu (#18 3 numaralı pompa).

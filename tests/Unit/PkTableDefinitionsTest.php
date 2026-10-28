@@ -57,6 +57,101 @@ class PkTableDefinitionsTest extends TestCase
         $this->assertSame(['CLARKE', '1480 GPM'], array_column($pump['attributes'], 'value'));
     }
 
+    // #122 sayfa kayması: haritada yalnız başlıksız devam tablosu (3. sayfa); başlık bir önceki, aynı genişlikteki tablodan.
+    // Sütun sayısı farklı önceki tablo başka bir tablodur: tarif kurulmaz.
+    public function test_continuation_table_takes_header_from_previous_table(): void
+    {
+        $camelot = new class extends PkCachedCamelot {
+            public function __construct()
+            {
+            }
+
+            public function extract(string $pdfPath): array
+            {
+                return ['tables' => [
+                    ['flavor' => 'lattice', 'page' => 1, 'bbox' => [20, 400, 560, 700], 'data' => [['Rapor No', 'NT/24'], ['Tarih', '14.03.24']]],
+                    ['flavor' => 'lattice', 'page' => 2, 'bbox' => [20, 40, 560, 700], 'data' => [
+                        ['Sıra No', 'Ölçüm Yeri', 'In(A)', 'Sonuç'],
+                        ['1', 'Depo Panosu', '63', 'U.D'],
+                    ]],
+                    ['flavor' => 'lattice', 'page' => 3, 'bbox' => [20, 460, 560, 740], 'data' => [
+                        ['36', 'B-04 Panosu', '32', 'U.D'],
+                    ]],
+                ]];
+            }
+        };
+        $docling = [
+            ['no' => 1, 'page' => 1, 'area' => '20,700,560,400'],
+            ['no' => 2, 'page' => 2, 'area' => '20,700,560,40'],
+            ['no' => 3, 'page' => 3, 'area' => '20,740,560,460'],
+        ];
+        $list = ['equipment_name' => 'Ölçüm Noktası', 'identity_label' => 'Sıra No', 'property_labels' => ['Ölçüm Yeri', 'In(A)']];
+        $definitions = new PkTableDefinitions($camelot);
+
+        $out = $definitions->build('x.pdf', $docling, ['Topraklama' => ['lists' => [$list + ['tables' => [3]]], 'singles' => []]]);
+        $structure = $out['Topraklama'][0]['instance_structure'];
+        $this->assertSame(['rows', ['Sıra No', 'Ölçüm Yeri', 'In(A)']], [$structure['equipment_axis'], $structure['header_patterns']]);
+
+        $wrong = array_merge($list, ['tables' => [2], 'identity_label' => 'Kayıt No']);
+        $this->assertSame([], $definitions->build('x.pdf', $docling, ['Topraklama' => ['lists' => [$wrong], 'singles' => []]]));
+    }
+
+    // #141: ajan debi listesini hem satır satır tek ekipman hem tipe göre iki liste diye verdi; bir liste tarifi kalır, satırlar
+    // tek ekipman olarak tekrar eklenmez.
+    public function test_list_rows_given_as_singles_and_duplicate_lists_are_dropped(): void
+    {
+        $camelot = new class extends PkCachedCamelot {
+            public function __construct()
+            {
+            }
+
+            public function extract(string $pdfPath): array
+            {
+                return ['tables' => [['flavor' => 'lattice', 'page' => 1, 'bbox' => [20, 40, 560, 700], 'data' => [
+                    ['Menfez No', 'Cihaz No', 'Tipi', 'Debi'],
+                    ['1', '1 NUMARA', 'VANTİLATÖR', '291,3'],
+                    ['2', '2 NUMARA', 'ASPİRATÖR', '162,0'],
+                ]]]];
+            }
+        };
+        $list = ['tables' => [1], 'identity_label' => 'Menfez No', 'property_labels' => ['Cihaz No', 'Tipi', 'Debi']];
+        $map = ['Debi' => [
+            'lists' => [['equipment_name' => 'ASPİRATÖR'] + $list, ['equipment_name' => 'VANTİLATÖR'] + $list],
+            'singles' => [
+                ['equipment_name' => '1 NUMARA', 'table' => 1, 'identity_value' => '1', 'properties' => [['label' => 'Cihaz No', 'value' => '1 NUMARA']]],
+                ['equipment_name' => '2 NUMARA', 'table' => 1, 'identity_value' => '2', 'properties' => [['label' => 'Cihaz No', 'value' => '2 NUMARA']]],
+            ],
+        ]];
+
+        $out = (new PkTableDefinitions($camelot))->build('x.pdf', [['no' => 1, 'page' => 1, 'area' => '20,700,560,40']], $map);
+
+        $this->assertCount(1, $out['Debi']);
+        $this->assertSame(['ASPİRATÖR', 'rows'], [$out['Debi'][0]['equipment_name'], $out['Debi'][0]['instance_structure']['equipment_axis']]);
+    }
+
+    // #18: ajan pano listesine pompanın kimlik etiketini yazdı; pano tablosunda yok, geride aynı genişlikte tek ekipmanlı pompa
+    // tablosu var: devam tablosu sayılmaz, pompa pano diye ikinci kez eklenmez.
+    public function test_single_equipment_table_is_not_a_list_header(): void
+    {
+        $camelot = new class extends PkCachedCamelot {
+            public function __construct()
+            {
+            }
+
+            public function extract(string $pdfPath): array
+            {
+                return ['tables' => [
+                    ['flavor' => 'lattice', 'page' => 1, 'bbox' => [20, 230, 560, 280], 'data' => [['Marka', 'STANDART'], ['Pompa Seri No', '3']]],
+                    ['flavor' => 'lattice', 'page' => 1, 'bbox' => [20, 110, 560, 160], 'data' => [['Marka', 'STANDART'], ['Panel Tipi', 'Otomatik']]],
+                ]];
+            }
+        };
+        $docling = [['no' => 1, 'page' => 1, 'area' => '20,280,560,230'], ['no' => 2, 'page' => 1, 'area' => '20,160,560,110']];
+        $map = ['Pompalar' => ['lists' => [['equipment_name' => 'Pompa Kontrol Panosu', 'tables' => [2], 'identity_label' => 'Pompa Seri No', 'property_labels' => ['Marka']]], 'singles' => []]];
+
+        $this->assertSame([], (new PkTableDefinitions($camelot))->build('x.pdf', $docling, $map));
+    }
+
     // #18 3 numaralı pompa: komşu hücreden taşan birim ("- m³/h") değer değildir; rakam ya da gerçek sözcük olan değer kalır.
     public function test_overflowing_unit_is_blank(): void
     {

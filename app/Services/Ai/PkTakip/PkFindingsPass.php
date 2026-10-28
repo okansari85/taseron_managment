@@ -31,7 +31,7 @@ PROMPT;
 
     // Havalandırma raporunda debi ölçüm tablosunun "UYGUN DEĞİL" satırları da kusurdur (uzman öyle kaydediyor).
     private const MEASUREMENT_ROWS = <<<'PROMPT'
-- İSTİSNA: Bu raporda ölçüm tablosunda sonucu "UYGUN DEĞİL" olan her satır da bir kusurdur: text = "<nokta no / mahal> menfezinde debi <ölçülen debi> m³/h; UYGUN DEĞİL." (örn. "5 NUMARA / ORTAK ALAN - YEMEKHANE menfezinde debi 0 m³/h; UYGUN DEĞİL."). Sonucu UYGUN olan ölçüm satırları kusur değildir.
+- İSTİSNA: Bu raporda ölçüm tablosunda sonucu "UYGUN DEĞİL" olan her satır da bir kusurdur: text = "<nokta no / mahal> menfezinde debi <ölçülen debi> m³/h; UYGUN DEĞİL.", from = "olcum_tablosu". Sonucu UYGUN olan ölçüm satırları kusur değildir.
 PROMPT;
 
     // $wholeText: kusur bölümü verildiğinde yedek metin (PkPageSections::merge: Docling'in kusur bölümü ya da kısa raporda bütün

@@ -18,7 +18,22 @@ class PkDocumentSections
     {
         $sections = [['heading' => '', 'text' => '', 'page' => 1]];
         foreach (array_values($pages) as $index => $page) {
-            foreach (explode("\n", (string) $page) as $line) {
+            $lines = explode("\n", (string) $page);
+            for ($k = 0; $k < count($lines); $k++) {
+                $line = $lines[$k];
+                // Tek hücreli tablo bir başlık kutusudur: Docling "5.2. ÖLÇÜM VERİLERİ" başlığını böyle verdi, ölçüm tablosu önceki
+                // bölüme karışıyordu (#141). Satır "| a | b |" biçiminde; başlıksız tablonun ilk satırı sütun numarası ("| 0 |").
+                if (str_starts_with($line, '### Tablo ')) {
+                    $rows = [];
+                    for ($j = $k + 1; str_starts_with($lines[$j] ?? '', '| '); $j++) {
+                        $rows[] = trim(substr($lines[$j], 2, -2));
+                    }
+                    $cells = array_values(array_diff($rows, ['0']));
+                    if (count($cells) === 1 && !array_filter($rows, fn ($row) => str_contains($row, ' | '))) {
+                        $line = '## ' . $cells[0];
+                        $k = $j - 1;
+                    }
+                }
                 if (str_starts_with($line, '## ')) {
                     $sections[] = ['heading' => substr($line, 3), 'text' => '', 'page' => $index + 1];
                 } else {
@@ -106,10 +121,19 @@ PROMPT . ($rules !== '' ? "\n\nSİSTEM KURALI:\n" . $rules : ''), "BÖLÜMLER:\n
 
         // Sistem başına bölümler (her sistem ajanı yalnız kendi bölümünü okur). Sayfa üst bilgisi gibi "diger" bölümdeki tablo
         // önceki sistemin devamıdır (liste sonraki sayfada sürer).
+        // Sayfa üst bilgisi (birden çok sayfada aynen tekrar eden başlık: kuruluş adı, tesisat adı) sistem değilse zinciri koparmaz:
+        // altındaki liste önceki sayfadaki sistemin devamıdır (#141: debi ölçümlerinin 2. sayfası kuruluş başlığından sonra kalıyordu).
+        $pagesOf = collect($sections)->groupBy('heading')->map(fn ($group) => $group->pluck('page')->unique()->count());
         $bySystem = [];
         $current = null;
         foreach ($sections as $i => $section) {
             $label = $labels[$i] ?? null;
+            if (($label['label'] ?? null) !== 'sistem' && $section['heading'] !== '' && $pagesOf[$section['heading']] > 1) {
+                if ($current !== null && str_contains($section['text'], '### Tablo')) {
+                    $bySystem[$current][] = $i;
+                }
+                continue;
+            }
             if (($label['label'] ?? null) === 'sistem' && $label['system'] !== null) {
                 $current = $label['system'];
             } elseif (!(($label['label'] ?? 'diger') === 'diger' && $current !== null && str_contains($section['text'], '### Tablo'))) {

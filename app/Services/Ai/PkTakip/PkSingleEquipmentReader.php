@@ -122,6 +122,12 @@ class PkSingleEquipmentReader
             if (trim((string) $page) === '') {
                 continue;
             }
+            // Önce sayfada madde var mı (tek soru): maddesiz kapak sayfasında küçük model bir cümleyi "1 … 50" diye numaralayıp
+            // tekrarlıyordu (#63: 94 yerine 138-152). Cevap gelmezse sayfa okunur (madde kaybolmasın).
+            $has = PkAiProvider::client($provider)->extract(self::ELEVATOR_HAS_ITEMS_PROMPT, trim((string) $page), 200, schema: ['type' => 'object', 'properties' => ['has_items' => ['type' => 'boolean']], 'required' => ['has_items']])['has_items'] ?? true;
+            if ($has === false) {
+                continue;
+            }
             $items = (array) (PkAiProvider::client($provider)->extract(self::ELEVATOR_PAGE_PROMPT, '--- SAYFA ' . ($index + 1) . " ---\n" . trim((string) $page), 12000, schema: $schema)['items'] ?? []);
             foreach ($items as $found) {
                 $text = trim(trim((string) ($found['no'] ?? '')) . ' ' . trim((string) ($found['text'] ?? '')));
@@ -191,6 +197,12 @@ PROMPT, $firstPage, 1500, schema: $schema);
 
         return $info;
     }
+
+    private const ELEVATOR_HAS_ITEMS_PROMPT = <<<'PROMPT'
+Sana bir asansör periyodik kontrol raporunun TEK bir sayfası verilecek. Bu sayfada numaralı uygunsuzluk / kusur maddeleri (madde numarası, varsa renk kodu ve madde metni) var mı?
+- Rapor ve asansör bilgileri, firma / servis bilgileri, sonuç sınıfları tablosu, imza, sayfa numarası ve e-imza notu madde DEĞİLDİR.
+- has_items = sayfada en az bir numaralı uygunsuzluk maddesi varsa true, yoksa false.
+PROMPT;
 
     private const ELEVATOR_PAGE_PROMPT = <<<'PROMPT'
 Sana bir asansör periyodik kontrol raporunun TEK bir sayfası verilecek. Sayfadaki uygunsuzluk / kusur maddelerini çıkar.
