@@ -103,9 +103,17 @@ Rapor 1 sistem ve 1 ekipman içerir; girdi pdfium metnidir. Docling bu formda b�
      - **Alt sütunlar:** ekipmanın değeri alt sütunlara bölünmüşse (PK.239 pompa "P: - | U: ELEKTRİK") her ekipman
        tek ekipman tarifi olur. Lejantın işaretlerini küçük ajan anlamlandırır (P proje, U uygulama); uygulama
        işaretiyle başlayan alt sütunu ve hücreleri kod seçer. Yalnız tek bloklu tabloda.
+     - **Yan yana gruplu kontrol listesi:** başlığın altında her sütun bölgesi ayrı satır verilir. İki madde tek
+       satırdayken küçük model sağdakini atlıyordu (PK25: "9 İstasyon yeri ✓ | 29 Hidrostatik test U.D." → 29 kaçtı).
 5. **Proje Bilgileri:** `PkElectricalAgents::facility` (yangın talimatının 2. ve 6. bölümü).
 6. **Bulgular:** `PkFindingsPass` yalnız kusur bölümünü okur. Bulguyu sisteme bağlarken madde kodunun grup harfi
-   kullanılır ("6.D.9" → D grubu).
+   kullanılır ("6.D.9" → D grubu). Eşleştirme ajanına kural: bulguda numarasıyla geçen cihaz varsa ("YD-73 NOLU DOLAPTA")
+   bulgu o cihazın sistemidir (#18 bez hortum).
+   - **Kusur bölümü başlıktan ibaretse** bölüm boştur, bütün metne dönülmez (#126: sonuç cümlesi kusur sanılıyordu).
+   - **Bulgu → ekipman:** ekipman ajanı her bulgudan sorunlu cihaz numaralarını çıkarır (`affected_equipment`; "YD-3,YD-4",
+     "YD118", "X ile Y arası dolap yok" → boş). Yerelde ekipman listesi bunlardan kurulur (`PkReportTableReader`); ortak
+     okuyucunun metin araması kullanılmaz, çünkü tek haneli ve tiresiz numaraları kaçırıyor, aralığın uçlarını alıyordu.
+     Canlı okuma bu alanı yazmaz, canlıda değişiklik yok. #18: 46 dolap bağlı (önce 40).
 
 Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrolü.
 
@@ -115,17 +123,24 @@ Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrol
 - Her sistem için:
   - karar ajanı (talimatın 3. bölümü);
   - o bölümün tablolarıyla tablo haritası (4. bölüm).
-- Ardından ortak tesis bilgisi ajanı `facility` çalışır.
+- Ardından ortak tesis bilgisi ajanı `facility` çalışır. Etiket ve değer aynı kayıtta istenir (ayrı listelerde değerler
+  hep boş geliyordu, #141); yangın proje kartı için en çok 50 alan.
 - Kısa talimatlar için `withoutAgentSections()` 5, 8, 9 ve 11. bölümleri çıkarır.
 - Ana talimat Docling değil düz metin (`text_pages`) alır: Docling metni elektrikte gerilemeye yol açtı.
-- Havalandırma bulguları: kusur bölümü + sistem tablolarının Camelot satırları (`ventilationFindingsText`; sayfaya
-  taşan devamı dahil). Bütün metinde küçük model ikinci "UYGUN DEĞİL" ölçüm satırını kaçırıyordu (#141).
+- Havalandırma bulguları iki ayrı ajan:
+  - kusur bölümü diğer türlerdeki gibi;
+  - sistem tablolarının Camelot satırları (`ventilationRows`, sayfaya taşan devamı dahil) numaralı verilir, ölçüm satırı
+    ajanı yalnız uygun olmayan satırın numarasını söyler. Bulgu metni satırın kendisi, sistemi satırın geldiği tablonun
+    sistemi (#141: ajan metni kurarken komşu satırın cihaz numarasını yazıyor, aynı istekte kontrol listesini kusur sanıyordu).
 
 ### Bölümler: Docling yerleşim tuhaflıkları (`PkDocumentSections`, bütün tesisatlar)
 
 - **Tek hücreli tablo başlıktır:** Docling bazı çerçeveli başlıkları ("5.2. ÖLÇÜM VERİLERİ") tek hücreli tablo veriyor.
 - **Sayfa üst bilgisi zinciri koparmaz:** birden çok sayfada aynen tekrar eden ve sistem etiketi almamış başlık (kuruluş
-  adı, tesisat adı) önceki sayfadaki sistemin devamını kesmez; altındaki tablo sisteme eklenir.
+  adı, tesisat adı) önceki sayfadaki sistemin devamını kesmez; altındaki tablo sisteme eklenir. Önceki bir sayfada
+  (başlık ya da düz satır olarak) geçmiş başlık, etiketi "sistem" olsa bile tekrardır (#141: "PERİYODİK KONTROL RAPORU"
+  bir çalışmada "diğer", birinde "sistem" etiketlendi). İlk kez görülen form başlığı yeni sistemdir.
+- Etiketleyiciye: belge / doküman / proje kontrol listesi, katalogda karşılığı varsa sistemdir (#141 Proje Bilgileri).
 - "diğer" etiketli bölümdeki tablo önceki sistemin devamıdır (önceden vardı).
 
 ## 4. Yerel model ve istemci
@@ -192,9 +207,22 @@ Docling tabloları yoksa eski yol çalışır: sistemler adımı + tablo kontrol
 | PK.239 pompa | Özellikler uygulamadaki değerle (yakıt, güç, debi, basınç), PDF ile aynı |
 | Toplu #6, #7, #10 | 468/468, 458/458, 27/27 tüp; uygunsuz, rapor no, tarih doğru |
 
+**29 Eki 2026** (gerileme: elektrik #122, #125, #126, #128, #129 ve PK.239 önceki turla aynı):
+
+| Rapor | Sonuç |
+|---|---|
+| #126 | Sonuç cümlesi artık kusur değil (uzmanın tek bulgusu bir kriter maddesi, kurala göre bulgu değil) |
+| #141 | 4/4 sistem (Proje Bilgileri, Tesis Özellikleri dahil), bulgu 2/2 doğru sistemde ve doğru cihazla, 64-119 sn |
+| #18 | Bulgu 18/18, sistem sonucu 7/7 (3 çalıştırmanın 2'sinde; bkz. açık), 46 dolap bulguya bağlı |
+| PK25 | 29. madde (U.D.) artık yakalanıyor |
+
 Açık:
-- #126: sonuç cümlesi kusur sanılıyor (eski).
-- Bırakıldı (talimat kurcalamak gerekir): #18 bez hortum bulgusu sprinkler'e; #141 tesis kartı ve "Proje Bilgileri".
+- **Küçük model sınır kararlarında çalıştırmadan çalıştırmaya değişiyor:** #18 bez hortum bulgusu bir çalıştırmada yine
+  Sprinkler'e gitti; PK25 "Sistemin Genel Kontrolleri" grubu bir çalıştırmada Sabit Boru (kullanıcının onayladığı), birinde
+  Sprinkler. Talimat kuralı bunu güvenilir çözmüyor. Kalıcı çözüm: bulgunun sistemini cihaz numaralarından kodla bulmak
+  (numaralar tek bir sistemin ekipmanında varsa o sistem); bunun için sistem sonucunun ekipman tablosu okunduktan sonra
+  hesaplanması gerekir.
+- Kusur ajanı bazen iki satırı tek bulgu yapıyor (#18: YD-79/83/85/86, YD-33…60 bulgusunun altında).
 - Ortak okuyucu (`FireSuppressionUnifiedNormalizer`) başlıksız devam sayfasını okumuyor (#141 debi 14 yerine 5). Canlıda da
   böyle; okuyucuya dokunulmadı.
 

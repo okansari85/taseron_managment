@@ -45,4 +45,26 @@ class PkDocumentSectionsTest extends TestCase
         $this->assertStringContainsString('### Tablo 11', $debi);
         $this->assertStringNotContainsString('T: 0 232', $debi);
     }
+
+    public function test_repeated_page_header_labelled_as_system_keeps_the_system(): void
+    {
+        $pages = [
+            "## HAVALANDIRMA\nPERİYODİK KONTROL RAPORU\n## 5.2. ÖLÇÜM\n### Tablo 10\n| Menfez No | Debi |\n| 1 | 291 |",
+            "## PERİYODİK KONTROL RAPORU\n### Tablo 11\n| 6 | 0 |\n## DEDEKTÖR FORMU\n### Tablo 12\n| a | b |",
+            "## DEDEKTÖR FORMU\n### Tablo 13\n| c | d |",
+        ];
+        $labelled = new class extends PkDocumentSections {
+            public function label(array $sections, array $systems, ?string $provider = null, string $rules = ''): array
+            {
+                return [0 => ['label' => 'rapor_bilgisi', 'system' => null], 1 => ['label' => 'sistem', 'system' => 'Debi'], 2 => ['label' => 'sistem', 'system' => 'Lokal'],
+                    3 => ['label' => 'sistem', 'system' => 'Dedektör'], 4 => ['label' => 'sistem', 'system' => 'Dedektör']];
+            }
+        };
+        $bySystem = $labelled->texts($pages, ['Debi', 'Lokal', 'Dedektör'])['by_system'];
+        $this->assertSame(['Debi', 'Dedektör'], array_keys($bySystem));
+        $this->assertStringContainsString('### Tablo 11', $bySystem['Debi']);
+        // İlk kez görülen form başlığı yeni sistemdir; sonraki sayfadaki tekrarı aynı sistemde kalır.
+        $this->assertStringNotContainsString('### Tablo 12', $bySystem['Debi']);
+        $this->assertStringContainsString('### Tablo 13', $bySystem['Dedektör']);
+    }
 }

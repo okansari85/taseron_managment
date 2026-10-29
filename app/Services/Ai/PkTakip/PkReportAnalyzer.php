@@ -100,7 +100,7 @@ class PkReportAnalyzer
                 $semantic['extracted_data']['facility_information'] = (array) ($facility['facility_information'] ?? []);
                 $semantic['extracted_data']['result_legend'] = (array) ($facility['result_legend'] ?? []);
             }
-            $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback);
+            $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback, equipmentLinks: true);
         }
 
         return $semantic;

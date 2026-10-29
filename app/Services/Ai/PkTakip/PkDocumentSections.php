@@ -73,7 +73,7 @@ class PkDocumentSections
 Sana bir periyodik kontrol raporunun bölüm başlıkları ve her bölümün ilk satırları verilecek. HER başlık için bölümün ne olduğunu etiketle (heading = başlık, listede yazdığı gibi).
 - rapor_bilgisi: rapor no, tarihler, kontrol talep eden firma / müşteri bilgileri.
 - tesis_bilgisi: tesisin / projenin özellikleri (kullanım amacı, şebeke tipi, proje bilgisi gibi).
-- sistem: bir tesisat sisteminin kontrol listesi, ölçümleri ya da ekipman listesi. system = aşağıdaki listeden o sistemin adı.
+- sistem: bir tesisat sisteminin kontrol listesi, ölçümleri ya da ekipman listesi. system = aşağıdaki listeden o sistemin adı. Belge / doküman / proje kontrol listesi de (proje var mı, projeye uygun mu, kayıtlar) listede karşılığı varsa sistemdir.
 - kusur: kusur / uygunsuzluk / eksiklik açıklamaları, notlardaki tespitler.
 - sonuc: sonuç ve kanaat.
 - kurulus: raporu düzenleyen muayene kuruluşu, onay, imza, personel.
@@ -124,11 +124,21 @@ PROMPT . ($rules !== '' ? "\n\nSİSTEM KURALI:\n" . $rules : ''), "BÖLÜMLER:\n
         // Sayfa üst bilgisi (birden çok sayfada aynen tekrar eden başlık: kuruluş adı, tesisat adı) sistem değilse zinciri koparmaz:
         // altındaki liste önceki sayfadaki sistemin devamıdır (#141: debi ölçümlerinin 2. sayfası kuruluş başlığından sonra kalıyordu).
         $pagesOf = collect($sections)->groupBy('heading')->map(fn ($group) => $group->pluck('page')->unique()->count());
+        // Önceki bir sayfada (başlık ya da düz satır olarak) geçmiş başlık, etiketi ne olursa olsun sayfa üst bilgisi tekrarıdır:
+        // süren sistemi koparmaz. Etiketleyici aynı üst bilgiyi bir çalışmada "diger", birinde "sistem" diyordu (#141: 2. sayfanın
+        // "PERİYODİK KONTROL RAPORU" başlığı, 1. sayfada düz satır; debi ölçümlerinin devamı fazla sisteme gitti).
+        $firstPage = [];
+        foreach ($sections as $section) {
+            foreach ([$section['heading'], ...explode("\n", $section['text'])] as $line) {
+                $firstPage[trim($line)] = min($firstPage[trim($line)] ?? PHP_INT_MAX, $section['page']);
+            }
+        }
         $bySystem = [];
         $current = null;
         foreach ($sections as $i => $section) {
             $label = $labels[$i] ?? null;
-            if (($label['label'] ?? null) !== 'sistem' && $section['heading'] !== '' && $pagesOf[$section['heading']] > 1) {
+            $repeat = $current !== null && $section['heading'] !== '' && $section['page'] > $firstPage[trim($section['heading'])];
+            if ($repeat || (($label['label'] ?? null) !== 'sistem' && $section['heading'] !== '' && $pagesOf[$section['heading']] > 1)) {
                 if ($current !== null && str_contains($section['text'], '### Tablo')) {
                     $bySystem[$current][] = $i;
                 }

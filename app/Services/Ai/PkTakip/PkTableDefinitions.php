@@ -133,7 +133,8 @@ class PkTableDefinitions
     // | U. | U.D. | N.U."). Altındaki satırlarda dolu hücre, sütununun başlığıyla yazılır; grup başlığı / kodu ya da boş başlıklı
     // sütunlar (madde no, madde metni) olduğu gibi kalır. Yan yana gruplu formda her sütun bölgesinin (başlık satırındaki grup
     // başlığından başlar) son grup başlığı maddenin önüne yazılır ("[Su Deposu Kontrolleri] 8 …"): küçük model kodsuz maddenin
-    // grubunu bulamıyordu (PK25). Grup başlık satırı bölgesi olduğu gibi kalır.
+    // grubunu bulamıyordu (PK25). Grup başlık satırı bölgesi olduğu gibi kalır. Başlığın altında her bölge ayrı satırdır: iki madde
+    // tek satırdayken küçük model sağdakini atlıyordu (PK25: "9 İstasyon yeri ✓ | 29 Hidrostatik test U.D." → 29 kaçtı).
     private function labelled(array $grid, array $groups): array
     {
         $isGroup = fn (array $cells) => (bool) array_intersect($cells, $groups);
@@ -165,11 +166,13 @@ class PkTableDefinitions
                 continue;
             }
             foreach ($bounds as $k => $start) {
-                $end = $bounds[$k + 1] ?? count($row);
-                $cells = array_slice($row, $start, $end - $start, true);
+                // İlk bölge satırın başından (ilk grup başlığının solundaki sütunlar düşmesin).
+                $from = $k === 0 ? 0 : $start;
+                $cells = array_slice($row, $from, ($bounds[$k + 1] ?? count($row)) - $from, true);
                 if ($isGroup($cells)) {
                     // Bu bölgenin yeni grubu: başlık hücresi (kod değil, en uzun grup hücresi).
                     $starts[$start] = $longest($cells);
+                    $out[] = array_values($cells);
                     continue;
                 }
                 $first = true;
@@ -177,11 +180,11 @@ class PkTableDefinitions
                     if ($cell === '') {
                         continue;
                     }
-                    $row[$c] = ($first ? '[' . $starts[$start] . '] ' : '') . (($labels[$c] ?? '') !== '' ? $labels[$c] . ': ' . $cell : $cell);
+                    $cells[$c] = ($first ? '[' . $starts[$start] . '] ' : '') . (($labels[$c] ?? '') !== '' ? $labels[$c] . ': ' . $cell : $cell);
                     $first = false;
                 }
+                $out[] = array_values($cells);
             }
-            $out[] = $row;
         }
 
         return $out;

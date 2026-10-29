@@ -35,8 +35,10 @@ PROMPT;
 PROMPT;
 
     // $wholeText: kusur bölümü verildiğinde yedek metin (PkPageSections::merge: Docling'in kusur bölümü ya da kısa raporda bütün
-    // metin); bölümde kusur bulunamazsa (yanlış bölüm) arama oradan.
-    public function apply(array $semantic, string $documentText, ?string $provider = null, bool $measurementRows = false, array $systemEquipment = [], bool $sectionOnly = false, ?string $wholeText = null): array
+    // metin); bölümde kusur bulunamazsa (yanlış bölüm) arama oradan. $measurementTable: sistem tablolarının satırları
+    // ([['system' => ..., 'line' => "| … |"]], havalandırma); uygun olmayan ölçüm satırları da bulgu olur. $equipmentLinks: bulgudaki
+    // cihaz numaraları da okunur (affected_equipment).
+    public function apply(array $semantic, string $documentText, ?string $provider = null, bool $measurementRows = false, array $systemEquipment = [], bool $sectionOnly = false, ?string $wholeText = null, ?array $measurementTable = null, bool $equipmentLinks = false): array
     {
         $systems = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->pluck('system_name')->filter()->unique()->values()->all();
         // Bütün rapor verildiğinde her madde nereden alındığını söyler; yalnız kusur bölümünden (havalandırmada ölçüm tablosundan)
@@ -81,7 +83,16 @@ PROMPT;
         $texts = collect($items)->filter(fn ($found) => $sectionOnly || in_array($found['from'] ?? null, ['kusur_bolumu', 'olcum_tablosu'], true))
             ->map(fn ($found) => (string) ($found['text'] ?? ''))->filter()->values()->all();
         $assigned = $this->assignSystems($texts, $semantic, $systems, $provider, $systemEquipment);
+        // Ölçüm satırı bulgusunun sistemi satırın geldiği sistem tablosudur (ajana sorulmaz): eşleştirme ajanı menfez satırlarını fan
+        // sistemine bağlıyordu (#141).
+        foreach ($this->measurementFindings($measurementTable ?? [], $provider) as $text => $system) {
+            if (!in_array($text, $texts, true)) {
+                $assigned[count($texts)] = in_array($system, $systems, true) ? $system : null;
+                $texts[] = $text;
+            }
+        }
 
+        $equipment = $equipmentLinks ? $this->findingEquipment($texts, $provider) : [];
         $semantic['extracted_data']['findings'] = collect($texts)->map(fn (string $text, int $index) => [
             'id' => 'F' . ($index + 1),
             'system_name' => $assigned[$index] ?? null,
@@ -89,7 +100,7 @@ PROMPT;
             'source_pages' => [],
             'severity' => null,
             'ambiguous' => false,
-        ])->all();
+        ] + ($equipment ? ['affected_equipment' => $equipment[$index] ?? []] : []))->all();
 
         // Mevcut talimatın 4. bölüm kuralı: sisteme atanmış uygunsuzluk bulgusu varsa sistem uygun değildir.
         foreach ((array) ($semantic['template']['fire_systems']['systems'] ?? []) as $i => $system) {
@@ -101,6 +112,58 @@ PROMPT;
 
         return $semantic;
     }
+
+    // Ölçüm tablosu bulguları (havalandırma: sonucu uygun olmayan ölçüm satırı; uzman öyle kaydediyor). Satırlar numaralı, ajan
+    // yalnız numarayı verir, bulgu satırın kendisi (hücreler raporda yazdığı gibi). Kusur bölümüyle aynı istekte küçük model kontrol
+    // listesi maddelerini de kusur sanıyor, metni kurarken komşu satırın cihaz numarasını yazıyordu (#141: 11 yerine 12 NUMARA).
+    // Bulgudaki sorunlu cihazların numaraları (bulgu index'i => ["3", "4"]). Ortak okuyucu bunları alır, kendi bulduklarıyla
+    // birleştirir; ekipmana bağlama ve aynı no birden çok binadaysa konumla seçme PkInstallationReportReader'da. Ortak okuyucu
+    // numarayı yalnız iki haneli ve kısaltmasız yazılmışsa buluyordu (#18: "YD-3", "YD-7", "YD118" dolaplara bağlanmıyordu).
+    private function findingEquipment(array $texts, ?string $provider): array
+    {
+        if (!$texts) {
+            return [];
+        }
+        $keys = array_map(fn ($index) => 'b' . $index, array_keys($texts));
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(
+            self::EQUIPMENT_PROMPT,
+            "BULGULAR:\n" . collect($texts)->map(fn (string $text, int $index) => $index . ': ' . $text)->implode("\n"),
+            4000,
+            schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'array', 'maxItems' => 60, 'items' => ['type' => 'string']]), 'required' => $keys]
+        );
+
+        return array_map(fn ($index) => array_values(array_unique(array_filter(array_map(fn ($no) => trim((string) $no), (array) ($found['b' . $index] ?? []))))), array_keys($texts));
+    }
+
+    private const EQUIPMENT_PROMPT = <<<'PROMPT'
+Periyodik kontrol raporunun numaralı bulguları verilecek. HER bulgu için, bulgunun sorunlu olduğunu söylediği cihazların numaralarını yaz. Anahtar: b + bulgunun numarası; değer: numaralar listesi.
+- Numarayı cihaz türünün kısaltması olmadan yaz: "YD-3" → "3", "H-12" → "12", "YD118" → "118".
+- Birden çok cihaz sayılmışsa (örn. "YD-3,YD-4,YD-5", "YD-33-34-35") her numara ayrı öğe.
+- Bulgu numarası yazılmış bir cihazdan söz etmiyorsa (örn. "dolap kabinleri yok", "dizel pompa çalışmıyor") boş liste.
+- Bulgu iki numara arasında cihaz OLMADIĞINI söylüyorsa (örn. "YD-16 ile YD-72 arası yangın dolabı yok") o numaralar sorunlu cihaz değildir: boş liste.
+- Madde / soru kodları (örn. "6.D.9.", "5.20") cihaz numarası değildir.
+PROMPT;
+
+    /** @return array<string, string> bulgu metni (satır) => satırın sistemi */
+    private function measurementFindings(array $rows, ?string $provider): array
+    {
+        if (!$rows) {
+            return [];
+        }
+        $numbered = collect($rows)->map(fn (array $row, int $i) => '[satır ' . ($i + 1) . '] ' . $row['line'])->implode("\n");
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(self::MEASUREMENT_TABLE, $numbered, 1000, schema: ['type' => 'object', 'properties' => [
+            'rows' => ['type' => 'array', 'maxItems' => count($rows), 'items' => ['type' => 'integer', 'minimum' => 1, 'maximum' => count($rows)]],
+        ], 'required' => ['rows']]);
+
+        return collect((array) ($found['rows'] ?? []))->map(fn ($n) => $rows[(int) $n - 1] ?? null)->filter()
+            ->mapWithKeys(fn (array $row) => [trim($row['line'], ' |') => $row['system']])->all();
+    }
+
+    private const MEASUREMENT_TABLE = <<<'PROMPT'
+Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [satır N] yazar. Ölçüm tablolarında (ölçüm noktası / menfez / mahal başına hız, debi, basınç gibi ölçülen değerler) sonucu "uygun değil" olan satırların numaralarını yaz (rows).
+- Yalnız ölçüm satırları: kontrol listesi maddeleri (madde kodu, kriter / soru ve yanında U, U.D gibi işaret), cihaz listesi ve başlık satırları ölçüm satırı değildir; sonuçları ne olursa olsun yazma.
+- Sonucu uygun olan satırları yazma. Uygun olmayan ölçüm satırı yoksa rows = [].
+PROMPT;
 
     // Kusur bölümü ajanı: bölümün içeriği aynen ("" = bölüm var ama boş); raporda böyle bir bölüm yoksa null. $inSection: metin
     // zaten kusur bölümü diye seçilmiş (harita / Docling): başlık aranmaz, içindeki kusur maddeleri kopyalanır; madde yoksa null
@@ -151,6 +214,7 @@ PROMPT, $documentText, 3000, schema: ['type' => 'object', 'properties' => ['sect
 Bir tesisat periyodik kontrol raporunun bulguları ve sistemleri verilecek. Her bulgunun ait olduğu sistemi seç.
 - ÖNCE madde koduna bak: bulgunun başında madde kodu varsa (örn. "6.G.5."), koddaki grup harfi (G) hangi sistemin bölüm başlığındaki kodla aynıysa (örn. "G HİDRANT") bulgu o sistemindir; metinde başka bir ekipman adı (örn. "dolap içerisinde") geçse bile.
 - Bulgudaki ekipman adını sistemlerin ekipman listeleriyle karşılaştır (örn. bulguda pompa geçiyorsa ekipmanında pompa olan sistem). Bulgu hangi sistemin ekipmanını ya da bölümünü anlatıyorsa (örn. dolap, hidrant, pompa, depo, vana, boru, sprinkler, ölçüm noktası, pano) o sistemi seç. Bulgunun başındaki madde / bölüm kodu (örn. "7.B.3.") sistemi gösterir: kod, hangi sistemin rapordaki bölüm başlığının koduyla başlıyorsa bulgu o sisteme aittir.
+- Bulguda numarasıyla / yeriyle bir cihaz geçiyorsa (örn. "YD-73 NOLU DOLAPTA …", "H-5 hidrantında …") bulgu o cihazın sistemine aittir; cümlenin devamındaki "sistemi" sözcüğü ya da cihazın bir parçasının adı başka bir sistemi göstermez.
 - Bulgunun konusu sistemin adıyla / ekipmanıyla açıkça örtüşmüyorsa null (genel bulgu). Listede tek ya da az sistem var diye bulguyu ilgisiz bir sisteme bağlama; örneğin belge / kayıt sistemi yalnız belge, proje, kayıt eksikliği bulgularını alır.
 - Bulgunun başında madde kodu varsa (örn. "6.D.9", "B.3"), koddaki grup harfi / numarası hangi sistemin bölüm başlığındaki kodla aynıysa (örn. "D Yangın Dolapları") bulgu o sistemindir.
 - HER bulgu için bir kayıt yaz: index = bulgunun numarası.

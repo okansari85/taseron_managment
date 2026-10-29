@@ -269,7 +269,9 @@ class PkReportTableReader
             'source_pages' => (array) ($finding['source_pages'] ?? []),
             'severity' => $finding['severity'] ?? null,
             'ambiguous' => (bool) ($finding['ambiguous'] ?? false),
-            'affected_equipment' => $linked[(string) ($finding['id'] ?? '')] ?? [],
+            // Yerel ekipman ajanı numaraları yazdıysa (PkFindingsPass) onlar: normalizer'ın metin araması aralığın uçlarını da
+            // alıyordu (#18: "YD-16 İLE YD-72 ARASI dolap yok" → 16 ve 72 uygun değil). Canlı okuma bu alanı yazmaz.
+            'affected_equipment' => array_key_exists('affected_equipment', $finding) ? (array) $finding['affected_equipment'] : ($linked[(string) ($finding['id'] ?? '')] ?? []),
         ], array_values(array_filter((array) ($semantic['extracted_data']['findings'] ?? []), 'is_array')));
     }
 

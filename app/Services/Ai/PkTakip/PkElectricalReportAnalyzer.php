@@ -98,19 +98,29 @@ class PkElectricalReportAnalyzer
         // havalandırmada fan tablosunu düşürüyordu (#141, 23 Eki; gpt-luna kaydıyla karşılaştırma).
         // Diğer türlerde ölçüm tablolarını tür talimatı tarif eder (eski, çalışan mantık); ayrı tablo denetimi yok.
 
-        return app(PkFindingsPass::class)->apply($semantic, $typeSlug === self::VENTILATION ? $this->ventilationFindingsText($parts, $doclingTables, $pdfPath) ?? $structuredText : ($parts['findings'] ?? $structuredText), measurementRows: $typeSlug === self::VENTILATION, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug), sectionOnly: $typeSlug !== self::VENTILATION && isset($parts['findings']), wholeText: $findingsFallback);
+        // Havalandırmada kusur bölümü diğer türler gibi; ölçüm satırı bulguları sistem tablolarının satırlarından ayrı ajanla. Satır
+        // yoksa eski yol: bütün metin + ölçüm satırı istisnası.
+        $rows = $typeSlug === self::VENTILATION ? $this->ventilationRows($parts, $doclingTables, $pdfPath) : null;
+        $wholeReport = $typeSlug === self::VENTILATION && $rows === null;
+
+        return app(PkFindingsPass::class)->apply($semantic, $wholeReport ? $structuredText : ($parts['findings'] ?? $structuredText), measurementRows: $wholeReport, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug), sectionOnly: !$wholeReport && isset($parts['findings']), wholeText: $findingsFallback, measurementTable: $rows);
     }
 
-    // Havalandırma bulgularının girdisi: kusur bölümü + sistem tablolarının Camelot satırları (sayfaya taşan devamı dahil). Bütün
-    // metinde küçük model ikinci "UYGUN DEĞİL" ölçüm satırını kaçırıp kaynağını kontrol listesi yazıyordu (#141). Tablo yoksa null.
-    private function ventilationFindingsText(array $parts, array $doclingTables, ?string $pdfPath): ?string
+    // Havalandırma sistem tablolarının Camelot satırları (sayfaya taşan devamı dahil), satırın sistemiyle: bütün metinde küçük model
+    // ikinci "UYGUN DEĞİL" ölçüm satırını kaçırıp kaynağını kontrol listesi yazıyordu (#141). Tablo yoksa null.
+    private function ventilationRows(array $parts, array $doclingTables, ?string $pdfPath): ?array
     {
-        $tables = collect((array) ($parts['by_system'] ?? []))
-            ->flatMap(fn (string $text) => collect(explode("\n", $text))->filter(fn ($line) => str_starts_with($line, '### Tablo '))->map(fn ($line) => (int) substr($line, 10)))
-            ->unique()->values()->all();
-        $rows = $tables && $doclingTables && $pdfPath ? app(PkTableDefinitions::class)->rows($pdfPath, $doclingTables, $tables) : '';
+        $rows = [];
+        foreach ($doclingTables && $pdfPath ? (array) ($parts['by_system'] ?? []) : [] as $system => $text) {
+            $tables = array_values(array_filter(array_map(fn ($line) => str_starts_with($line, '### Tablo ') ? (int) substr($line, 10) : 0, explode("\n", $text))));
+            foreach ($tables ? explode("\n", app(PkTableDefinitions::class)->rows($pdfPath, $doclingTables, $tables)) : [] as $line) {
+                if ($line !== '' && !in_array($line, array_column($rows, 'line'), true)) {
+                    $rows[] = ['system' => (string) $system, 'line' => $line];
+                }
+            }
+        }
 
-        return $rows === '' ? null : "## KUSUR BÖLÜMÜ\n" . trim($parts['findings'] ?? '-') . "\n\n## ÖLÇÜM TABLOLARI\n" . $rows;
+        return $rows ?: null;
     }
 
     // Talimatın 5, 8, 9, 11 numaralı bölümleri (rapor bilgisi, genel sonuç, bulgular, kuruluş) çıkarılır; yerine bu alanların

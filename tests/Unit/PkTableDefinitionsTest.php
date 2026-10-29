@@ -216,10 +216,14 @@ class PkTableDefinitionsTest extends TestCase
 
         $rows = explode("\n", (new PkTableDefinitions($camelot))->rows('x.pdf', [['no' => 1, 'page' => 1, 'area' => '21,700,565,40']], [1], ['TESTLER VE KONTROLLER', 'Sistemin Genel Kontrolleri', 'Su Deposu Kontrolleri']));
 
-        $this->assertSame('| [TESTLER VE KONTROLLER] 4 Projeye uygun mu? |  | U.D.: ✓ |  | [Sistemin Genel Kontrolleri] 29 | Hidrostatik test |  | U.D.: ✓ |  |', $rows[2]);
+        // Her bölge ayrı satır: yan yana iki madde iki satır.
+        $this->assertSame('| [TESTLER VE KONTROLLER] 4 Projeye uygun mu? |  | U.D.: ✓ |  |', $rows[2]);
+        $this->assertSame('| [Sistemin Genel Kontrolleri] 29 | Hidrostatik test |  | U.D.: ✓ |  |', $rows[3]);
         // Sol bölgede yeni grup başlığı (olduğu gibi kalır), sağ bölge maddesi kendi grubuyla.
-        $this->assertSame('| Su Deposu Kontrolleri | U. | U.D. | N.U. | [Sistemin Genel Kontrolleri] 30 | Korozyon | U.: ✓ |  |  |', $rows[3]);
-        // Sonraki sol madde yeni grubun altında.
-        $this->assertSame('| [Su Deposu Kontrolleri] 8 Depo kayıtları |  | U.D.: ✓ |  |  |  |  |  |  |', $rows[4]);
+        $this->assertSame('| Su Deposu Kontrolleri | U. | U.D. | N.U. |', $rows[4]);
+        $this->assertSame('| [Sistemin Genel Kontrolleri] 30 | Korozyon | U.: ✓ |  |  |', $rows[5]);
+        // Sonraki sol madde yeni grubun altında; boş sağ bölge satır olmaz.
+        $this->assertSame('| [Su Deposu Kontrolleri] 8 Depo kayıtları |  | U.D.: ✓ |  |', $rows[6]);
+        $this->assertCount(7, $rows);
     }
 }

@@ -95,20 +95,33 @@ class PkElectricalAgents
             return [];
         }
         $schema = $this->contract->responseSchema()['properties'];
-        $template = $schema['template']['properties']['facility_or_project_information'];
-        $template['properties']['fields']['maxItems'] = 30;
-        $template['properties']['fields']['items']['properties']['label_patterns']['maxItems'] = 2;
-
-        return PkLocalRetry::client($provider, fn () => false)->extract(
-            $rules . "\n\nBU ADIMDA: yalnız tesis / proje bilgileri (template.facility_or_project_information, extracted_data.facility_information) ve sonuç lejantı (extracted_data.result_legend).",
+        // Etiket ve değer aynı kayıtta: ayrı listelerde (template alanları + extracted_data değerleri) küçük model etiketleri
+        // yazıp bütün değerleri null bırakıyordu (NuExtract3 #141: "Kullanım Amacı | ASPİRASYON / İKLİMLENDİRME" boş).
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(
+            $rules . "\n\nBU ADIMDA: yalnız tesis / proje bilgileri ve sonuç lejantı (result_legend). section_heading_patterns = tesis bilgileri bölümünün başlıkları. fields: raporda GERÇEKTEN bulunan her alan için key, label (PDF'deki etiket AYNEN) ve value (o etiketin yanında / altında yazan değer AYNEN; boşsa null).",
             $text,
             4000,
             schema: ['type' => 'object', 'properties' => [
-                'facility_or_project_information' => $template,
-                'facility_information' => $schema['extracted_data']['properties']['facility_information'],
+                'section_heading_patterns' => ['type' => 'array', 'maxItems' => 5, 'items' => ['type' => 'string']],
+                // 50: yangın proje kartında Proje / Uygulama çiftleri 30'u aşıyor (#18); döngüde tekrar edenleri aşağıda unique atar.
+                'fields' => ['type' => 'array', 'maxItems' => 50, 'items' => ['type' => 'object', 'properties' => [
+                    'key' => ['type' => 'string'],
+                    'label' => ['type' => 'string'],
+                    'value' => ['type' => ['string', 'null']],
+                ], 'required' => ['key', 'label', 'value']]],
                 'result_legend' => $schema['extracted_data']['properties']['result_legend'],
-            ], 'required' => ['facility_or_project_information', 'facility_information', 'result_legend']]
+            ], 'required' => ['section_heading_patterns', 'fields', 'result_legend']]
         );
+        $fields = collect((array) ($found['fields'] ?? []))->filter(fn ($field) => is_array($field) && filled($field['key'] ?? null))->unique('key')->values();
+
+        return [
+            'facility_or_project_information' => [
+                'section_heading_patterns' => (array) ($found['section_heading_patterns'] ?? []),
+                'fields' => $fields->map(fn (array $field) => ['key' => $field['key'], 'label_patterns' => array_filter([(string) ($field['label'] ?? '')])])->all(),
+            ],
+            'facility_information' => $fields->map(fn (array $field) => ['key' => $field['key'], 'value' => $field['value'] ?? null])->all(),
+            'result_legend' => (array) ($found['result_legend'] ?? []),
+        ];
     }
 
     // Talimatın istenen numaralı bölümleri (başlık satırı "N. "; alt bölümler "4a." gibi bir öncekinin içinde kalır);
