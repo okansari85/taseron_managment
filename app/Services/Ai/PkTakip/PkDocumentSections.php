@@ -154,13 +154,42 @@ PROMPT . ($rules !== '' ? "\n\nSİSTEM KURALI:\n" . $rules : ''), "BÖLÜMLER:\n
             }
         }
 
+        // Ayrı kusur bölümü olmayan raporda kusurlar sonuç bölümünde ya da notlarda yazılı olabilir (kör test, 31 Eki: "8. SONUÇ VE
+        // KANAAT" altında 7 kusur): boş olmayan sonuç ve tablosuz diğer bölümler verilir, kusuru kusur ajanı içeriğinden ayırır.
+        $withoutKusur = array_values(array_filter($of(['sonuc', 'diger']), fn (int $i) => trim($sections[$i]['text']) !== ''
+            && ($labels[$i]['label'] === 'sonuc' || !str_contains($sections[$i]['text'], '### Tablo'))));
+
         return [
             'by_system' => array_map(fn (array $indexes) => self::text($sections, $indexes), $bySystem),
             'facility' => self::text($sections, $of(['tesis_bilgisi'])),
             'systems' => self::text($sections, $of(['sistem', 'tesis_bilgisi'])),
-            'findings' => self::text($sections, $of(['kusur'])),
+            'findings' => self::text($sections, $of(['kusur']) ?: $withoutKusur) ?? self::textTables($pages),
             'header' => self::text($sections, $of(['rapor_bilgisi', 'sonuc', 'kurulus'])),
         ];
+    }
+
+    // Tek sütunlu tablolar yazıdır, satırları düz metin olarak: Docling notları ve sonucu böyle verince bölüm başlığı çıkmıyor (kör test,
+    // 11930-elektrik: "| 8. SONUÇ VE KANAAT |"). Sütunlu tablolar girmez, kriter ve ölçüm satırları kusur ajanına gitmez.
+    public static function textTables(array $pages): ?string
+    {
+        $out = [];
+        foreach ($pages as $page) {
+            $lines = explode("\n", (string) $page);
+            foreach ($lines as $k => $line) {
+                if (!str_starts_with($line, '### Tablo ')) {
+                    continue;
+                }
+                $rows = [];
+                for ($j = $k + 1; str_starts_with($lines[$j] ?? '', '| '); $j++) {
+                    $rows[] = trim(substr($lines[$j], 2, -2));
+                }
+                if (!array_filter($rows, fn ($row) => str_contains($row, ' | '))) {
+                    $out = [...$out, ...array_diff($rows, ['0'])];
+                }
+            }
+        }
+
+        return $out ? implode("\n", $out) : null;
     }
 
     // Tek bölümün sistemi (bölümün başı yeter: başlık, tablo başlıkları, ilk satırlar).

@@ -399,6 +399,29 @@ class PkTableDefinitions
         return true;
     }
 
+    /**
+     * Docling'in alanı Camelot tablosuyla eşleşmediğinde (liste büyük bir tablonun ortasında, SGS topraklama) tarif başlık satırından: kimlik etiketini
+     * taşıyan satırın dolu hücreleri sütunlardır. Satırları PkGridRows okur.
+     */
+    public function fromHeader(string $pdfPath, string $name, string $identity): ?array
+    {
+        foreach ((array) ($this->camelot->extract($pdfPath)['tables'] ?? []) as $table) {
+            if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice') {
+                continue;
+            }
+            foreach ((array) ($table['data'] ?? []) as $row) {
+                $cells = array_map(fn ($cell) => trim((string) $cell), array_values((array) $row));
+                if (in_array($identity, $cells, true)) {
+                    $labels = array_values(array_unique(array_filter($cells, fn (string $cell) => $cell !== '' && $cell !== $identity)));
+
+                    return $labels ? $this->contract($name, 'rows', $identity, null, null, [$identity, ...$labels], array_fill_keys($labels, null)) : null;
+                }
+            }
+        }
+
+        return null;
+    }
+
     // JSON sözleşmesindeki equipment_definitions kaydı; durum burada yok (kriter sonucu tablo okuyucudan, yoksa bilinmiyor).
     private function contract(string $name, string $axis, ?string $identity, ?string $identityValue, ?int $groupWidth, array $headers, array $values): array
     {

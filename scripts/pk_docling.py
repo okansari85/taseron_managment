@@ -109,13 +109,15 @@ def main() -> int:
     if len(sys.argv) != 2:
         print(json.dumps({"error": "usage: pk_docling.py <pdf> | --serve <port>"}, ensure_ascii=False))
         return 1
+    # stdout yalnız JSON: kütüphanenin uyarı satırı ("MatchingPostProcessor WARNING") çıktının başına karışıp okumayı bozuyordu.
+    stdout, sys.stdout = sys.stdout, sys.stderr
     try:
         out = convert(converter(), sys.argv[1])
     except Exception as exc:  # noqa: BLE001 - hata PHP tarafına JSON olarak gider
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=stdout)
         return 1
 
-    print(json.dumps(out, ensure_ascii=False))
+    print(json.dumps(out, ensure_ascii=False), file=stdout)
     return 0
 
 

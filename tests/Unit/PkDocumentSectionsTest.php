@@ -46,6 +46,30 @@ class PkDocumentSectionsTest extends TestCase
         $this->assertStringNotContainsString('T: 0 232', $debi);
     }
 
+    // Kör test (31 Eki): kusurlar "8. SONUÇ VE KANAAT" altında; ayrı kusur bölümü yok.
+    public function test_findings_fall_back_to_result_and_plain_other_sections_only_without_a_kusur_section(): void
+    {
+        $sections = fn (array $labels) => new class($labels) extends PkDocumentSections {
+            public function __construct(private array $labels)
+            {
+            }
+
+            public function label(array $sections, array $systems, ?string $provider = null, string $rules = ''): array
+            {
+                return array_map(fn ($label) => ['label' => $label, 'system' => null], $this->labels);
+            }
+        };
+        $pages = ["## TABLO\n### Tablo 1\n| a | b |\n## 7. NOTLAR\n1-Not.\n## 8. SONUÇ VE KANAAT\nPanoda etiket yok.\n## 9. BOŞ"];
+
+        $fallback = $sections(['diger', 'diger', 'sonuc', 'sonuc'])->texts($pages, [])['findings'];
+        $this->assertSame("## 7. NOTLAR\n1-Not.\n\n## 8. SONUÇ VE KANAAT\nPanoda etiket yok.", $fallback);
+
+        $kusur = $sections(['diger', 'kusur', 'sonuc', 'sonuc'])->texts($pages, [])['findings'];
+        $this->assertSame("## 7. NOTLAR\n1-Not.", $kusur);
+
+        $this->assertNull($sections(['rapor_bilgisi', 'rapor_bilgisi', 'kurulus', 'sonuc'])->texts($pages, [])['findings']);
+    }
+
     public function test_repeated_page_header_labelled_as_system_keeps_the_system(): void
     {
         $pages = [

@@ -79,8 +79,13 @@ class PkElectricalReportAnalyzer
         $parts = PkAiProvider::agents() && $structuredPages
             ? app(PkDocumentSections::class)->texts($structuredPages, $agents ? [...$catalogNames, 'Tesisat Geneli'] : $catalogNames, rules: $agents ? PkElectricalAgents::sections($instruction, [2], false) : '')
             : [];
+        // Tablosuz kapak sayfası (yalnız adres ve "EK-I"): bilgi yok; model boş sayfaya tarih, sonuç ve sistem uyduruyordu (kör test, termal
+        // dosyaları: kapak 841 karakter, en kısa gerçek rapor 4120).
+        if (PkAiProvider::agents() && !$doclingTables && mb_strlen(trim($text)) < 1500) {
+            throw new RuntimeException('PDF\'te rapor içeriği yok (kapak ya da ek sayfası olabilir).');
+        }
         $semantic = $agents
-            ? app(PkElectricalAgents::class)->read($instruction, $parts + ['all' => $this->buildDocumentText($structuredPages)], $doclingTables, $pdfPath, $tableLabels, $typeSlug)
+            ? app(PkElectricalAgents::class)->read($instruction, $parts + ['all' => $this->buildDocumentText($structuredPages)], $doclingTables, $pdfPath, $tableLabels, $typeSlug, systemNames: $catalogNames)
             : $client->extract($prompt, $text, 50000);
 
         // Yerel model: sistemler ve bulgular ayrı kısa isteklerle ikinci kez okunur (önce sistemler; bulgular sistem listesinden eşleşir).

@@ -25,7 +25,8 @@ PROMPT;
      */
     // $rules: türün ek kuralları (örn. elektrik talimatının ölçüm listeleri bölümü: ekipman adları); katalogda ekipman türü
     // olmayan sistemde ekipman adı bu kurallara göre yazılır.
-    public function map(string $documentText, array $systems, array $tableNos, array $labels, ?string $provider = null, string $rules = ''): array
+    // $listsOnly: tablolar liste diye seçildiyse model tek ekipman yazamaz: satırları tek tek yazıp yüzlerce saniye harcıyordu (182150-topraklama).
+    public function map(string $documentText, array $systems, array $tableNos, array $labels, ?string $provider = null, string $rules = '', bool $listsOnly = false): array
     {
         $names = array_keys($systems);
         if (!$names) {
@@ -36,7 +37,7 @@ PROMPT;
         $text = ['type' => ['string', 'null']];
         $table = ['type' => 'integer', 'enum' => $tableNos];
         $item = ['type' => 'object', 'properties' => [
-            'singles' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
+            'singles' => ['type' => 'array', ...($listsOnly ? ['maxItems' => 0] : []), 'items' => ['type' => 'object', 'properties' => [
                 'equipment_name' => $equipment ? ['type' => 'string', 'enum' => $equipment] : ['type' => 'string'],
                 'table' => ['type' => ['integer', 'null'], 'enum' => [...$tableNos, null]],
                 'identity_value' => $text,

@@ -88,11 +88,45 @@ class PkElectricalReportReader
     {
         $tables = $this->tableReader->read($pdfPath, $semantic, true);
         try {
-            return $this->mergedColumns($pdfPath, $semantic, $tables);
+            return $this->mergedColumns($pdfPath, $semantic, $this->gridRows($pdfPath, $semantic, $tables));
         } catch (Throwable) {
             // Tamamlama yapılamazsa tablo adımının sonucu olduğu gibi kalır.
             return $tables;
         }
+    }
+
+    // Ölçüm listesi konumdan da okunur (PkGridRows); tablo adımından çok satır bulursa o geçerlidir: tablo adımı devam sayfalarını kaçırabiliyor
+    // (Neta topraklama: 131 noktanın 28'i okundu, uyarı da yoktu). Az ya da eşitse tablo adımının okuması kalır.
+    private function gridRows(string $pdfPath, array $semantic, array $tables): array
+    {
+        foreach ((array) ($semantic['template']['fire_systems']['systems'] ?? []) as $system) {
+            foreach ((array) ($system['equipment_definitions'] ?? []) as $definition) {
+                $identity = trim((string) ($definition['instance_structure']['identity_field'] ?? ''));
+                $systemName = trim((string) ($system['system_name'] ?? ''));
+                $name = trim((string) ($definition['equipment_name'] ?? ''));
+                if ($identity === '' || ($definition['instance_structure']['equipment_axis'] ?? null) !== 'rows') {
+                    continue;
+                }
+                $mine = fn ($row) => ($row['system_name'] ?? null) === $systemName && ($row['equipment_name'] ?? null) === $name;
+                $lattice = array_values(array_filter((array) ($this->camelot->extract($pdfPath)['tables'] ?? []), fn ($table) => is_array($table) && ($table['flavor'] ?? null) === 'lattice'));
+                $fields = array_map(fn ($attribute) => trim((string) ($attribute['field'] ?? '')), (array) ($definition['attributes'] ?? []));
+                $rows = PkGridRows::rows($lattice, $identity, $fields);
+                if (count($rows) <= collect((array) ($tables['equipment'] ?? []))->filter($mine)->count()) {
+                    continue;
+                }
+                $tables['equipment'] = collect((array) ($tables['equipment'] ?? []))->reject($mine)->values()->all();
+                $tables['equipment_summary'] = collect((array) ($tables['equipment_summary'] ?? []))->reject($mine)->values()->all();
+                foreach ($rows as $row) {
+                    $tables['equipment'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'code' => $row['code'], 'location' => null, 'brand' => null, 'model' => null, 'serial_no' => null, 'properties' => $row['properties'], 'status' => null, 'status_source' => null, 'note' => null, 'source_pages' => [$row['page']]];
+                }
+                if ($rows) {
+                    $tables['grid_lists'][] = $systemName . '|' . $name;
+                    $tables['equipment_summary'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'total' => count($rows), 'uygun' => 0, 'uygun_degil' => 0, 'unknown' => count($rows)];
+                }
+            }
+        }
+
+        return $tables;
     }
 
     /**
@@ -208,11 +242,20 @@ class PkElectricalReportReader
         $info = collect((array) ($semantic['extracted_data']['report_information'] ?? []))
             ->filter(fn ($row) => is_array($row) && isset($row['key']))
             ->mapWithKeys(fn ($row) => [$row['key'] => $row['value'] ?? null]);
-        $summary['equipment_tables'] = $this->equipmentTables($semantic);
+        // Konumdan okunan listede sıra no ve nokta adı tek kimliktir (PkGridRows): kimlik sütunu nokta adının başlığıyla, ad ayrıca boş sütun olmaz.
+        $summary['equipment_tables'] = array_map(function (array $table) use ($tables) {
+            if (in_array($table['system_name'] . '|' . $table['equipment_name'], (array) ($tables['grid_lists'] ?? []), true) && $table['columns']) {
+                $table['code_label'] = array_shift($table['columns']);
+            }
+
+            return $table;
+        }, $this->equipmentTables($semantic));
         $summary = $this->withoutGeneralRecord($summary);
         $summary = $this->withFacility($summary, $semantic, $types->first(), $scope);
 
         return $summary + [
+            'warnings' => self::warnings($summary),
+            'not_kusur_lines' => (array) ($semantic['extracted_data']['not_kusur_lines'] ?? []),
             'report_scope' => $scope,
             // Raporun ait olduğu tesisat türü (bütün tesisat türleri arasından): tesisatınkinden farklıysa rapor ilgili sekmeden
             // yüklenmelidir.
@@ -223,6 +266,35 @@ class PkElectricalReportReader
             'building' => $this->notes($info['bina'] ?? null),
             'duration_s' => 0,
         ];
+    }
+
+    /**
+     * Okumadaki çelişkiler, kodla: uzmana "buraya bak" uyarısı, hiçbir değeri değiştirmez.
+     *
+     * @return list<string>
+     */
+    public static function warnings(array $summary): array
+    {
+        $systems = (array) ($summary['systems'] ?? []);
+        $findings = count((array) ($summary['general_findings'] ?? [])) + array_sum(array_map(fn (array $system) => count((array) ($system['findings'] ?? [])), $systems));
+        $status = $summary['status'] ?? null;
+        $out = [];
+        if (blank($status)) {
+            $out[] = 'Raporun genel sonucu okunamadı.';
+        } elseif ($status === 'uygun_degil' && $findings === 0) {
+            $out[] = 'Rapor "uygun değil" diyor ama bulgu bulunamadı; kusur bölümünü kontrol edin.';
+        } elseif ($status === 'uygun' && $findings > 0) {
+            $out[] = 'Rapor "uygun" diyor ama bulgu var; sonucu kontrol edin.';
+        }
+        foreach ($systems as $system) {
+            $bad = collect((array) ($summary['equipment_rows'] ?? []))->filter(fn (array $row) => ($row['system_name'] ?? null) === ($system['name'] ?? null)
+                && collect((array) ($row['properties'] ?? []))->contains(fn ($value) => is_scalar($value) && str_contains(mb_strtolower(str_replace('İ', 'i', (string) $value), 'UTF-8'), 'uygun değil')))->count();
+            if ($bad > 0 && $findings === 0) {
+                $out[] = "{$system['name']}: {$bad} satır \"uygun değil\" ama bulgu yok.";
+            }
+        }
+
+        return $out;
     }
 
     // Talimattaki "Tesisat Geneli" kaydı (tesisat raporunun genel kontrol listesi; şema en az bir kayıt istediği için) sistem
@@ -339,7 +411,8 @@ class PkElectricalReportReader
                 continue;
             }
             $label = ($labels[$key] ?? '') ?: (self::FACILITY_LABELS[$key] ?? Str::ucfirst(str_replace('_', ' ', $key)));
-            $values[$label] = $value;
+            // Aynı etiket raporda iki kez geçebilir (termal kamera ve ölçüm aleti "Kalibrasyon No-Tarihi"): biri diğerini ezmez.
+            $values[$label] = isset($values[$label]) && $values[$label] !== $value ? $values[$label] . ' / ' . $value : $value;
         }
 
         return $values;

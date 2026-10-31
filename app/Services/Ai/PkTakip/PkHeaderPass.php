@@ -17,7 +17,7 @@ Sana bir tesisat periyodik kontrol raporunun bilgi, sonuç ve kuruluş bölümle
 - company_title: kontrolü talep eden / raporu isteyen kuruluş (müşteri). Raporu düzenleyen muayene firması müşteri değildir.
 - address: kontrol adresi. report_date: rapor tarihi. control_date: kontrolün / muayenenin yapıldığı tarih. validity_date: bir sonraki kontrol tarihi.
 - overall_result: text = sonuç ve kanaat cümlesi, yazdığı gibi; status: kullanıma uygunsa "uygun", uygun değilse ("eksikler giderilmeden kullanılması uygun değildir" gibi) "uygun_degil", kontrol yapılamadıysa "uygulanamiyor"; net değilse null.
-- inspection_body: raporu düzenleyen muayene kuruluşunun adı, adresi, telefonu, e-postası, web adresi ve personeli (kontrol eden / onaylayan); boş alanlar null.
+- inspection_body: raporu düzenleyen muayene kuruluşunun adı, adresi, telefonu, e-postası, web adresi ve personeli (kontrol eden / onaylayan); boş alanlar null. Personel, raporun yetkili kişi / kontrol eden / onay bölümünde adı yazan kişilerdir. Müşteri firma bölümündeki kişi, telefon, e-posta, SGK sicil ve İSG-KATİP numaraları müşterinindir; kuruluşa yazma.
 PROMPT;
 
     public function __construct(private PkGeminiReportClient $schema)
@@ -59,7 +59,8 @@ PROMPT;
         if (filled($found['overall_result']['status'] ?? null)) {
             $semantic['extracted_data']['overall_result'] = $found['overall_result'];
         }
-        if (filled($found['inspection_body']['name'] ?? null)) {
+        // Kuruluş adı yalnız logoda yazılı olabilir (OCR kapalı): ad boşken yetkili kişi kaybolmaz.
+        if (filled($found['inspection_body']['name'] ?? null) || filled($found['inspection_body']['personnel'] ?? null)) {
             $semantic['extracted_data']['inspection_body'] = $found['inspection_body'];
         }
 

@@ -40,6 +40,7 @@ PROMPT;
     // cihaz numaraları da okunur (affected_equipment).
     public function apply(array $semantic, string $documentText, ?string $provider = null, bool $measurementRows = false, array $systemEquipment = [], bool $sectionOnly = false, ?string $wholeText = null, ?array $measurementTable = null, bool $equipmentLinks = false): array
     {
+        $this->notKusur = [];
         $systems = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->pluck('system_name')->filter()->unique()->values()->all();
         // Bütün rapor verildiğinde her madde nereden alındığını söyler; yalnız kusur bölümünden (havalandırmada ölçüm tablosundan)
         // gelenler bulgu olur: küçük model kriter maddelerini de yazabiliyor (NuExtract3, #38: kusur bölümü boş, 16 kriter).
@@ -66,10 +67,12 @@ PROMPT;
             // Seçilmiş bölümden kopyalanan kusur satırları doğrudan bulgu (kullanıcı kuralı: bölüm doğruysa içindekiler bulgudur);
             // ikinci ajan cümleyi bölüyordu (#122: "Not 1: … UYGUN DEĞİLDİR…" → yalnız "10.c.6.3.").
             // Madde işareti ("-PROJEYE ULAŞILAMADI.") bulgu metnine girmez.
-            $copied = $headingOnly ? [] : ($sectionOnly && $section !== null ? array_values(array_filter(array_map(fn ($line) => ltrim(trim($line), "-* \t"), explode("\n", $section)), fn ($line) => $line !== '')) : null);
-            if (!$headingOnly && $section === null && $sectionOnly && $wholeText !== null) {
-                $documentText = $wholeText;
-                $section = $this->kusurSection($documentText, $provider);
+            $copied = $headingOnly ? [] : null;
+            if (!$headingOnly && $sectionOnly) {
+                // Bölümde kusur yoksa yedek metinde de aynı satır satır karar; başlık kipi notları ve sonuç cümlesini kusur sanıyordu
+                // (#126: "YAZILI EKSİKLER GİDERİLMELİDİR."). Orada da yoksa bulgu yoktur.
+                $section ??= $wholeText !== null ? $this->kusurSection($wholeText, $provider, inSection: true) : null;
+                $copied = array_values(array_filter(array_map(fn ($line) => ltrim(trim($line), "-* \t"), explode("\n", (string) $section)), fn ($line) => $line !== ''));
             }
             [$documentText, $sectionOnly] = $section !== null ? [$section, true] : [$documentText, false];
             $item = $sectionOnly
@@ -92,6 +95,8 @@ PROMPT;
             }
         }
 
+        // Ajanın kusur saymadığı not / sonuç satırları: uzman ekranda görüp tek tıkla bulgu yapabilsin (kaçan kusur fark edilsin).
+        $semantic['extracted_data']['not_kusur_lines'] = array_values(array_unique(array_diff($this->notKusur, $texts)));
         $equipment = $equipmentLinks ? $this->findingEquipment($texts, $provider) : [];
         $semantic['extracted_data']['findings'] = collect($texts)->map(fn (string $text, int $index) => [
             'id' => 'F' . ($index + 1),
@@ -168,18 +173,87 @@ PROMPT;
     // Kusur bölümü ajanı: bölümün içeriği aynen ("" = bölüm var ama boş); raporda böyle bir bölüm yoksa null. $inSection: metin
     // zaten kusur bölümü diye seçilmiş (harita / Docling): başlık aranmaz, içindeki kusur maddeleri kopyalanır; madde yoksa null
     // (yanlış ya da boş bölüm: çağıran yedek metinde başlık kipiyle arar).
+    /** @var list<string> kusur kararında kusur sayılmayan not / sonuç satırları */
+    private array $notKusur = [];
+
+    // Kusur kararına girecek satır. Tek hücreli tablo satırı yazıdır. 5 ve üzeri hücreli satır ölçüm listesidir, karara girmez: bölüme
+    // karışan ölçüm satırları bulgu oluyordu (kör test, 96320-topraklama: 29 ölçüm noktası).
+    public static function kusurLine(string $line): ?string
+    {
+        $line = trim($line);
+        if (!str_starts_with($line, '| ')) {
+            return $line;
+        }
+        $cells = explode(' | ', trim(substr($line, 2, -2)));
+
+        return count($cells) >= 5 ? null : (count($cells) === 1 ? $cells[0] : $line);
+    }
+
+    /** @return list<string> satırdaki kusur cümleleri; cümle satırda yazılı olmalı (model uyduramaz). */
+    private function kusurSentences(string $line, ?string $provider): array
+    {
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+Sana bir periyodik kontrol raporunun TEK satırı verilecek; içinde birden çok cümle olabilir. HER cümleyi satırda yazdığı gibi text'e yaz, türünü kind'a yaz.
+- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum.
+- not: bu tesiste bir kusur bildirmeyen bilgi: genel mevzuat ya da bakım / test hatırlatması, raporun geçerliliği, kopyalanma ve imza koşulları, kalıp açıklama, kısaltma ve lejant açıklaması.
+- sonuc: tesisatın geneli için verilen sonuç cümlesi ("kullanımı uygundur", "kullanımı uygun değildir" gibi).
+PROMPT, $line, max(1000, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['sentences' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
+            'text' => ['type' => 'string'],
+            'kind' => ['type' => 'string', 'enum' => ['kusur', 'not', 'sonuc']],
+        ], 'required' => ['text', 'kind']]]], 'required' => ['sentences']]);
+        $plain = fn (string $text) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $text), 'UTF-8');
+
+        $written = collect((array) ($found['sentences'] ?? []))
+            ->filter(fn ($sentence) => is_array($sentence) && filled($sentence['text'] ?? null) && str_contains($plain($line), $plain((string) $sentence['text'])));
+        $this->notKusur = [...$this->notKusur, ...$written->reject(fn (array $sentence) => ($sentence['kind'] ?? null) === 'kusur')->map(fn (array $sentence) => trim((string) $sentence['text']))->all()];
+
+        return $written->filter(fn (array $sentence) => ($sentence['kind'] ?? null) === 'kusur')->map(fn (array $sentence) => trim((string) $sentence['text']))->values()->all();
+    }
+
     private function kusurSection(string $documentText, ?string $provider, bool $inSection = false): ?string
     {
         if ($inSection) {
+            // Satır satır karar: kusur her başlığın altında yazılabilir, notlar da aynı başlıkta olabilir. Kopyalatınca model ilk
+            // başlıkta durup yeniden numaralandırıyordu (kör test, 31 Eki: 7 kusur atlandı); şema her satır için karar ister, metin
+            // rapordan birebir alınır.
+            $lines = [];
+            $numbered = [];
+            foreach (explode("\n", $documentText) as $line) {
+                if (trim($line) === '' || str_starts_with($line, '## ')) {
+                    $numbered[] = $line;
+                    continue;
+                }
+                $line = self::kusurLine($line);
+                if ($line === null) {
+                    continue;
+                }
+                $lines['s' . (count($lines) + 1)] = $line;
+                $numbered[] = '[s' . count($lines) . '] ' . $line;
+            }
+            if (!$lines) {
+                return null;
+            }
             $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporundan kusur / not bölümü olarak seçilmiş metin verilecek. Bu metinde, muayenede BU tesiste / ekipmanda bulunan kusur, uygunsuzluk ve eksiklik maddelerini raporda yazdığı gibi AYNEN kopyala; madde numarası / kodu varsa onunla birlikte, her madde ayrı satırda.
-- Her raporda aynı yazılan genel mevzuat hatırlatmaları, kalıp açıklamalar, lejant, imza ve onay bilgileri kusur değildir; kopyalama.
-- Kontrol listesi maddeleri (soru / kriter ve yanında sonucu) kusur bölümü değildir; kopyalama.
-- section_exists: metinde en az bir kusur / eksiklik maddesi var mı?
-- content: kopyaladığın maddeler; yoksa "".
-PROMPT, $documentText, 3000, schema: ['type' => 'object', 'properties' => ['section_exists' => ['type' => 'boolean'], 'content' => ['type' => 'string']], 'required' => ['section_exists', 'content']]);
+Sana bir periyodik kontrol raporunun bölüm başlıkları (## ile başlar) ve satırları verilecek; her satırın başında [sN] yazar. HER satırın türünü kendi anlamına göre yaz (anahtar: sN). Satırın hangi başlığın altında olduğu türünü belirlemez: kusur notlarda da sonuçta da yazılabilir, not da kusur başlığının altında olabilir.
+- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum.
+- not: bu tesiste bir kusur bildirmeyen bilgi: genel mevzuat ya da bakım / test hatırlatması, raporun geçerliliği, kopyalanma ve imza koşulları, kalıp açıklama.
+- sonuc: kusur saymadan tesisatın geneli için verilen sonuç cümlesi ("kullanımı uygundur", "kullanımı uygun değildir", "eksikler giderilmelidir" gibi).
+- diger: bölüm başlığı ("6. KUSUR AÇIKLAMALARI" gibi), lejant, imza ve onay bilgisi, tablo başlığı, kontrol listesi maddesi (soru / kriter ve yanında sonucu), kusur olmadığını söyleyen cümle.
+PROMPT, implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys(array_keys($lines), ['type' => 'string', 'enum' => ['kusur', 'not', 'sonuc', 'diger']]), 'required' => array_keys($lines)]);
+            $kusur = [];
+            foreach ($lines as $key => $line) {
+                // Kusur ve sonuç / hatırlatma cümlesi aynı satırda olabilir: türü cümle cümle (kör test, 11930-elektrik; 404110-topraklama: 129
+                // karakterlik satırda hatırlatma + "Mescit prizde topraklama bulunmamaktadır", satır bütünüyle not sayılmıştı).
+                if (($found[$key] ?? 'diger') !== 'diger' && mb_strlen($line) > 80) {
+                    $kusur = [...$kusur, ...$this->kusurSentences($line, $provider)];
+                } elseif (($found[$key] ?? null) === 'kusur') {
+                    $kusur[] = $line;
+                } elseif (in_array($found[$key] ?? null, ['not', 'sonuc'], true)) {
+                    $this->notKusur[] = $line;
+                }
+            }
 
-            return empty($found['section_exists']) || trim((string) ($found['content'] ?? '')) === '' ? null : trim((string) $found['content']);
+            return $kusur ? implode("\n", $kusur) : null;
         }
         $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
 Sana bir periyodik kontrol raporunun metni verilecek. Görevin raporun kusur / uygunsuzluk / eksiklik açıklamaları bölümünü bulmak.
