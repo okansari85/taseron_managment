@@ -244,12 +244,15 @@ PROMPT, implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type'
             foreach ($lines as $key => $line) {
                 // Kusur ve sonuç / hatırlatma cümlesi aynı satırda olabilir: türü cümle cümle (kör test, 11930-elektrik; 404110-topraklama: 129
                 // karakterlik satırda hatırlatma + "Mescit prizde topraklama bulunmamaktadır", satır bütünüyle not sayılmıştı).
-                if (($found[$key] ?? 'diger') !== 'diger' && mb_strlen($line) > 80) {
-                    $kusur = [...$kusur, ...$this->kusurSentences($line, $provider)];
-                } elseif (($found[$key] ?? null) === 'kusur') {
+                // Tamamı kusur denen satır bölünmez: iki cümlelik bulgu parçalanıp ikinci cümlesi kayboluyordu (#18: "...BEZ HORTUM OLDUĞU GÖZLEMLENMİŞTİR. BİNA İÇERİSİNDE...").
+                if (($found[$key] ?? null) === 'kusur') {
                     $kusur[] = $line;
                 } elseif (in_array($found[$key] ?? null, ['not', 'sonuc'], true)) {
-                    $this->notKusur[] = $line;
+                    if (mb_strlen($line) > 80) {
+                        $kusur = [...$kusur, ...$this->kusurSentences($line, $provider)];
+                    } else {
+                        $this->notKusur[] = $line;
+                    }
                 }
             }
 

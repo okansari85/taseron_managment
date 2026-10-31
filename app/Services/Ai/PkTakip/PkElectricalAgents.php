@@ -51,6 +51,10 @@ class PkElectricalAgents
                 2000,
                 schema: ['type' => 'object', 'properties' => ['verdict' => $system['verdict']], 'required' => ['verdict']]
             )['verdict'] ?? null;
+            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Ajan sonuç yazmadıysa hücrelerden (SGS topraklama: "U.D" maddeleri, sonuç boş kaldı).
+            if (blank($verdict['status'] ?? null) && self::hasFailedCell($text)) {
+                $verdict = ['status' => 'uygun_degil', 'raw' => null, 'basis' => 'derived', 'evidence' => null];
+            }
             $lines = explode("\n", $text);
             $systems[$name] = [
                 'system_name' => $name,
@@ -150,6 +154,23 @@ class PkElectricalAgents
         ];
     }
 
+    // Tablo satırında hücrenin tamamı uygunsuz sonucu mu (hücre karşılaştırması; cümle içinde geçen "uygun değil" sayılmaz).
+    public static function hasFailedCell(string $text): bool
+    {
+        foreach (explode("\n", $text) as $line) {
+            if (!str_starts_with($line, '| ')) {
+                continue;
+            }
+            foreach (explode(' | ', trim(substr($line, 2, -2))) as $cell) {
+                if (in_array(mb_strtoupper(str_replace('i', 'İ', trim($cell)), 'UTF-8'), ['U.D', 'U.D.', 'UD', 'UYGUN DEĞİL', 'UYGUNSUZ'], true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Her çizgili tablonun sistemi, tablonun başından tek kararla (satırları ajan okumaz). Katalogda karşılığı olmayan tablo rapordaki
      * adıyla kalır: okunur, görünür, kaydedilmez. Dönen alanlar Camelot'un kendi kutusu, tablo haritası bunlarla çalışır.
@@ -197,8 +218,10 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
         foreach ($runs as $i => $run) {
             $choice = (array) ($found['l' . ($i + 1)] ?? []);
             $system = ($choice['system'] ?? null) === 'katalogda_yok' ? trim((string) ($choice['name'] ?? '')) : (string) ($choice['system'] ?? '');
-            // Katalogda olmayan liste ancak gerçek listeyse: 4 sütunlu firma tablosu "Ünvanı | ARÇELİK…" adıyla sahte sistem oluyordu (Neta elektrik; gerçek listeler 9-10 sütun).
-            if ($system === '' || (($choice['system'] ?? null) === 'katalogda_yok' && end($run)['columns'] < 5)) {
+            // Katalogda olmayan liste ancak gerçek listeyse: 3 satırlık cihaz tablosu öndeki firma tablosunun adıyla ("Ünvanı | ARÇELİK…") sahte sistem oluyordu (Neta
+            // elektrik; kataloğa bağlanan en kısa gerçek liste SGS'de başlık + 4 satır).
+            $own = array_sum(array_map(fn (array $table) => ($kinds['t' . $table['no']] ?? null) === 'olcum_listesi' ? count($table['rows']) : 0, $run));
+            if ($system === '' || (($choice['system'] ?? null) === 'katalogda_yok' && $own < 5)) {
                 continue;
             }
             // Ajana yalnız tablonun başı: bütün satırları verince tek tek yazıyordu (378300-topraklama: 200 sn); satırları tablo okuyucu okur.
@@ -274,7 +297,8 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
      */
     private function facilityFromRows(string $pdfPath, ?string $provider): ?array
     {
-        $rows = self::facilityRows((array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []));
+        $cells = self::facilityCells((array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []));
+        $rows = array_column($cells, 'row');
         if (!$rows) {
             return null;
         }
@@ -291,8 +315,9 @@ Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın 
 PROMPT, implode("\n", $numbered), max(3000, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'baslik', 'diger']]), 'required' => $keys]);
 
         $fields = [];
+        $selected = self::facilitySelected($cells, array_map(fn (string $key) => $kinds[$key] ?? null, $keys));
         foreach ($rows as $i => $row) {
-            if (($kinds[$keys[$i]] ?? null) !== 'tesis') {
+            if (!in_array($i, $selected, true)) {
                 continue;
             }
             $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
@@ -333,15 +358,42 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
      */
     public static function facilityRows(array $tables, int $pages = 3): array
     {
+        return array_column(self::facilityCells($tables, $pages), 'row');
+    }
+
+    /**
+     * Tesis satırı + aynı küçük tablonun (en çok 6 satır) diğer satırları: "proje var mı | Var | kesit uygun mu | U" satırını ajan yanındaki U yüzünden
+     * kriter sayıyordu (#126, Neta elektrik). Büyük tablolar genişlemez, kriter satırları karta girmez.
+     *
+     * @param list<array{row: string, table: int}> $cells
+     * @param list<string|null> $kinds satır başına tür
+     * @return list<int> seçilen satır sıraları
+     */
+    public static function facilitySelected(array $cells, array $kinds): array
+    {
+        $sizes = array_count_values(array_column($cells, 'table'));
+        $tesis = [];
+        foreach ($cells as $i => $cell) {
+            if (($kinds[$i] ?? null) === 'tesis') {
+                $tesis[$cell['table']] = true;
+            }
+        }
+
+        return array_keys(array_filter($cells, fn (array $cell, int $i) => ($kinds[$i] ?? null) === 'tesis' || (isset($tesis[$cell['table']]) && $sizes[$cell['table']] <= 6), ARRAY_FILTER_USE_BOTH));
+    }
+
+    /** @return list<array{row: string, table: int}> */
+    public static function facilityCells(array $tables, int $pages = 3): array
+    {
         $rows = [];
-        foreach ($tables as $table) {
+        foreach ($tables as $index => $table) {
             if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice' || (int) ($table['page'] ?? 0) > $pages) {
                 continue;
             }
             foreach ((array) ($table['data'] ?? []) as $row) {
                 $cells = array_values(array_filter(array_map(fn ($cell) => Str::squish((string) $cell), (array) $row), fn (string $cell) => $cell !== ''));
                 if ($cells) {
-                    $rows[] = implode(' | ', $cells);
+                    $rows[] = ['row' => implode(' | ', $cells), 'table' => $index];
                 }
             }
         }
