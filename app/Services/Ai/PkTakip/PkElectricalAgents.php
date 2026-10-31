@@ -51,8 +51,13 @@ class PkElectricalAgents
                 2000,
                 schema: ['type' => 'object', 'properties' => ['verdict' => $system['verdict']], 'required' => ['verdict']]
             )['verdict'] ?? null;
-            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Ajan sonuç yazmadıysa hücrelerden (SGS topraklama: "U.D" maddeleri, sonuç boş kaldı).
-            if (blank($verdict['status'] ?? null) && self::hasFailedCell($text)) {
+            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Sonuç ajanı boş bıraktıysa tek soruyla ayrı ajan (SGS topraklama: "U.D" maddeleri, sonuç boş kaldı).
+            if (blank($verdict['status'] ?? null) && (PkLocalRetry::client($provider, fn () => false)->extract(
+                'Sana bir periyodik kontrol raporunun bir bölümü verilecek; kontrol maddeleri ve sonuçları olabilir. any_failed: sonucu uygun olmayan en az bir madde varsa true; hepsi uygun, uygulanamaz ya da hiç madde yoksa false.',
+                $text,
+                200,
+                schema: ['type' => 'object', 'properties' => ['any_failed' => ['type' => 'boolean']], 'required' => ['any_failed']]
+            )['any_failed'] ?? false) === true) {
                 $verdict = ['status' => 'uygun_degil', 'raw' => null, 'basis' => 'derived', 'evidence' => null];
             }
             $lines = explode("\n", $text);
@@ -152,23 +157,6 @@ class PkElectricalAgents
             'facility_information' => $fields->map(fn (array $field) => ['key' => $field['key'], 'value' => $field['value'] ?? null])->all(),
             'result_legend' => (array) ($found['result_legend'] ?? []),
         ];
-    }
-
-    // Tablo satırında hücrenin tamamı uygunsuz sonucu mu (hücre karşılaştırması; cümle içinde geçen "uygun değil" sayılmaz).
-    public static function hasFailedCell(string $text): bool
-    {
-        foreach (explode("\n", $text) as $line) {
-            if (!str_starts_with($line, '| ')) {
-                continue;
-            }
-            foreach (explode(' | ', trim(substr($line, 2, -2))) as $cell) {
-                if (in_array(mb_strtoupper(str_replace('i', 'İ', trim($cell)), 'UTF-8'), ['U.D', 'U.D.', 'UD', 'UYGUN DEĞİL', 'UYGUNSUZ'], true)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     /**

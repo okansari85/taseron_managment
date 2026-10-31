@@ -286,13 +286,6 @@ class PkElectricalReportReader
         } elseif ($status === 'uygun' && $findings > 0) {
             $out[] = 'Rapor "uygun" diyor ama bulgu var; sonucu kontrol edin.';
         }
-        foreach ($systems as $system) {
-            $bad = collect((array) ($summary['equipment_rows'] ?? []))->filter(fn (array $row) => ($row['system_name'] ?? null) === ($system['name'] ?? null)
-                && collect((array) ($row['properties'] ?? []))->contains(fn ($value) => is_scalar($value) && str_contains(mb_strtolower(str_replace('İ', 'i', (string) $value), 'UTF-8'), 'uygun değil')))->count();
-            if ($bad > 0 && $findings === 0) {
-                $out[] = "{$system['name']}: {$bad} satır \"uygun değil\" ama bulgu yok.";
-            }
-        }
 
         return $out;
     }

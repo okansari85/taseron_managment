@@ -65,18 +65,10 @@ class PkElectricalFacilityRowsTest extends TestCase
         $this->assertSame([0, 1, 2], PkElectricalAgents::facilitySelected([...$small, ...$large], ['tesis', 'kriter', 'tesis', 'kriter', 'kriter', 'kriter', 'kriter', 'kriter', 'kriter']));
     }
 
-    public function test_failed_cell_is_a_whole_cell_not_a_sentence(): void
-    {
-        $this->assertTrue(PkElectricalAgents::hasFailedCell("| 1 Proje mevcut mu? | U.D |\n| 2 Bara | U |"));
-        $this->assertTrue(PkElectricalAgents::hasFailedCell('| Pano | UYGUN DEĞİL |'));
-        $this->assertFalse(PkElectricalAgents::hasFailedCell("| 1 Bara | U |\n| Değerlendirme uygun değil olarak yapılmıştır | x |\nU.D"));
-    }
-
     public function test_warnings_catch_contradictions_without_changing_values(): void
     {
-        $this->assertSame(['Rapor "uygun değil" diyor ama bulgu bulunamadı; kusur bölümünü kontrol edin.', 'Ölçüm: 1 satır "uygun değil" ama bulgu yok.'], PkElectricalReportReader::warnings([
+        $this->assertSame(['Rapor "uygun değil" diyor ama bulgu bulunamadı; kusur bölümünü kontrol edin.'], PkElectricalReportReader::warnings([
             'status' => 'uygun_degil', 'general_findings' => [], 'systems' => [['name' => 'Ölçüm', 'findings' => []]],
-            'equipment_rows' => [['system_name' => 'Ölçüm', 'properties' => ['SONUÇ' => 'UYGUN DEĞİL']], ['system_name' => 'Ölçüm', 'properties' => ['SONUÇ' => 'UYGUN']]],
         ]));
         $this->assertSame([], PkElectricalReportReader::warnings(['status' => 'uygun_degil', 'general_findings' => ['Pano kapağı yok'], 'systems' => []]));
         $this->assertSame(['Rapor "uygun" diyor ama bulgu var; sonucu kontrol edin.'], PkElectricalReportReader::warnings(['status' => 'uygun', 'general_findings' => ['x'], 'systems' => []]));
