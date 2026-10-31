@@ -51,13 +51,8 @@ class PkElectricalAgents
                 2000,
                 schema: ['type' => 'object', 'properties' => ['verdict' => $system['verdict']], 'required' => ['verdict']]
             )['verdict'] ?? null;
-            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Sonuç ajanı boş bıraktıysa tek soruyla ayrı ajan (SGS topraklama: "U.D" maddeleri, sonuç boş kaldı).
-            if (blank($verdict['status'] ?? null) && (PkLocalRetry::client($provider, fn () => false)->extract(
-                'Sana bir periyodik kontrol raporunun bir bölümü verilecek; kontrol maddeleri ve sonuçları olabilir. any_failed: sonucu uygun olmayan en az bir madde varsa true; hepsi uygun, uygulanamaz ya da hiç madde yoksa false.',
-                $text,
-                200,
-                schema: ['type' => 'object', 'properties' => ['any_failed' => ['type' => 'boolean']], 'required' => ['any_failed']]
-            )['any_failed'] ?? false) === true) {
+            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Sonuç ajanı boş bıraktıysa satır satır ajan kararı: tek soruda satırdaki "U.D"yi kaçırıyordu (SGS topraklama).
+            if (blank($verdict['status'] ?? null) && $this->anyRowFailed($text, $provider)) {
                 $verdict = ['status' => 'uygun_degil', 'raw' => null, 'basis' => 'derived', 'evidence' => null];
             }
             $lines = explode("\n", $text);
@@ -67,14 +62,23 @@ class PkElectricalAgents
                 'verdict' => $verdict ?? ['status' => null, 'raw' => null, 'basis' => 'not_stated', 'evidence' => null],
             ];
             $tableNos = array_values(array_filter(array_map(fn ($line) => str_starts_with($line, '### Tablo ') ? (int) substr($line, 10) : 0, $lines)));
+            // Kontrol listesi ve yazı tablosu ekipman listesi değildir (kriter ekipman olmaz): haritaya girince 11 sahte satır çıkıyordu (SGS topraklama).
+            if ($name !== 'Tesisat Geneli' && $tableNos && !in_array($name, $listOnly ?? [], true)) {
+                $found = $this->tableKinds($text, $tableNos, $provider);
+                $tableNos = array_values(array_filter($tableNos, fn (int $no) => !in_array($found['t' . $no] ?? null, ['kontrol_listesi', 'yazi'], true)));
+            }
             if ($name !== 'Tesisat Geneli' && $tableNos) {
                 $map[$name] = app(PkTableMap::class)->map($text, [$name => []], $tableNos, $tableLabels, $provider, self::sections($instruction, [4], false), in_array($name, $listOnly ?? [], true))[$name] ?? ['lists' => [], 'singles' => []];
             }
         }
         $definitions = $this->definitions->build($pdfPath, $doclingTables, $map);
+        foreach ($definitions as $name => $list) {
+            $definitions[$name] = array_values(array_filter($list, fn (array $definition) => ($definition['instance_structure']['equipment_axis'] ?? null) !== 'rows'
+                || $this->definitions->identityLeads($pdfPath, (string) ($definition['instance_structure']['identity_field'] ?? ''))));
+        }
         foreach ($map as $name => $found) {
             $list = ((array) ($found['lists'] ?? []))[0] ?? null;
-            if (empty($definitions[$name]) && $list && ($definition = $this->definitions->fromHeader($pdfPath, (string) $list['equipment_name'], (string) ($list['identity_label'] ?? '')))) {
+            if (empty($definitions[$name]) && $list && $this->definitions->identityLeads($pdfPath, (string) ($list['identity_label'] ?? '')) && ($definition = $this->definitions->fromHeader($pdfPath, (string) $list['equipment_name'], (string) ($list['identity_label'] ?? '')))) {
                 $definitions[$name] = [$definition];
             }
         }
@@ -160,6 +164,47 @@ class PkElectricalAgents
     }
 
     /**
+     * Tablo türü, ajan kararı: "### Tablo N" ile numaralı tablolar.
+     *
+     * @param list<int> $nos
+     * @return array<string, string> tN => tür
+     */
+    private function tableKinds(string $text, array $nos, ?string $provider): array
+    {
+        $keys = array_map(fn (int $no) => 't' . $no, $nos);
+
+        return (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+Sana bir periyodik kontrol raporunun tabloları verilecek ("### Tablo N" ve ilk satırları). HER tablonun türünü yaz (anahtar: tN).
+- olcum_listesi: her satırı ayrı bir ölçüm noktası ya da ekipman (pano, röle, priz gibi) olan, aynı sütunlarda sayısal değerler taşıyan liste. Sıra no ile devam eden, başlığı önceki sayfada kalmış satırlar da budur. Tablonun üstünde başka satırlar olsa da içinde böyle bir liste başlıyorsa budur.
+- kontrol_listesi: kontrol maddeleri ve sonuçları (UYGUN, UYGUN DEĞİL, U, U.D, Uygulama Yok gibi).
+- bilgi: rapor no, tarih, firma, tesis, ölçüm aleti, yetkili kişi bilgisi (etiket ve değer; tek kayıtlık tablo).
+- yazi: not, açıklama, sonuç cümlesi.
+PROMPT, $text, max(500, count($nos) * 15), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['olcum_listesi', 'kontrol_listesi', 'bilgi', 'yazi']]), 'required' => $keys]);
+    }
+
+    // Bölümün tablo satırlarından en az birinin sonucu uygun değil mi: her satır için ajan kararı. shortcut: ilk 200 satır, daha uzun kontrol listesi çıkarsa bölünür.
+    private function anyRowFailed(string $text, ?string $provider): bool
+    {
+        $rows = array_values(array_unique(array_map(
+            fn (string $line) => implode(' | ', array_unique(array_filter(explode(' | ', trim(substr($line, 2, -2))), fn (string $cell) => trim($cell) !== ''))),
+            array_slice(array_values(array_filter(explode("\n", $text), fn (string $line) => str_starts_with($line, '| '))), 0, 200)
+        )));
+        if (!$rows) {
+            return false;
+        }
+        $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($rows));
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [sN] yazar. HER satırın sonucunu yaz (anahtar: sN).
+- uygun: madde uygun (U, UYGUN, ✓).
+- uygun_degil: madde uygun değil (U.D, UYGUN DEĞİL, UYGUNSUZ).
+- uygulanamaz: N.U, U.Y, Uygulama Yok, Görülemedi.
+- diger: başlık, bilgi ya da sonucu olmayan satır.
+PROMPT, implode("\n", array_map(fn (string $key, string $row) => "[{$key}] {$row}", $keys, $rows)), max(500, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['uygun', 'uygun_degil', 'uygulanamaz', 'diger']]), 'required' => $keys]);
+
+        return in_array('uygun_degil', $found, true);
+    }
+
+    /**
      * Her çizgili tablonun sistemi, tablonun başından tek kararla (satırları ajan okumaz). Katalogda karşılığı olmayan tablo rapordaki
      * adıyla kalır: okunur, görünür, kaydedilmez. Dönen alanlar Camelot'un kendi kutusu, tablo haritası bunlarla çalışır.
      *
@@ -176,13 +221,7 @@ class PkElectricalAgents
         $keys = array_map(fn (array $table) => 't' . $table['no'], $tables);
         // İki ayrı karar: önce tablo ölçüm listesi mi, yalnız öyleyse hangi sistem. Tek kararda hiç ölçüm tablosu olmayan rapora sistem açıyordu
         // (kör test, 11930-elektrik: kontrol listesi ve notlardan 5 sahte sistem).
-        $kinds = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporunun tabloları verilecek ("### Tablo N" ve ilk satırları). HER tablonun türünü yaz (anahtar: tN).
-- olcum_listesi: her satırı ayrı bir ölçüm noktası ya da ekipman (pano, röle, priz gibi) olan, aynı sütunlarda sayısal değerler taşıyan liste. Sıra no ile devam eden, başlığı önceki sayfada kalmış satırlar da budur. Tablonun üstünde başka satırlar olsa da içinde böyle bir liste başlıyorsa budur.
-- kontrol_listesi: kontrol maddeleri ve sonuçları (UYGUN, UYGUN DEĞİL, U, U.D, Uygulama Yok gibi).
-- bilgi: rapor no, tarih, firma, tesis, ölçüm aleti, yetkili kişi bilgisi (etiket ve değer; tek kayıtlık tablo).
-- yazi: not, açıklama, sonuç cümlesi.
-PROMPT, $text, max(500, count($tables) * 15), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['olcum_listesi', 'kontrol_listesi', 'bilgi', 'yazi']]), 'required' => $keys]);
+        $kinds = $this->tableKinds($text, array_column($tables, 'no'), $provider);
         $runs = self::listRuns($tables, array_keys(array_filter((array) $kinds, fn ($kind) => $kind === 'olcum_listesi')));
         if (!$runs) {
             return [[], [], []];
@@ -298,9 +337,10 @@ Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın 
 - kriter: kontrol listesi tablosunun maddesi ve sonucu (A.1. gibi madde numaralı ya da "KONTROL KRİTERİ / Değerlendirme" tablosundaki UYGUN, UYGUN DEĞİL, U, U.D, U.Y), madde grubunun başlığı, sütun başlığı.
 - rapor: rapor no, tarihler, firma / müşteri, adres, telefon, e-posta, sicil ve sözleşme no, kontrol metodu ve kapsamı, kişi, imza, kuruluş bilgisi.
 - alet: ölçüm aleti ya da termal kamera, seri no, kalibrasyon.
+- olcum: ölçüm noktası ya da ekipman listesinin satırı (sıra no, yer adı ve sayısal değerler: menfez, fan, pano, priz gibi) ya da böyle bir listenin sütun başlığı.
 - baslik: yalnız bölüm başlığı olan satır.
 - diger: not, sonuç cümlesi, açıklama.
-PROMPT, implode("\n", $numbered), max(3000, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'baslik', 'diger']]), 'required' => $keys]);
+PROMPT, implode("\n", $numbered), max(3000, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'olcum', 'baslik', 'diger']]), 'required' => $keys]);
 
         $fields = [];
         $selected = self::facilitySelected($cells, array_map(fn (string $key) => $kinds[$key] ?? null, $keys));

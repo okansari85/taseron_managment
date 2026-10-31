@@ -422,6 +422,25 @@ class PkTableDefinitions
         return null;
     }
 
+    // Kimlik etiketi başlık satırının ilk dolu hücresi mi: liste kimlikle başlar; ajan sonuç sütununu ("N.U") kimlik seçince kontrol listesi ekipman oluyordu (SGS topraklama).
+    // Etiket tabloda hiç yoksa karar verilemez, true.
+    public function identityLeads(string $pdfPath, string $identity): bool
+    {
+        foreach ((array) ($this->camelot->extract($pdfPath)['tables'] ?? []) as $table) {
+            if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice') {
+                continue;
+            }
+            foreach ((array) ($table['data'] ?? []) as $row) {
+                $cells = array_values(array_filter(array_map(fn ($cell) => trim((string) $cell), (array) $row), fn (string $cell) => $cell !== ''));
+                if (in_array($identity, $cells, true)) {
+                    return $cells[0] === $identity;
+                }
+            }
+        }
+
+        return true;
+    }
+
     // JSON sözleşmesindeki equipment_definitions kaydı; durum burada yok (kriter sonucu tablo okuyucudan, yoksa bilinmiyor).
     private function contract(string $name, string $axis, ?string $identity, ?string $identityValue, ?int $groupWidth, array $headers, array $values): array
     {
