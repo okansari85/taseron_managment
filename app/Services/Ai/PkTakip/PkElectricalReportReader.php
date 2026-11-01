@@ -396,11 +396,13 @@ class PkElectricalReportReader
         $labels = collect((array) ($semantic['template']['facility_or_project_information']['fields'] ?? []))
             ->filter(fn ($field) => is_array($field) && isset($field['key']))
             ->mapWithKeys(fn (array $field) => [$field['key'] => rtrim(trim((string) (((array) ($field['label_patterns'] ?? []))[0] ?? '')), ': ')]);
+        // Rapor bilgisi ajanının bulduğu değer (firma, adres, no, tarihler) kartta tekrar etmez: küçük model firma tablosunu da tesis sanabiliyor (Neta yangın algılama).
+        $known = array_map(fn ($field) => $this->plain(is_array($field) && is_scalar($field['value'] ?? null) ? (string) $field['value'] : ''), (array) ($semantic['extracted_data']['report_information'] ?? []));
         $values = [];
         foreach ((array) ($semantic['extracted_data']['facility_information'] ?? []) as $row) {
             $key = is_array($row) ? trim((string) ($row['key'] ?? '')) : '';
             $value = is_array($row) && is_scalar($row['value'] ?? null) ? trim((string) $row['value']) : '';
-            if ($key === '' || $value === '' || $value === '-') {
+            if ($key === '' || $value === '' || $value === '-' || in_array($this->plain($value), $known, true)) {
                 continue;
             }
             $label = ($labels[$key] ?? '') ?: (self::FACILITY_LABELS[$key] ?? Str::ucfirst(str_replace('_', ' ', $key)));

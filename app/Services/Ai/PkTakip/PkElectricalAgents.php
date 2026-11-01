@@ -372,7 +372,7 @@ PROMPT, $groups->map(fn ($group, $table) => "### Tablo t{$table}
             $kinds += (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
 Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [sN] yazar, hücreler | ile ayrılır. HER satırın türünü anlamına göre yaz (anahtar: sN).
 - tesis: tesisin / projenin özelliği: enerji sağlayan kuruluş, şebeke tipi ve gerilimi, proje var mı, projeye uygunluk, topraklama / topraklayıcı şekli, kontrol nedeni, yapı cinsi, kullanım amacı ve yeri, son kontrol tarihi, tesisatta değişiklik. Satırın tek bir hücresi bile böyleyse satır tesistir, yanında U gibi sonuç olsa da.
-- kriter: kontrol listesi tablosunun maddesi ve sonucu (A.1. gibi madde numaralı ya da "KONTROL KRİTERİ / Değerlendirme" tablosundaki UYGUN, UYGUN DEĞİL, U, U.D, U.Y), madde grubunun başlığı, sütun başlığı.
+- kriter: kontrol listesi tablosunun maddesi ve sonucu (A.1. gibi madde numaralı ya da "KONTROL KRİTERİ / Değerlendirme" tablosundaki UYGUN, UYGUN DEĞİL, U, U.D, U.Y), madde grubunun başlığı, sütun başlığı. Değeri böyle bir sonuç olmayan etiket-değer satırı kriter değildir.
 - rapor: rapor no, tarihler, firma / müşteri, adres, telefon, e-posta, sicil ve sözleşme no, kontrol metodu ve kapsamı, kişi, imza, kuruluş bilgisi.
 - alet: ölçüm aleti ya da termal kamera, seri no, kalibrasyon.
 - olcum: ölçüm noktası ya da ekipman listesinin satırı (sıra no, yer adı ve sayısal değerler: menfez, fan, pano, priz gibi) ya da böyle bir listenin sütun başlığı.
