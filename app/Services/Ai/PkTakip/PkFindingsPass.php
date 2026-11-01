@@ -194,7 +194,7 @@ PROMPT;
     {
         $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
 Sana bir periyodik kontrol raporunun TEK satırı verilecek; içinde birden çok cümle olabilir. HER cümleyi satırda yazdığı gibi text'e yaz, türünü kind'a yaz.
-- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum.
+- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum. "Not" diye başlasa ya da mevzuat maddesi anıyor olsa da bu tesiste / ölçülen noktada uygunsuzluk bildiriyorsa kusurdur.
 - not: bu tesiste bir kusur bildirmeyen bilgi: genel mevzuat ya da bakım / test hatırlatması, raporun geçerliliği, kopyalanma ve imza koşulları, kalıp açıklama, kısaltma ve lejant açıklaması.
 - sonuc: tesisatın geneli için verilen sonuç cümlesi ("kullanımı uygundur", "kullanımı uygun değildir" gibi).
 PROMPT, $line, max(1000, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['sentences' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
@@ -235,7 +235,7 @@ PROMPT, $line, max(1000, (int) (mb_strlen($line) / 2)), schema: ['type' => 'obje
             }
             $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
 Sana bir periyodik kontrol raporunun bölüm başlıkları (## ile başlar) ve satırları verilecek; her satırın başında [sN] yazar. HER satırın türünü kendi anlamına göre yaz (anahtar: sN). Satırın hangi başlığın altında olduğu türünü belirlemez: kusur notlarda da sonuçta da yazılabilir, not da kusur başlığının altında olabilir.
-- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum.
+- kusur: muayenede BU tesiste / ekipmanda görülen somut bir eksiklik, uygunsuzluk, hasar ya da düzeltilmesi gereken durum. "Not" diye başlasa ya da mevzuat maddesi anıyor olsa da bu tesiste / ölçülen noktada uygunsuzluk bildiriyorsa kusurdur.
 - not: bu tesiste bir kusur bildirmeyen bilgi: genel mevzuat ya da bakım / test hatırlatması, raporun geçerliliği, kopyalanma ve imza koşulları, kalıp açıklama.
 - sonuc: kusur saymadan tesisatın geneli için verilen sonuç cümlesi ("kullanımı uygundur", "kullanımı uygun değildir", "eksikler giderilmelidir" gibi).
 - diger: bölüm başlığı ("6. KUSUR AÇIKLAMALARI" gibi), lejant, imza ve onay bilgisi, tablo başlığı, kontrol listesi maddesi (soru / kriter ve yanında sonucu), kusur olmadığını söyleyen cümle.
