@@ -203,7 +203,7 @@ PROMPT;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($lines));
         $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(
-            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = bir durum anlatan cümle değil: formun başlık yazısı, risk seviyesi gibi etiket.',
+            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = bir durum anlatan cümle değil, formun başlık yazısı ya da etiketi ("KIRMIZI RİSK SEVİYESİ", "DİĞER UYGUNSUZLUKLAR" gibi).',
             implode("
 ", array_map(fn (string $key, string $line) => "[{$key}] " . mb_substr($line, 0, 300), $keys, $lines)),
             max(200, count($lines) * 12),
