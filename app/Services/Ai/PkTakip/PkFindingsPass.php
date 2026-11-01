@@ -203,17 +203,17 @@ PROMPT;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($lines));
         $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(
-            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor.',
+            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = cümle değil, formun başlık ya da etiket yazısı.',
             implode("
 ", array_map(fn (string $key, string $line) => "[{$key}] " . mb_substr($line, 0, 300), $keys, $lines)),
             max(200, count($lines) * 12),
-            schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['var', 'yok']]), 'required' => $keys]
+            schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['var', 'yok', 'baslik']]), 'required' => $keys]
         );
         $kept = [];
         foreach ($lines as $i => $line) {
             if (($found[$keys[$i]] ?? 'var') === 'yok') {
                 $this->notKusur[] = $line;
-            } else {
+            } elseif (($found[$keys[$i]] ?? 'var') === 'var') {
                 $kept[] = $line;
             }
         }
@@ -236,7 +236,8 @@ PROMPT, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'objec
         $parts = collect((array) ($found['parts'] ?? []))->filter(fn ($part) => is_array($part) && filled($part['text'] ?? null));
         $kept = $parts->filter(fn (array $part) => ($part['kind'] ?? null) === 'icerik' && str_contains($plain($line), $plain((string) $part['text'])))->map(fn (array $part) => trim((string) $part['text']))->values()->all();
 
-        return $kept ?: [$line];
+        // Parçalar birleşince satırın tamamı olmalı: ajan cümlenin başını kesiyordu (Lider: "Garaj tali panoda" → "tali panoda"). Tutmazsa satır aynen kalır.
+        return $kept && $plain($parts->pluck('text')->implode('')) === $plain($line) ? $kept : [$line];
     }
 
     /** @return list<string> satırdaki kusur cümleleri; cümle satırda yazılı olmalı (model uyduramaz). */
