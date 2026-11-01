@@ -20,8 +20,8 @@ EK KURALLAR (bunlar yukarıdaki kurallarla çelişirse bunlar geçerlidir)
 - Sonuç işaretleri rapordan rapora değişir ("U", "UD", "U.D", "Uygun D.", "G.D", "✔", "✘" gibi); hangisinin "uygun değil" olduğunu raporun lejantından öğren.
 - Bulgular raporun kusur / uygunsuzluk açıklaması bölümünden alınır. Kontrol listesi / kriter maddeleri (sonucu ne olursa olsun) bulgu değildir.
 - Her kusur maddesi ayrı bir finding'dir. Birden çok kusuru (ayrı cümleler ya da "1- ... 2- ..." gibi numaralı maddeler, ayrı ölçüm noktaları / menfezler / panolar) tek description'da birleştirme; her birini ayrı finding yap.
-  Kusur bölümünde numarasız, art arda yazılmış cümlelerin HER BİRİ ayrı bir kusurdur. Örnek: "Ön far yanmıyor. Sol arka lastik aşınmış." → iki ayrı finding.
-  Bir kusuru açıklayan ek bilgi (parantez içi gibi, örn. "Zincir uzamış. (Uzama oranı %3'ten fazla)") ayrı kusur değildir, aynı finding'de kalır.
+  Kusur bölümünde numarasız, art arda yazılmış cümlelerin HER BİRİ ayrı bir kusurdur. İki cümle iki ayrı finding olur.
+  Bir kusuru açıklayan ek bilgi (parantez içi gibi) ayrı kusur değildir, aynı finding'de kalır.
 - Raporda kusur yoksa findings = [].
 PROMPT;
 
@@ -102,8 +102,8 @@ BULGULAR (extracted_data.findings) — EN ÖNEMLİ KURAL
 - Kontrol kriterleri / kontrol listesi maddeleri (numaralı, sonunda bir sonuç işareti olan satırlar; işaretler rapora göre değişir: U, UD, U.D, G.D, ✔, ✘, "-" gibi) BULGU DEĞİLDİR. Bir kriter "uygun değil" işaretli olsa bile kriter maddesinin metnini bulgu olarak yazma; bulgu metnini kusur bölümünden al.
 - Raporda ayrı bir kusur bölümü yoksa ve "uygun değil" işaretli kriterin yanında kusuru anlatan bir açıklama yazıyorsa o açıklamayı bulgu yap. Açıklama yoksa bulgu üretme.
 - Her kusur maddesi ayrı bir finding'dir. Birden çok kusuru (ayrı cümleler ya da "1- ... 2- ..." gibi numaralı maddeler) tek description'da birleştirme; her birini ayrı finding yap.
-  Kusur bölümünde numarasız, art arda yazılmış cümlelerin HER BİRİ ayrı bir kusurdur. Örnek: "Ön far yanmıyor. Sol arka lastik aşınmış." → iki ayrı finding: "Ön far yanmıyor." ve "Sol arka lastik aşınmış.".
-  Bir kusuru açıklayan ek bilgi (parantez içi gibi, örn. "Zincir uzamış. (Uzama oranı %3'ten fazla)") ayrı kusur değildir, aynı finding'de kalır. description = maddenin metni, varsa madde numarasıyla ("1- Ön cam silecek lastiği yok."). system_name = yukarıdaki sistemin adı, source_pages = gerçek sayfa, severity = rapor önem derecesi ayırmıyorsa null, ambiguous = false.
+  Kusur bölümünde numarasız, art arda yazılmış cümlelerin HER BİRİ ayrı bir kusurdur. İki cümle iki ayrı finding olur.
+  Bir kusuru açıklayan ek bilgi (parantez içi gibi) ayrı kusur değildir, aynı finding'de kalır. description = maddenin metni, varsa madde numarasıyla. system_name = yukarıdaki sistemin adı, source_pages = gerçek sayfa, severity = rapor önem derecesi ayırmıyorsa null, ambiguous = false.
 - Raporda kusur yoksa findings = [].
 
 GENEL SONUÇ (extracted_data.overall_result)

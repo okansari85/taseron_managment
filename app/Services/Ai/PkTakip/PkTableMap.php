@@ -26,6 +26,7 @@ PROMPT;
     // $rules: türün ek kuralları (örn. elektrik talimatının ölçüm listeleri bölümü: ekipman adları); katalogda ekipman türü
     // olmayan sistemde ekipman adı bu kurallara göre yazılır.
     // $listsOnly: tablolar liste diye seçildiyse model tek ekipman yazamaz: satırları tek tek yazıp yüzlerce saniye harcıyordu (182150-topraklama).
+    // Sınırlar: küçük model listeyi döngüye sokup cevap sınırına kadar yazıyordu (akü formu: 300+ sn).
     public function map(string $documentText, array $systems, array $tableNos, array $labels, ?string $provider = null, string $rules = '', bool $listsOnly = false): array
     {
         $names = array_keys($systems);
@@ -37,17 +38,17 @@ PROMPT;
         $text = ['type' => ['string', 'null']];
         $table = ['type' => 'integer', 'enum' => $tableNos];
         $item = ['type' => 'object', 'properties' => [
-            'singles' => ['type' => 'array', ...($listsOnly ? ['maxItems' => 0] : []), 'items' => ['type' => 'object', 'properties' => [
+            'singles' => ['type' => 'array', 'maxItems' => $listsOnly ? 0 : 20, 'items' => ['type' => 'object', 'properties' => [
                 'equipment_name' => $equipment ? ['type' => 'string', 'enum' => $equipment] : ['type' => 'string'],
                 'table' => ['type' => ['integer', 'null'], 'enum' => [...$tableNos, null]],
                 'identity_value' => $text,
-                'properties' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => ['label' => ['type' => 'string'], 'value' => $text], 'required' => ['label', 'value']]],
+                'properties' => ['type' => 'array', 'maxItems' => 30, 'items' => ['type' => 'object', 'properties' => ['label' => ['type' => 'string'], 'value' => $text], 'required' => ['label', 'value']]],
             ], 'required' => ['equipment_name', 'table', 'identity_value', 'properties']]],
-            'lists' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
+            'lists' => ['type' => 'array', 'maxItems' => 6, 'items' => ['type' => 'object', 'properties' => [
                 'equipment_name' => $equipment ? ['type' => 'string', 'enum' => $equipment] : ['type' => 'string'],
                 'tables' => ['type' => 'array', 'items' => $table],
                 'identity_label' => $label,
-                'property_labels' => ['type' => 'array', 'items' => $label],
+                'property_labels' => ['type' => 'array', 'maxItems' => 30, 'items' => $label],
             ], 'required' => ['equipment_name', 'tables', 'identity_label', 'property_labels']]],
         ], 'required' => ['singles', 'lists']];
         $list = collect($systems)->map(fn ($types, $name) => '- ' . $name . ': ' . ($types ? implode(', ', $types) : '(ekipman türü yok)'))->implode("\n");
