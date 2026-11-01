@@ -194,6 +194,33 @@ PROMPT;
         return count($cells) >= 5 ? null : (count($cells) === 1 ? $cells[0] : $line);
     }
 
+    // Tek soruluk ajan: cümle uygunsuzluk var mı yok mu diyor. Kusur kararı olumsuz cümleyi de kusur sanıyordu, sistem de uygunsuz oluyordu (SGS termal: "Herhangi bir uygunsuzluğa rastlanılmamıştır").
+    private function onlyPositive(array $lines, ?string $provider): array
+    {
+        $lines = array_values($lines);
+        if (!$lines) {
+            return [];
+        }
+        $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($lines));
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(
+            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor.',
+            implode("
+", array_map(fn (string $key, string $line) => "[{$key}] " . mb_substr($line, 0, 300), $keys, $lines)),
+            max(200, count($lines) * 12),
+            schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['var', 'yok']]), 'required' => $keys]
+        );
+        $kept = [];
+        foreach ($lines as $i => $line) {
+            if (($found[$keys[$i]] ?? 'var') === 'yok') {
+                $this->notKusur[] = $line;
+            } else {
+                $kept[] = $line;
+            }
+        }
+
+        return $kept;
+    }
+
     // Kusur satırına yapışmış form başlığı ayrılır, satır bölünmez (Çebi raf: "...hasarlı. KIRMIZI RİSK SEVİYESİDİĞER UYGUNSUZLUKLAR"). Ajan yazısı satırda yoksa satır aynen kalır.
     private function withoutHeadings(string $line, ?string $provider): string
     {
