@@ -14,6 +14,7 @@ use App\Http\Controllers\PkWorkplaceNameController;
 use App\Http\Controllers\PkCustomerTypeController;
 use App\Http\Controllers\PkOperationalUnitController;
 use App\Http\Controllers\PkOrganizationNodeController;
+use App\Http\Controllers\PkExpertOrganizationController;
 use App\Http\Controllers\PkBulkAnalysisController;
 use App\Http\Controllers\PkBulkReportController;
 use App\Http\Controllers\PkCompanyDeletionController;
@@ -67,6 +68,8 @@ Route::prefix('api')
         Route::get('my-companies/{businessEntity}/delete-summary', [PkCompanyDeletionController::class, 'summary']);
         Route::delete('my-companies/{businessEntity}', [PkCompanyDeletionController::class, 'destroy']);
         Route::get('my-workplaces', [ExpertCompanyController::class, 'workplaces']);
+        // pktakip: üstteki Organizasyon kutusu, bireysel uzman (OSGB / kurumsal yönetici pk-account/organizations kullanır).
+        Route::get('pk-expert/organizations', PkExpertOrganizationController::class);
         // İşyeri ekleme: seçilen müşteride gösterilecek firmalar (başka müşterilerin firmaları gizlenir).
         Route::get('customers/{customer}/companies', [ExpertCompanyController::class, 'customerCompanies']);
         Route::get('customer-company-counts', [ExpertCompanyController::class, 'customerCompanyCounts']);
