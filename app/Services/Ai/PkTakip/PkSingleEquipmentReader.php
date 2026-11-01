@@ -42,6 +42,13 @@ class PkSingleEquipmentReader
         ];
     }
 
+    // Raf raporunun kusur bölümü: risk seviyesi başlıkları altında bölme numaralı hasarlar; numara metnin parçasıdır (hangi bölme olduğunu söyler).
+    private const RACK_FINDINGS = <<<'PROMPT'
+Sana bir depolama rafı periyodik kontrol raporunun KUSUR bölümü verilecek. Risk seviyesi başlıkları ve "DİĞER UYGUNSUZLUKLAR" başlığı kusur değildir, öğe yazma; bu başlıkların altındaki her cümle ayrı bir kusurdur, hiçbirini atlama.
+- text = cümlenin raporda yazdığı gibi tam metni. Baştaki bölme numarası metnin parçasıdır ("1. Bölme ...", "3. ve 4. Bölme ..."), silme. Parantez içi açıklama aynı cümlede kalır.
+- Kusur olmadığını söyleyen cümleler öğe değildir; bölüm boşsa items = [].
+PROMPT;
+
     // Ajanlarla okuma (yerel model, asansör dışı): rapor bilgisi (PkHeaderPass), ekipman (PkSingleEquipmentAgent) ve bulgular
     // (PkFindingsPass) ayrı küçük istekler; tek sistem, tek ekipman. Sözleşme readPages ile aynı.
     public function readPagesAgents(array $pages, string $typeSlug, ?string $provider = null, ?string $pdfPath = null): array
@@ -73,7 +80,7 @@ class PkSingleEquipmentReader
             return $semantic;
         }
 
-        return app(PkFindingsPass::class)->apply($semantic, $text, $provider);
+        return app(PkEquipmentFindingsPass::class)->apply($semantic, $text, $provider, sectionPrompt: $typeSlug === 'depolama-rafi' ? self::RACK_FINDINGS : null);
     }
 
     // Sayfalar hazırken (gerçek akış): JSON sözleşmesindeki semantic.
