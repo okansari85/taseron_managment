@@ -334,11 +334,38 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
             return null;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($rows));
-        // Tablo başına ayrı karar: bütün rapor tek istekte giderken ajan etiket-değer satırlarına da "kriter" diyordu (Neta yangın algılama: "Tesis Kullanım Amacı | DEPO").
-        // shortcut: tablonun ilk 40 satırı; tesis bilgisi uzun listenin sonunda olan rapor çıkarsa artırılır.
+        // Önce tablo konusu, bütün tablolar yan yana (karşılaştırarak karar verir); satır satır karar yalnız karışık tabloda. Tek istekte bütün satırlarda
+        // etiket-değer satırlarına "kriter" diyordu, tablo tablo sorunca firma bilgisine "tesis" (Neta yangın algılama).
+        $groups = collect($cells)->groupBy('table', preserveKeys: true);
+        $topicKeys = $groups->keys()->map(fn ($table) => 't' . $table)->all();
+        $topics = (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+Sana bir periyodik kontrol raporunun tabloları verilecek ("### Tablo tN" ve ilk satırları). HER tablonun konusunu yaz (anahtar: tN).
+- tesis: tesisin / projenin özellikleri (enerji sağlayan kuruluş, şebeke tipi, proje var mı, kullanım amacı, yapı cinsi, tesise özgü bilgiler gibi etiket ve değerleri).
+- rapor_firma: rapor no, tarihler, firma / müşteri, adres, telefon, sözleşme ve sicil no.
+- alet: ölçüm aleti, cihaz, kalibrasyon.
+- kontrol_listesi: kontrol maddeleri ve sonuçları.
+- olcum_listesi: ölçüm noktası ya da ekipman satırları.
+- yazi: not, açıklama, sonuç, yönetmelik başlığı.
+- imza: yetkili kişi, personel, onay.
+- karisik: aynı tabloda birden çok konu birlikte (tesis özellikleri ile ölçüm aleti ya da kontrol listesi gibi).
+PROMPT, $groups->map(fn ($group, $table) => "### Tablo t{$table}
+" . $group->take(8)->map(fn (array $cell) => mb_substr($cell['row'], 0, 160))->implode("
+"))->implode("
+
+"), max(500, count($topicKeys) * 15), schema: ['type' => 'object', 'properties' => array_fill_keys($topicKeys, ['type' => 'string', 'enum' => ['tesis', 'rapor_firma', 'alet', 'kontrol_listesi', 'olcum_listesi', 'yazi', 'imza', 'karisik']]), 'required' => $topicKeys]);
         $kinds = [];
-        foreach (collect($cells)->groupBy('table', preserveKeys: true) as $group) {
+        foreach ($groups as $table => $group) {
+            $topic = $topics['t' . $table] ?? null;
+            // shortcut: tablonun ilk 40 satırı; tesis bilgisi uzun listenin sonunda olan rapor çıkarsa artırılır.
             $own = array_slice($group->keys()->all(), 0, 40);
+            if ($topic === 'tesis') {
+                foreach ($own as $i) {
+                    $kinds[$keys[$i]] = 'tesis';
+                }
+            }
+            if ($topic !== 'karisik') {
+                continue;
+            }
             $ownKeys = array_map(fn (int $i) => $keys[$i], $own);
             $numbered = array_map(fn (int $i) => "[{$keys[$i]}] " . mb_substr($rows[$i], 0, 200), $own);
             $kinds += (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
@@ -354,9 +381,8 @@ PROMPT, implode("\n", $numbered), max(500, count($own) * 12), schema: ['type' =>
         }
 
         $fields = [];
-        $selected = self::facilitySelected($cells, array_map(fn (string $key) => $kinds[$key] ?? null, $keys));
         foreach ($rows as $i => $row) {
-            if (!in_array($i, $selected, true)) {
+            if (($kinds[$keys[$i]] ?? null) !== 'tesis') {
                 continue;
             }
             $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
@@ -398,27 +424,6 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
     public static function facilityRows(array $tables, int $pages = 3): array
     {
         return array_column(self::facilityCells($tables, $pages), 'row');
-    }
-
-    /**
-     * Tesis satırı + aynı küçük tablonun (en çok 6 satır) diğer satırları: "proje var mı | Var | kesit uygun mu | U" satırını ajan yanındaki U yüzünden
-     * kriter sayıyordu (#126, Neta elektrik). Büyük tablolar genişlemez, kriter satırları karta girmez.
-     *
-     * @param list<array{row: string, table: int}> $cells
-     * @param list<string|null> $kinds satır başına tür
-     * @return list<int> seçilen satır sıraları
-     */
-    public static function facilitySelected(array $cells, array $kinds): array
-    {
-        $sizes = array_count_values(array_column($cells, 'table'));
-        $tesis = [];
-        foreach ($cells as $i => $cell) {
-            if (($kinds[$i] ?? null) === 'tesis') {
-                $tesis[$cell['table']] = true;
-            }
-        }
-
-        return array_keys(array_filter($cells, fn (array $cell, int $i) => ($kinds[$i] ?? null) === 'tesis' || (isset($tesis[$cell['table']]) && $sizes[$cell['table']] <= 6), ARRAY_FILTER_USE_BOTH));
     }
 
     /** @return list<array{row: string, table: int}> */

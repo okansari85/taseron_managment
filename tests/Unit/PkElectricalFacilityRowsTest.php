@@ -56,15 +56,6 @@ class PkElectricalFacilityRowsTest extends TestCase
         $this->assertSame([], PkElectricalAgents::listRuns([$t(1, 13, 20), $t(2, 6, 2)], ['t2']));
     }
 
-    public function test_small_table_of_a_facility_row_is_selected_large_table_is_not(): void
-    {
-        $small = [['row' => 'Kullanım Amacı | Depo', 'table' => 0], ['row' => 'Proje var mı | Var | Kesit uygun mu | U', 'table' => 0]];
-        $large = array_fill(0, 7, ['row' => 'Kablo | U', 'table' => 1]);
-        $large[0] = ['row' => 'Şebeke Tipi | TT', 'table' => 1];
-
-        $this->assertSame([0, 1, 2], PkElectricalAgents::facilitySelected([...$small, ...$large], ['tesis', 'kriter', 'tesis', 'kriter', 'kriter', 'kriter', 'kriter', 'kriter', 'kriter']));
-    }
-
     public function test_warnings_catch_contradictions_without_changing_values(): void
     {
         $this->assertSame(['Rapor "uygun değil" diyor ama bulgu bulunamadı; kusur bölümünü kontrol edin.'], PkElectricalReportReader::warnings([
