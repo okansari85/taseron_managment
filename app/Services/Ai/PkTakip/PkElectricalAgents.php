@@ -334,8 +334,14 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
             return null;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($rows));
-        $numbered = array_map(fn (string $key, string $row) => "[{$key}] " . mb_substr($row, 0, 200), $keys, $rows);
-        $kinds = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+        // Tablo başına ayrı karar: bütün rapor tek istekte giderken ajan etiket-değer satırlarına da "kriter" diyordu (Neta yangın algılama: "Tesis Kullanım Amacı | DEPO").
+        // shortcut: tablonun ilk 40 satırı; tesis bilgisi uzun listenin sonunda olan rapor çıkarsa artırılır.
+        $kinds = [];
+        foreach (collect($cells)->groupBy('table', preserveKeys: true) as $group) {
+            $own = array_slice($group->keys()->all(), 0, 40);
+            $ownKeys = array_map(fn (int $i) => $keys[$i], $own);
+            $numbered = array_map(fn (int $i) => "[{$keys[$i]}] " . mb_substr($rows[$i], 0, 200), $own);
+            $kinds += (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
 Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [sN] yazar, hücreler | ile ayrılır. HER satırın türünü anlamına göre yaz (anahtar: sN).
 - tesis: tesisin / projenin özelliği: enerji sağlayan kuruluş, şebeke tipi ve gerilimi, proje var mı, projeye uygunluk, topraklama / topraklayıcı şekli, kontrol nedeni, yapı cinsi, kullanım amacı ve yeri, son kontrol tarihi, tesisatta değişiklik. Satırın tek bir hücresi bile böyleyse satır tesistir, yanında U gibi sonuç olsa da.
 - kriter: kontrol listesi tablosunun maddesi ve sonucu (A.1. gibi madde numaralı ya da "KONTROL KRİTERİ / Değerlendirme" tablosundaki UYGUN, UYGUN DEĞİL, U, U.D, U.Y), madde grubunun başlığı, sütun başlığı.
@@ -344,7 +350,8 @@ Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın 
 - olcum: ölçüm noktası ya da ekipman listesinin satırı (sıra no, yer adı ve sayısal değerler: menfez, fan, pano, priz gibi) ya da böyle bir listenin sütun başlığı.
 - baslik: yalnız bölüm başlığı olan satır.
 - diger: not, sonuç cümlesi, açıklama.
-PROMPT, implode("\n", $numbered), max(3000, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'olcum', 'baslik', 'diger']]), 'required' => $keys]);
+PROMPT, implode("\n", $numbered), max(500, count($own) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($ownKeys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'olcum', 'baslik', 'diger']]), 'required' => $ownKeys]);
+        }
 
         $fields = [];
         $selected = self::facilitySelected($cells, array_map(fn (string $key) => $kinds[$key] ?? null, $keys));
