@@ -194,6 +194,24 @@ PROMPT;
         return count($cells) >= 5 ? null : (count($cells) === 1 ? $cells[0] : $line);
     }
 
+    // Kusur satırına yapışmış form başlığı ayrılır, satır bölünmez (Çebi raf: "...hasarlı. KIRMIZI RİSK SEVİYESİDİĞER UYGUNSUZLUKLAR"). Ajan yazısı satırda yoksa satır aynen kalır.
+    private function withoutHeadings(string $line, ?string $provider): string
+    {
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
+Sana bir periyodik kontrol raporunun kusur bölümünden TEK satır verilecek; satırın sonuna ya da başına formun başlık yazıları yapışmış olabilir. Satırı sırayla parçalara ayır; her parçayı satırda yazdığı gibi text'e yaz.
+- icerik: kusuru anlatan cümleler.
+- baslik: formun bölüm ya da sütun başlığı, risk seviyesi etiketi gibi kusur anlatmayan yazı.
+PROMPT, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['parts' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
+            'text' => ['type' => 'string'],
+            'kind' => ['type' => 'string', 'enum' => ['icerik', 'baslik']],
+        ], 'required' => ['text', 'kind']]]], 'required' => ['parts']]);
+        $plain = fn (string $text) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $text), 'UTF-8');
+        $parts = collect((array) ($found['parts'] ?? []))->filter(fn ($part) => is_array($part) && filled($part['text'] ?? null));
+        $kept = trim($parts->filter(fn (array $part) => ($part['kind'] ?? null) === 'icerik')->pluck('text')->implode(' '));
+
+        return $kept !== '' && $parts->contains(fn (array $part) => ($part['kind'] ?? null) === 'baslik') && str_contains($plain($line), $plain($kept)) ? $kept : $line;
+    }
+
     /** @return list<string> satırdaki kusur cümleleri; cümle satırda yazılı olmalı (model uyduramaz). */
     private function kusurSentences(string $line, ?string $provider): array
     {
@@ -251,7 +269,7 @@ PROMPT, implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type'
                 // karakterlik satırda hatırlatma + "Mescit prizde topraklama bulunmamaktadır", satır bütünüyle not sayılmıştı).
                 // Tamamı kusur denen satır bölünmez: iki cümlelik bulgu parçalanıp ikinci cümlesi kayboluyordu (#18: "...BEZ HORTUM OLDUĞU GÖZLEMLENMİŞTİR. BİNA İÇERİSİNDE...").
                 if (($found[$key] ?? null) === 'kusur') {
-                    $kusur[] = $line;
+                    $kusur[] = mb_strlen($line) > 80 ? $this->withoutHeadings($line, $provider) : $line;
                 } elseif (in_array($found[$key] ?? null, ['not', 'sonuc'], true)) {
                     if (mb_strlen($line) > 80) {
                         $kusur = [...$kusur, ...$this->kusurSentences($line, $provider)];

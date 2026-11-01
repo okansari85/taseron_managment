@@ -93,6 +93,9 @@ class PkElectricalAgents
             $definitions[$name] = array_slice($definitions[$name] ?? [], 0, 1);
         }
 
+        // Katalogda olmayan sistem ancak gerçek bir listeyle kalır: tablosu çıkmayan kayıt sahte sistemdir (SGS: "PERİYODİK KONTROL RAPOR BİLGİLERİ" adıyla açılıyordu).
+        $systems = $systems->reject(fn (array $row, string $name) => $name !== 'Tesisat Geneli' && $systemNames && !in_array($name, $systemNames, true) && empty($definitions[$name]));
+
         // Tesis bilgisi bölümü etiketlenmediyse bütün yapılı metin (Tesis Özellikleri kartı her raporda okunur).
         $facilityText = $parts['facility'] ?? $parts['all'] ?? null;
         $facility = $this->facilityFromRows($pdfPath, $provider) ?? $this->facility(self::sections($instruction, [6, 7]), $facilityText, $provider);
