@@ -40,7 +40,8 @@ class PkOrganizationNodeController extends Controller
 
         $tenantId = $this->tenantContext->id();
 
-        if (DB::table('customer_organization')->where('customer_id', $customer->id)->where('organization_id', $id)->exists()) {
+        // Kök üst kaydı olmayandır: customer_organization'a her yeni düğüm de yazılır (createOrganization), kök ölçütü olamaz.
+        if ($organization->parent_id === null) {
             $this->fail('Firmanın en üstteki organizasyonu silinemez. Firmayı silmek için "Diğer işlemler → Firmayı sil" kullanın.');
         }
 
