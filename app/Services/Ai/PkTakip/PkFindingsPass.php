@@ -68,6 +68,11 @@ PROMPT;
             // ikinci ajan cümleyi bölüyordu (#122: "Not 1: … UYGUN DEĞİLDİR…" → yalnız "10.c.6.3.").
             // Madde işareti ("-PROJEYE ULAŞILAMADI.") bulgu metnine girmez.
             $copied = $headingOnly ? [] : null;
+            // Bölüm bütün metinden kopyalandıysa içindekiler de satır satır karara girer: "BİLGİ NOTU" yönetmelik cümleleri bulgu oluyordu (Neta kaçak akım raporu, tek ekipman yolu).
+            if (!$headingOnly && !$sectionOnly && $section !== null) {
+                $section = (string) $this->kusurSection($section, $provider, inSection: true);
+                $copied = array_values(array_filter(array_map(fn ($line) => ltrim(trim($line), "-* \t"), explode("\n", $section)), fn ($line) => $line !== ''));
+            }
             if (!$headingOnly && $sectionOnly) {
                 // Bölümde kusur yoksa yedek metinde de aynı satır satır karar; başlık kipi notları ve sonuç cümlesini kusur sanıyordu
                 // (#126: "YAZILI EKSİKLER GİDERİLMELİDİR."). Orada da yoksa bulgu yoktur.
