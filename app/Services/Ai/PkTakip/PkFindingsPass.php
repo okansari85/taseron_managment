@@ -306,6 +306,8 @@ PROMPT, implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type'
                 }
             }
 
+            $kusur = $this->onlyPositive($kusur, $provider);
+
             return $kusur ? implode("\n", $kusur) : null;
         }
         $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
