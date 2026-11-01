@@ -13,6 +13,7 @@ use App\Http\Controllers\PkFineController;
 use App\Http\Controllers\PkWorkplaceNameController;
 use App\Http\Controllers\PkCustomerTypeController;
 use App\Http\Controllers\PkOperationalUnitController;
+use App\Http\Controllers\PkOrganizationNodeController;
 use App\Http\Controllers\PkBulkAnalysisController;
 use App\Http\Controllers\PkBulkReportController;
 use App\Http\Controllers\PkCompanyDeletionController;
@@ -48,6 +49,8 @@ Route::prefix('api')
         Route::delete('customers/{customer}/organizations/{organization}', [CustomerOrganizationController::class, 'detach']);
 
         Route::patch('customers/{customer}/organizations/{organization}', CustomerOrganizationRenameController::class);
+        // pktakip: firma sayfasından tek organizasyon düğümünü silme (türden bağımsız; engelleri 422 ile bildirir).
+        Route::delete('customers/{customer}/pk-organizations/{organization}', [PkOrganizationNodeController::class, 'destroy']);
 
         Route::get('customers/{customer}/locations',[CustomerLocationController::class, 'index']);
         Route::post('customers/{customer}/organizations/{organization}/locations', [CustomerLocationController::class, 'store']);
