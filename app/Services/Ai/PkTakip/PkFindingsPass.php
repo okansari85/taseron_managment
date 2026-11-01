@@ -203,7 +203,7 @@ PROMPT;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($lines));
         $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(
-            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = cümle değil, formun başlık ya da etiket yazısı.',
+            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = bir durum anlatan cümle değil: formun başlık yazısı, risk seviyesi gibi etiket.',
             implode("
 ", array_map(fn (string $key, string $line) => "[{$key}] " . mb_substr($line, 0, 300), $keys, $lines)),
             max(200, count($lines) * 12),
@@ -221,23 +221,17 @@ PROMPT;
         return $kept;
     }
 
-    // Kusur satırına yapışmış form başlığı ayrılır, satır bölünmez (Çebi raf: "...hasarlı. KIRMIZI RİSK SEVİYESİDİĞER UYGUNSUZLUKLAR"). Ajan yazısı satırda yoksa satır aynen kalır.
+    // Kusur satırını böler, karar vermez (kararı onlyPositive verir: aynı ajana ikisini yaptırınca cümle parçalarını başlık sanıyordu, Lider). Parçalar birleşince satırın
+    // tamamı olmalı; tutmazsa satır aynen kalır (ajan cümlenin başını kesebiliyor).
     private function withoutHeadings(string $line, ?string $provider): array
     {
         $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporunun kusur bölümünden TEK satır verilecek; satırın sonuna ya da başına formun başlık yazıları yapışmış olabilir. Satırı sırayla parçalara ayır; her parçayı satırda yazdığı gibi text'e yaz. Her ayrı kusur (numaralı madde ya da ayrı cümle) ayrı parçadır; madde numarası parçada kalır.
-- icerik: kusuru anlatan cümleler.
-- baslik: formun bölüm ya da sütun başlığı, risk seviyesi etiketi gibi kusur anlatmayan yazı.
-PROMPT, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['parts' => ['type' => 'array', 'items' => ['type' => 'object', 'properties' => [
-            'text' => ['type' => 'string'],
-            'kind' => ['type' => 'string', 'enum' => ['icerik', 'baslik']],
-        ], 'required' => ['text', 'kind']]]], 'required' => ['parts']]);
+Sana bir periyodik kontrol raporunun kusur bölümünden TEK satır verilecek. Satırı sırayla parçalara ayır ve her parçayı yazdığı gibi yaz; hiçbir kelimeyi atlama, değiştirme. Her numaralı madde ya da tam cümle ayrı parçadır; madde numarası parçada kalır. Formun başlık yazıları da ayrı parçadır. Bir cümleyi ortasından bölme.
+PROMPT, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['parts' => ['type' => 'array', 'items' => ['type' => 'string']]], 'required' => ['parts']]);
         $plain = fn (string $text) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $text), 'UTF-8');
-        $parts = collect((array) ($found['parts'] ?? []))->filter(fn ($part) => is_array($part) && filled($part['text'] ?? null));
-        $kept = $parts->filter(fn (array $part) => ($part['kind'] ?? null) === 'icerik' && str_contains($plain($line), $plain((string) $part['text'])))->map(fn (array $part) => trim((string) $part['text']))->values()->all();
+        $parts = array_values(array_filter(array_map(fn ($part) => is_string($part) ? trim($part) : '', (array) ($found['parts'] ?? []))));
 
-        // Parçalar birleşince satırın tamamı olmalı: ajan cümlenin başını kesiyordu (Lider: "Garaj tali panoda" → "tali panoda"). Tutmazsa satır aynen kalır.
-        return $kept && $plain($parts->pluck('text')->implode('')) === $plain($line) ? $kept : [$line];
+        return $parts && $plain(implode('', $parts)) === $plain($line) ? $parts : [$line];
     }
 
     /** @return list<string> satırdaki kusur cümleleri; cümle satırda yazılı olmalı (model uyduramaz). */
