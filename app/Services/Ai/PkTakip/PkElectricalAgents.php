@@ -358,12 +358,13 @@ PROMPT, $groups->map(fn ($group, $table) => "### Tablo t{$table}
             $topic = $topics['t' . $table] ?? null;
             // shortcut: tablonun ilk 40 satırı; tesis bilgisi uzun listenin sonunda olan rapor çıkarsa artırılır.
             $own = array_slice($group->keys()->all(), 0, 40);
-            if ($topic === 'tesis') {
+            // Uzun tablo tek konu olamaz (form bütün sayfayı tek tablo çiziyor: Neta akü, 59 satır): satır kararına gider.
+            if ($topic === 'tesis' && count($own) <= 15) {
                 foreach ($own as $i) {
                     $kinds[$keys[$i]] = 'tesis';
                 }
             }
-            if ($topic !== 'karisik') {
+            if ($topic !== 'karisik' && !($topic === 'tesis' && count($own) > 15)) {
                 continue;
             }
             $ownKeys = array_map(fn (int $i) => $keys[$i], $own);
@@ -436,7 +437,8 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
             }
             foreach ((array) ($table['data'] ?? []) as $row) {
                 $cells = array_values(array_filter(array_map(fn ($cell) => Str::squish((string) $cell), (array) $row), fn (string $cell) => $cell !== ''));
-                if ($cells) {
+                // Her sayfada tekrar eden form satırı bir kez (Neta akü: aynı üst bilgi 3 sayfada).
+                if ($cells && !in_array(implode(' | ', $cells), array_column($rows, 'row'), true)) {
                     $rows[] = ['row' => implode(' | ', $cells), 'table' => $index];
                 }
             }
