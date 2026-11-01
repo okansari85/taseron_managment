@@ -71,6 +71,10 @@ class PkElectricalAgents
                 $map[$name] = app(PkTableMap::class)->map($text, [$name => []], $tableNos, $tableLabels, $provider, self::sections($instruction, [4], false), in_array($name, $listOnly ?? [], true))[$name] ?? ['lists' => [], 'singles' => []];
             }
         }
+        // Özelliği olmayan tek kayıt ekipman değildir: kontrol maddesi "Uygulaması Yok" kimliğiyle ekipman oluyordu (Neta paratoner).
+        foreach ($map as $name => $found) {
+            $map[$name]['singles'] = array_values(array_filter((array) ($found['singles'] ?? []), fn (array $single) => collect((array) ($single['properties'] ?? []))->contains(fn ($pair) => is_array($pair) && filled($pair['value'] ?? null))));
+        }
         $definitions = $this->definitions->build($pdfPath, $doclingTables, $map);
         foreach ($definitions as $name => $list) {
             $definitions[$name] = array_values(array_filter($list, fn (array $definition) => ($definition['instance_structure']['equipment_axis'] ?? null) !== 'rows'
