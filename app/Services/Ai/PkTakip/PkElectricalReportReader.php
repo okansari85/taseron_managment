@@ -398,8 +398,18 @@ class PkElectricalReportReader
             ->mapWithKeys(fn (array $field) => [$field['key'] => rtrim(trim((string) (((array) ($field['label_patterns'] ?? []))[0] ?? '')), ': ')]);
         // Rapor bilgisi ajanının bulduğu değer (firma, adres, no, tarihler) kartta tekrar etmez: küçük model firma tablosunu da tesis sanabiliyor (Neta yangın algılama).
         $known = array_map(fn ($field) => $this->plain(is_array($field) && is_scalar($field['value'] ?? null) ? (string) $field['value'] : ''), (array) ($semantic['extracted_data']['report_information'] ?? []));
+        // Bu değerlerden birini taşıyan küçük tablo rapor / firma tablosudur, kalan alanları da karta girmez (SGS: dosya ve sözleşme no). Tüm sayfayı tek tablo çizen formda (Neta akü) uygulanmaz.
+        $reportTables = [];
+        foreach ((array) ($semantic['extracted_data']['facility_information'] ?? []) as $row) {
+            if (is_array($row) && isset($row['table']) && ($row['table_rows'] ?? 99) <= 15 && is_scalar($row['value'] ?? null) && in_array($this->plain((string) $row['value']), array_filter($known), true)) {
+                $reportTables[$row['table']] = true;
+            }
+        }
         $values = [];
         foreach ((array) ($semantic['extracted_data']['facility_information'] ?? []) as $row) {
+            if (is_array($row) && isset($row['table'], $reportTables[$row['table']])) {
+                continue;
+            }
             $key = is_array($row) ? trim((string) ($row['key'] ?? '')) : '';
             $value = is_array($row) && is_scalar($row['value'] ?? null) ? trim((string) $row['value']) : '';
             if ($key === '' || $value === '' || $value === '-' || in_array($this->plain($value), $known, true)) {

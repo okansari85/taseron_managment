@@ -77,8 +77,9 @@ class PkElectricalAgents
         }
         $definitions = $this->definitions->build($pdfPath, $doclingTables, $map);
         foreach ($definitions as $name => $list) {
+            // Liste en az 2 sütun taşır: tek değerli kayıt etiket-değer tablosudur (SGS pano raporu: "Toprak Durumu" satırları ekipman oluyordu).
             $definitions[$name] = array_values(array_filter($list, fn (array $definition) => ($definition['instance_structure']['equipment_axis'] ?? null) !== 'rows'
-                || $this->definitions->identityLeads($pdfPath, (string) ($definition['instance_structure']['identity_field'] ?? ''))));
+                || (count((array) ($definition['attributes'] ?? [])) >= 2 && $this->definitions->identityLeads($pdfPath, (string) ($definition['instance_structure']['identity_field'] ?? '')))));
         }
         foreach ($map as $name => $found) {
             $list = ((array) ($found['lists'] ?? []))[0] ?? null;
@@ -397,7 +398,7 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
             foreach ((array) ($found['fields'] ?? []) as $field) {
                 $pair = is_array($field) ? self::facilityPair($row, (string) ($field['label'] ?? ''), (string) ($field['value'] ?? '')) : null;
                 if ($pair) {
-                    $fields[] = $pair;
+                    $fields[] = $pair + ['table' => $cells[$i]['table'], 'table_rows' => $groups[$cells[$i]['table']]->count()];
                 }
             }
         }
@@ -411,7 +412,7 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
                 'section_heading_patterns' => [],
                 'fields' => collect($keyed)->unique('key')->map(fn (array $field) => ['key' => $field['key'], 'label_patterns' => [$field['label']]])->values()->all(),
             ],
-            'facility_information' => array_map(fn (array $field) => ['key' => $field['key'], 'value' => $field['value']], $keyed),
+            'facility_information' => array_map(fn (array $field) => ['key' => $field['key'], 'value' => $field['value'], 'table' => $field['table'], 'table_rows' => $field['table_rows']], $keyed),
             'result_legend' => [],
         ];
     }
