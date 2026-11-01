@@ -414,7 +414,7 @@ class PkTableDefinitions
                 if (in_array($identity, $cells, true)) {
                     $labels = array_values(array_unique(array_filter($cells, fn (string $cell) => $cell !== '' && $cell !== $identity)));
 
-                    return $labels ? $this->contract($name, 'rows', $identity, null, null, [$identity, ...$labels], array_fill_keys($labels, null)) : null;
+                    return count($labels) >= 2 ? $this->contract($name, 'rows', $identity, null, null, [$identity, ...$labels], array_fill_keys($labels, null)) : null; // tek değerli satır etiket-değerdir, liste başlığı değil
                 }
             }
         }
