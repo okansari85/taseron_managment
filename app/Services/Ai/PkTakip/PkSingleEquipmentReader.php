@@ -72,6 +72,9 @@ PROMPT;
         $elevator = str_contains($typeSlug, 'asansor');
         $semantic = app(PkHeaderPass::class)->apply($semantic, $text, $provider, $elevator ? (string) str(PkSingleEquipmentPrompt::ELEVATOR_RULES)->after('GENEL SONUÇ (extracted_data.overall_result)') : '');
         $semantic = app(PkSingleEquipmentAgent::class)->apply($semantic, $text, $type, (array) ($catalog['common_specs'] ?? []), $provider, $pdfPath);
+        if ($typeSlug === 'jenerator') {
+            $semantic = self::repairGeneratorLetters($semantic);
+        }
         if ($elevator) {
             $semantic = $this->elevatorResult($semantic, (string) (array_values($pages)[0] ?? ''), $provider);
             $semantic['extracted_data']['findings'] = $this->elevatorFindings($pages, $type['name'], $provider);
@@ -119,6 +122,16 @@ PROMPT;
 
     // Asansör uygunsuzluk listesi onlarca uzun madde; küçük model tek istekte birleştiriyor / atlıyor. Her sayfa ayrı,
     // yalnız madde no + metin + renk soran küçük istekle okunur.
+    // Jeneratör raporlarının fontunda "ti" bitişik harfi "ţ" okunuyor ("Otomaţk"); Türkçede bu harf yok.
+    public static function repairGeneratorLetters(array $semantic): array
+    {
+        array_walk_recursive($semantic['extracted_data']['equipment_specs'], function (&$value) {
+            $value = is_string($value) ? str_replace('ţ', 'ti', $value) : $value;
+        });
+
+        return $semantic;
+    }
+
     private function elevatorFindings(array $pages, ?string $systemName, ?string $provider): array
     {
         $item = ['type' => 'object', 'properties' => ['no' => ['type' => 'string'], 'text' => ['type' => 'string'], 'color' => ['type' => 'string', 'enum' => ['Kırmızı', 'Sarı', 'Mavi', 'yok']]], 'required' => ['no', 'text', 'color']];

@@ -54,8 +54,58 @@ class PkBulkListPrompt
         $semantic['extracted_data']['report_category'] = PkBulkReportReader::CATEGORY;
         $semantic['template']['fire_systems']['systems'] = array_slice((array) ($semantic['template']['fire_systems']['systems'] ?? []), 0, 1);
 
+        $semantic['extracted_data']['findings'] = $this->findings($parts, $semantic['template']['fire_systems']['systems'][0]['system_name'] ?? null, $provider);
+
         return $this->withHeaders($semantic, implode("\n\n", $parts), $provider);
     }
+
+    // Bulgu yalnız "İkaz ve Öneriler" başlığının altındaki satırlardan okunur: bütün formu görünce model kontrol sorularını bulgu
+    // yazıyordu (Koç Medikal: 10 soru). Satır numarası sorulmaz, uzun listede model numarayı şaşırıyordu (72 yerine 122).
+    private function findings(array $parts, ?string $systemName, ?string $provider): array
+    {
+        $lines = array_values(array_filter(array_map('trim', explode("\n", implode("\n", $parts))), fn (string $line) => $line !== '' && !str_starts_with($line, '--- ')));
+        $client = PkLocalRetry::client($provider, fn () => false);
+        $heading = ((array) $client->extract(self::WARNINGS_HEADING_PROMPT, implode("\n", $lines), 100, schema: ['type' => 'object', 'properties' => ['baslik' => ['type' => ['string', 'null']]], 'required' => ['baslik']]))['baslik'] ?? null;
+        $window = self::warningsWindow($lines, $heading);
+        if ($window === []) {
+            return [];
+        }
+        $answer = (array) $client->extract(self::WARNINGS_PROMPT, implode("\n", $window), 3000, schema: ['type' => 'object', 'properties' => [
+            'items' => ['type' => 'array', 'maxItems' => self::WARNINGS_WINDOW, 'items' => ['type' => 'string']],
+        ], 'required' => ['items']]);
+
+        return collect((array) ($answer['items'] ?? []))
+            ->filter(fn ($item) => is_string($item) && self::plain($item) !== '' && str_contains(self::plain(implode("\n", $window)), self::plain($item)))
+            ->map(fn (string $item) => trim($item))->unique()->values()
+            ->map(fn (string $item, int $i) => ['id' => 'F' . ($i + 1), 'system_name' => $systemName, 'description' => $item, 'source_pages' => [], 'severity' => null, 'ambiguous' => false])
+            ->all();
+    }
+
+    // Modelin yazdığı başlık satırının altındaki satırlar; başlık metinde yoksa boş (form sorusu bulgu olmasın).
+    // shortcut: en çok 8 satır görülür, uzun ikaz listesinin sonu kaçar; böyle bir rapor gelirse pencere büyütülür.
+    public static function warningsWindow(array $lines, mixed $heading): array
+    {
+        $start = is_string($heading) && self::plain($heading) !== ''
+            ? collect($lines)->search(fn (string $line) => self::plain($line) === self::plain($heading))
+            : false;
+
+        return $start === false ? [] : array_slice($lines, $start + 1, self::WARNINGS_WINDOW);
+    }
+
+    private static function plain(string $value): string
+    {
+        return mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $value), 'UTF-8');
+    }
+
+    private const WARNINGS_WINDOW = 8;
+
+    private const WARNINGS_HEADING_PROMPT = <<<'PROMPT'
+Bir yangın söndürücü kontrol formunun metni verilecek. İkaz ve öneriler bölümünün başlık satırını, metinde yazdığı gibi aynen yaz. Bu başlık yoksa null.
+PROMPT;
+
+    private const WARNINGS_PROMPT = <<<'PROMPT'
+Satırlar, bir kontrol formunda "İKAZ VE ÖNERİLER" başlığının altındaki satırlardır. Üstten başla: firmaya yazılmış ikaz ya da öneri cümlelerini aynen listele. Başka bölüm başlığı (örn. SONUÇ VE KANAAT), imza, kişi adı, unvan, sayfa numarası ya da firma bilgisi görünce dur, ondan sonrasını yazma. İlk satır zaten böyleyse items = [].
+PROMPT;
 
     // Tablo başlıkları ayrı küçük istekle sorulur: uzun talimatın içinde model başlıkları bölüyor / atlıyor (tablo okuyucu
     // sütunları başlık metniyle bulduğu için tek harf farkı tabloyu okunamaz yapar). Şablon bu cevaptan kurulur.
@@ -121,8 +171,7 @@ TABLO BAŞLIKLARI — EN ÖNEMLİ KURAL (tablo okuyucu sütunları başlık metn
 RAPOR BİLGİLERİ (extracted_data.report_information)
 report_no ("Rapor No" başlığının değeri; sayfa köşesindeki form / doküman kodu tek başına rapor numarası değildir), company_title (raporu isteyen firma / müşteri; formu düzenleyen bakım / muayene firması değildir), address (kontrol adresi), report_date, control_date (kontrol tarihi), validity_date (sonraki kontrol tarihi). Değerleri raporda yazdığı gibi yaz.
 
-BULGULAR (extracted_data.findings)
-Raporun ikaz / öneri / kusur bölümündeki her madde ayrı bir finding'dir (system_name = yukarıdaki sistem adı, severity = null, ambiguous = false). Tablodaki cihaz satırlarını ve soru maddelerini bulgu yapma. Bölüm boşsa findings = [].
+BULGULAR (extracted_data.findings): [] yaz; bulguları ayrı ajan okur.
 
 GENEL SONUÇ (extracted_data.overall_result): text = sonuç ve kanaat cümlesi; status: kullanıma uygunsa "uygun", değilse "uygun_degil".
 SONUÇ LEJANTI (extracted_data.result_legend): işaretlerin açıklaması (örn. {"code": "✔", "meaning": "Uygun"}); yoksa [].

@@ -100,10 +100,30 @@ class PkReportAnalyzer
                 $semantic['extracted_data']['facility_information'] = (array) ($facility['facility_information'] ?? []);
                 $semantic['extracted_data']['result_legend'] = (array) ($facility['result_legend'] ?? []);
             }
-            $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback, equipmentLinks: true);
+            // Davlumbazın kendi akışı: kusurlar NOTLAR başlığında, ortak ajan onları not sayıyordu.
+            if ($structuredPages && self::isHoodReport($semantic)) {
+                return app(PkElectricalAgents::class)->findings($semantic, $structuredPages, PkElectricalAgents::HOOD);
+            }
+            $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback, equipmentLinks: true, tablesText: self::isCabinetReport($semantic) ? $structuredText : null);
         }
 
         return $semantic;
+    }
+
+    // Tablo bulgusu yalnız yangın dolabı raporuna: tür "yangin-tesisati" davlumbazı da kapsıyor, orada kontrol soruları bulgu oluyordu (SGS 0092-004).
+    public static function isCabinetReport(array $semantic): bool
+    {
+        $names = array_column((array) ($semantic['template']['fire_systems']['systems'] ?? []), 'system_name');
+
+        return ($semantic['extracted_data']['equipment_type']['slug'] ?? null) === 'yangin-tesisati'
+            && in_array('Yangın Dolapları ve Hortum Makaraları', $names, true)
+            && !in_array('Gazlı Söndürme Sistemi', $names, true);
+    }
+
+    public static function isHoodReport(array $semantic): bool
+    {
+        return ($semantic['extracted_data']['equipment_type']['slug'] ?? null) === 'yangin-tesisati'
+            && in_array('Gazlı Söndürme Sistemi', array_column((array) ($semantic['template']['fire_systems']['systems'] ?? []), 'system_name'), true);
     }
 
     private function ocrNote(): string

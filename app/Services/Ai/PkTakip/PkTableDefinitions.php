@@ -409,9 +409,13 @@ class PkTableDefinitions
             if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice') {
                 continue;
             }
-            foreach ((array) ($table['data'] ?? []) as $row) {
+            foreach ((array) ($table['data'] ?? []) as $r => $row) {
                 $cells = array_map(fn ($cell) => trim((string) $cell), array_values((array) $row));
                 if (in_array($identity, $cells, true)) {
+                    // Alt başlık: alttaki satırda rakamsız dolu hücreler varsa sütun adı odur ("Koruma Elemanı" altında "In (A)").
+                    $sub = array_map(fn ($cell) => trim((string) $cell), array_values((array) ($table['data'][$r + 1] ?? [])));
+                    $hasSub = count(array_filter($sub)) >= 2 && !array_filter($sub, fn (string $cell) => preg_match('/\d/', $cell) === 1);
+                    $cells = $hasSub ? array_map(fn (string $cell, $c) => ($sub[$c] ?? '') ?: $cell, $cells, array_keys($cells)) : $cells;
                     $labels = array_values(array_unique(array_filter($cells, fn (string $cell) => $cell !== '' && $cell !== $identity)));
 
                     return count($labels) >= 2 ? $this->contract($name, 'rows', $identity, null, null, [$identity, ...$labels], array_fill_keys($labels, null)) : null; // tek değerli satır etiket-değerdir, liste başlığı değil

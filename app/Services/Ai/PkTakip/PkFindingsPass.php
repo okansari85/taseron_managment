@@ -38,9 +38,11 @@ PROMPT;
     // metin); bölümde kusur bulunamazsa (yanlış bölüm) arama oradan. $measurementTable: sistem tablolarının satırları
     // ([['system' => ..., 'line' => "| … |"]], havalandırma); uygun olmayan ölçüm satırları da bulgu olur. $equipmentLinks: bulgudaki
     // cihaz numaraları da okunur (affected_equipment).
-    public function apply(array $semantic, string $documentText, ?string $provider = null, bool $measurementRows = false, array $systemEquipment = [], bool $sectionOnly = false, ?string $wholeText = null, ?array $measurementTable = null, bool $equipmentLinks = false): array
+    // $tablesText: rapor uygun değil ama kusur bölümü boşsa bulgular tablonun açıklama sütunundadır (SGS yangın dolabı: "-PROJE GÖRÜLEMEDİ").
+    public function apply(array $semantic, string $documentText, ?string $provider = null, bool $measurementRows = false, array $systemEquipment = [], bool $sectionOnly = false, ?string $wholeText = null, ?array $measurementTable = null, bool $equipmentLinks = false, ?string $tablesText = null): array
     {
         $this->notKusur = [];
+        $this->fire = ($semantic['extracted_data']['equipment_type']['slug'] ?? null) === 'yangin-tesisati';
         $systems = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->pluck('system_name')->filter()->unique()->values()->all();
         // Bütün rapor verildiğinde her madde nereden alındığını söyler; yalnız kusur bölümünden (havalandırmada ölçüm tablosundan)
         // gelenler bulgu olur: küçük model kriter maddelerini de yazabiliyor (NuExtract3, #38: kusur bölümü boş, 16 kriter).
@@ -85,6 +87,9 @@ PROMPT;
         $items = isset($copied) ? array_map(fn ($line) => ['text' => $line], $copied) : ($sectionOnly && trim($documentText) === '' ? [] : (array) (PkLocalRetry::client($provider, fn (array $r) => empty($r['items']) && ($semantic['extracted_data']['overall_result']['status'] ?? null) === 'uygun_degil')->extract($sectionOnly ? self::SECTION_PROMPT : self::PROMPT . ($measurementRows ? "\n" . self::MEASUREMENT_ROWS : ''), $documentText, 12000, schema: $schema)['items'] ?? []));
         $texts = collect($items)->filter(fn ($found) => $sectionOnly || in_array($found['from'] ?? null, ['kusur_bolumu', 'olcum_tablosu'], true))
             ->map(fn ($found) => (string) ($found['text'] ?? ''))->filter()->values()->all();
+        if ($texts === [] && $tablesText !== null && ($semantic['extracted_data']['overall_result']['status'] ?? null) === 'uygun_degil') {
+            $texts = $this->tableFindings($tablesText, $provider);
+        }
         $assigned = $this->assignSystems($texts, $semantic, $systems, $provider, $systemEquipment);
         // Ölçüm satırı bulgusunun sistemi satırın geldiği sistem tablosudur (ajana sorulmaz): eşleştirme ajanı menfez satırlarını fan
         // sistemine bağlıyordu (#141).
@@ -150,6 +155,27 @@ Periyodik kontrol raporunun numaralı bulguları verilecek. HER bulgu için, bul
 PROMPT;
 
     /** @return array<string, string> bulgu metni (satır) => satırın sistemi */
+    /** @return list<string> tablolarda uygun değil işaretli satırların farklı açıklama metinleri */
+    private function tableFindings(string $text, ?string $provider): array
+    {
+        $tables = collect(explode("\n", $text))->filter(fn (string $line) => str_starts_with(trim($line), '| '))->implode("\n");
+        if ($tables === '') {
+            return [];
+        }
+        $found = PkLocalRetry::client($provider, fn () => false)->extract(self::TABLE_FINDINGS, $tables, 1000, schema: ['type' => 'object', 'properties' => [
+            'items' => ['type' => 'array', 'maxItems' => 30, 'items' => ['type' => 'string']],
+        ], 'required' => ['items']]);
+        $plain = fn (string $value) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $value), 'UTF-8');
+
+        return collect((array) ($found['items'] ?? []))->filter(fn ($item) => is_string($item) && $plain($item) !== '' && str_contains($plain($tables), $plain($item)))
+            ->map(fn (string $item) => ltrim(trim($item), "-* \t"))->unique()->values()->all();
+    }
+
+    private const TABLE_FINDINGS = <<<'PROMPT'
+Sana sonucu "uygun değil" olan bir periyodik kontrol raporunun tabloları verilecek. Sonucu uygun değil işaretli satırların açıklama sütununda yazan eksiklik metinlerini yaz (items), raporda yazdığı gibi. Aynı metin birçok satırda geçiyorsa bir kez yaz.
+- Sütun başlıklarını, lejantı, cihaz adını, konumu ve kontrol maddelerini yazma. Açıklama yoksa items = [].
+PROMPT;
+
     private function measurementFindings(array $rows, ?string $provider): array
     {
         if (!$rows) {
@@ -176,6 +202,42 @@ PROMPT;
     /** @var list<string> kusur kararında kusur sayılmayan not / sonuç satırları */
     private array $notKusur = [];
 
+    // Yangın tesisatına ve davlumbaza özel davranışların anahtarı: öteki türler etkilenmez (kullanıcı kuralı).
+    private bool $fire = false;
+
+    private const FIRE_NOTE = <<<'PROMPT'
+- Bu raporda muayenede ulaşılamayan, görülemeyen ya da test edilemeyen şey de kusurdur ("PROJEYE ULAŞILAMADI.", "ALARM VE FLANŞÖRLER TEST EDİLEMEDİ").
+PROMPT;
+
+    private const FIRE_ASSIGN = <<<'PROMPT'
+Önce şuna bak: bulguda dolap ya da hortum geçiyorsa (örn. "YD-73 NOLU DOLAPTA BEZ HORTUM OLDUĞU", "BEZ HORTUM SİSTEMİ UYGUN DEĞİLDİR") sistem yangın dolabıdır. Sprinkler sistemi yalnız bulguda sprink ya da yağmurlama geçiyorsa seçilir. Proje, hidrolik hesap ya da kayıt eksiği (örn. "YANGIN TESİSATI PROJESİNE ULAŞILAMADI.", "HİDROLİK HESAPLARINA ULAŞILAMADI.") belge ve kayıt sistemidir.
+PROMPT;
+
+    private const FIRE_ITEMS = <<<'PROMPT'
+Sana bir yangın tesisatı raporunun kusur bölümünden TEK satır verilecek. Satırda birden çok ayrı madde yazılı olabilir. Her maddeyi raporda yazdığı gibi items'a yaz; madde kodu ve bina adı dahil, satırdaki hiçbir sözcüğü atlama.
+- Aynı cihazı anlatan art arda cümleler tek maddedir ("YD-73 NOLU DOLAPTA BEZ HORTUM OLDUĞU GÖZLEMLENMİŞTİR. BİNA İÇERİSİNDE BEZ HORTUM SİSTEMİ UYGUN DEĞİLDİR.").
+- Farklı cihaz ya da konu ayrı maddedir ("İDARİ BİNA YD-33 NOLU DOLAPTA KABİN OLMADIĞI GÖZLEMLENMİŞTİR. İDARİ BİNA YD-79 DOLABINDA DARBE OLDUĞU GÖZLEMLENMİŞTİR." iki madde: "İDARİ BİNA YD-33 NOLU DOLAPTA KABİN OLMADIĞI GÖZLEMLENMİŞTİR." ve "İDARİ BİNA YD-79 DOLABINDA DARBE OLDUĞU GÖZLEMLENMİŞTİR."; "PROJESİNE ULAŞILAMADI. -SU DEPOSU KAPASİTESİ ÖLÇÜLEMEDİ." iki madde).
+PROMPT;
+
+    // Yangın: satır maddelere ayrılır, ayırma metni değiştirmişse satır aynen kalır. Başlık temizliği yapılmaz: madde kodunu başlık sanıp siliyordu ("6.G.5.", hidrant bulgusu dolaba gidiyordu).
+    private function fireItems(string $line, ?string $provider): array
+    {
+        if (mb_strlen($line) <= 80) {
+            return [$line];
+        }
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(self::FIRE_ITEMS, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['items' => ['type' => 'array', 'items' => ['type' => 'string']]], 'required' => ['items']]);
+
+        return self::sameTextSplit($line, array_values(array_filter((array) ($found['items'] ?? []), 'is_string')));
+    }
+
+    /** @param list<string> $items */
+    public static function sameTextSplit(string $line, array $items): array
+    {
+        $plain = fn (string $text) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $text), 'UTF-8');
+
+        return $plain(implode('', $items)) === $plain($line) ? array_map('trim', $items) : [$line];
+    }
+
     // Kusur kararına girecek satır. Tek hücreli tablo satırı yazıdır. 5 ve üzeri hücreli satır ölçüm listesidir, karara girmez: bölüme
     // karışan ölçüm satırları bulgu oluyordu (kör test, 96320-topraklama: 29 ölçüm noktası).
     public static function kusurLine(string $line): ?string
@@ -198,7 +260,7 @@ PROMPT;
         }
         $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($lines));
         $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(
-            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = bir durum anlatan cümle değil, formun başlık yazısı ya da etiketi ("KIRMIZI RİSK SEVİYESİ", "DİĞER UYGUNSUZLUKLAR" gibi).',
+            'Sana periyodik kontrol raporundan cümleler verilecek; her birinin başında [sN] yazar. HER cümle için anahtar sN: var = cümle bir eksiklik, uygunsuzluk ya da hasar OLDUĞUNU söylüyor; yok = böyle bir şey OLMADIĞINI söylüyor; baslik = bir durum anlatan cümle değil, formun başlık yazısı ya da etiketi ("KIRMIZI RİSK SEVİYESİ", "DİĞER UYGUNSUZLUKLAR" gibi).' . ($this->fire ? ' Ulaşılamayan, görülemeyen, ölçülemeyen ya da test edilemeyen şey de eksikliktir: var.' : ''),
             implode("
 ", array_map(fn (string $key, string $line) => "[{$key}] " . mb_substr($line, 0, 300), $keys, $lines)),
             max(200, count($lines) * 12),
@@ -285,13 +347,15 @@ Sana bir periyodik kontrol raporunun bölüm başlıkları (## ile başlar) ve s
 - not: bu tesiste bir kusur bildirmeyen bilgi: genel mevzuat ya da bakım / test hatırlatması, raporun geçerliliği, kopyalanma ve imza koşulları, kalıp açıklama.
 - sonuc: kusur saymadan tesisatın geneli için verilen sonuç cümlesi ("kullanımı uygundur", "kullanımı uygun değildir", "eksikler giderilmelidir" gibi). Belirli bir pano, nokta ya da ekipmanı anlatan cümle sonuç değildir.
 - diger: bölüm başlığı ("6. KUSUR AÇIKLAMALARI" gibi), lejant, imza ve onay bilgisi, tablo başlığı, kontrol listesi maddesi (soru / kriter ve yanında sonucu), kusur olmadığını söyleyen cümle.
-PROMPT, implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys(array_keys($lines), ['type' => 'string', 'enum' => ['kusur', 'not', 'sonuc', 'diger']]), 'required' => array_keys($lines)]);
+PROMPT . ($this->fire ? "\n" . self::FIRE_NOTE : ''), implode("\n", $numbered), max(3000, count($lines) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys(array_keys($lines), ['type' => 'string', 'enum' => ['kusur', 'not', 'sonuc', 'diger']]), 'required' => array_keys($lines)]);
             $kusur = [];
             foreach ($lines as $key => $line) {
                 // Kusur ve sonuç / hatırlatma cümlesi aynı satırda olabilir: türü cümle cümle (kör test, 11930-elektrik; 404110-topraklama: 129
                 // karakterlik satırda hatırlatma + "Mescit prizde topraklama bulunmamaktadır", satır bütünüyle not sayılmıştı).
                 // Tamamı kusur denen satır bölünmez: iki cümlelik bulgu parçalanıp ikinci cümlesi kayboluyordu (#18: "...BEZ HORTUM OLDUĞU GÖZLEMLENMİŞTİR. BİNA İÇERİSİNDE...").
-                if (($found[$key] ?? null) === 'kusur') {
+                if (($found[$key] ?? null) === 'kusur' && $this->fire) {
+                    $kusur = [...$kusur, ...$this->fireItems($line, $provider)];
+                } elseif (($found[$key] ?? null) === 'kusur') {
                     $kusur[] = mb_strlen($line) > 80 ? $this->withoutHeadings($line, $provider) : $line;
                 } elseif (in_array($found[$key] ?? null, ['not', 'sonuc'], true)) {
                     if (mb_strlen($line) > 80) {
@@ -335,7 +399,7 @@ PROMPT, $documentText, 3000, schema: ['type' => 'object', 'properties' => ['sect
             'index' => ['type' => 'integer'],
             'system_name' => ['type' => ['string', 'null'], 'enum' => [...$systems, null]],
         ], 'required' => ['index', 'system_name']]]], 'required' => ['assignments']];
-        $found = PkLocalRetry::client($provider, fn (array $r) => empty($r['assignments']))->extract(<<<PROMPT
+        $found = PkLocalRetry::client($provider, fn (array $r) => empty($r['assignments']))->extract(($this->fire ? self::FIRE_ASSIGN . "\n" : '') . <<<PROMPT
 Bir tesisat periyodik kontrol raporunun bulguları ve sistemleri verilecek. Her bulgunun ait olduğu sistemi seç.
 - ÖNCE madde koduna bak: bulgunun başında madde kodu varsa (örn. "6.G.5."), koddaki grup harfi (G) hangi sistemin bölüm başlığındaki kodla aynıysa (örn. "G HİDRANT") bulgu o sistemindir; metinde başka bir ekipman adı (örn. "dolap içerisinde") geçse bile.
 - Bulgudaki ekipman adını sistemlerin ekipman listeleriyle karşılaştır (örn. bulguda pompa geçiyorsa ekipmanında pompa olan sistem). Bulgu hangi sistemin ekipmanını ya da bölümünü anlatıyorsa (örn. dolap, hidrant, pompa, depo, vana, boru, sprinkler, ölçüm noktası, pano) o sistemi seç. Bulgunun başındaki madde / bölüm kodu (örn. "7.B.3.") sistemi gösterir: kod, hangi sistemin rapordaki bölüm başlığının koduyla başlıyorsa bulgu o sisteme aittir.

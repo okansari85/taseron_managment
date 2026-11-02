@@ -74,19 +74,23 @@ class PkElectricalReportAnalyzer
         // Docling yoksa tür talimatı bütün halde (rapor bilgisi / sonuç / bulgu / kuruluş bölümleri çıkarılmış).
         // Bölümler bir kez: hangi başlık hangi sistem (türün 2. bölüm kuralıyla; kendi formu / tablosu olmayan kontrol listesi
         // "Tesisat Geneli"), kusur, bilgi; her ajan yalnız kendi bölümünü okur.
-        $agents = PkAiProvider::agents() && $structuredPages && $doclingTables && $pdfPath;
+        $agents = PkAiProvider::agents() && $structuredPages && $pdfPath;
         $catalogNames = array_keys(PkInstallationSystemsPass::equipmentBySystem($catalog, $typeSlug));
-        $parts = PkAiProvider::agents() && $structuredPages
-            ? app(PkDocumentSections::class)->texts($structuredPages, $agents ? [...$catalogNames, 'Tesisat Geneli'] : $catalogNames, rules: $agents ? PkElectricalAgents::sections($instruction, [2], false) : '')
-            : [];
+        $parts = [];
         // Tablosuz kapak sayfası (yalnız adres ve "EK-I"): bilgi yok; model boş sayfaya tarih, sonuç ve sistem uyduruyordu (kör test, termal
         // dosyaları: kapak 841 karakter, en kısa gerçek rapor 4120).
         if (PkAiProvider::agents() && !$doclingTables && mb_strlen(trim($text)) < 1500) {
             throw new RuntimeException('PDF\'te rapor içeriği yok (kapak ya da ek sayfası olabilir).');
         }
-        $semantic = $agents
-            ? app(PkElectricalAgents::class)->read($instruction, $parts + ['all' => $this->buildDocumentText($structuredPages)], $doclingTables, $pdfPath, $tableLabels, $typeSlug, systemNames: $catalogNames)
-            : $client->extract($prompt, $text, 50000);
+        // Tesisat: rapor bilgisi, tesis kartı, tablo seçimi ve kusur ajanları; satırları kod okur.
+        if ($agents) {
+            $tesisat = app(PkElectricalAgents::class);
+            $semantic = $tesisat->read($instruction, $pdfPath, $typeSlug, systemNames: $catalogNames, allText: $this->buildDocumentText($structuredPages));
+            $semantic = app(PkHeaderPass::class)->apply($semantic, PkHeaderPass::input([], $this->buildDocumentText($structuredPages)));
+
+            return $tesisat->findings($semantic, $structuredPages, $typeSlug, catalogNames: $catalogNames);
+        }
+        $semantic = $client->extract($prompt, $text, 50000);
 
         // Yerel model: sistemler ve bulgular ayrı kısa isteklerle ikinci kez okunur (önce sistemler; bulgular sistem listesinden eşleşir).
         if (!PkAiProvider::agents()) {

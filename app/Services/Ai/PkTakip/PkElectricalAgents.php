@@ -5,11 +5,8 @@ namespace App\Services\Ai\PkTakip;
 use Illuminate\Support\Str;
 
 /**
- * Elektrik ailesi (yerel model, Docling akışı): türün talimatı (PkElectricalReportAnalyzer) bölüm bölüm küçük ajanlara
- * verilir; kurallar aynen o talimattan. Sistemler (0, 2, 3) Docling'in özetinden (başlıklar ve tabloların ilk satırı: bir
- * bölümün kendi formu / tablosu var mı burada görünür); ölçüm / cihaz listeleri sistem başına tablo haritasıyla (4. bölüm
- * adlandırma kuralıyla; yapıyı PkTableDefinitions bulur, satırları mevcut tablo okuyucu okur); tesis bilgisi ve lejant (6, 7).
- * Rapor bilgisi / sonuç / kuruluş (PkHeaderPass) ve bulgular (PkFindingsPass) ayrı ajanlardır. Sözleşme aynı.
+ * Tesisat okuması (yerel model): rapor bilgisi (PkHeaderPass), tesis kartı, tablo seçimi ve kusur ajanları. Satırları ve sütunları kod okur (Camelot, PkGridRows).
+ * Ajan az tutulur: zincir uzadıkça hata birikiyordu. Tipe özel metinler türün talimatında ve PkTesisatTalimat'ta. Ekipman yolu burayı kullanmaz.
  */
 class PkElectricalAgents
 {
@@ -19,98 +16,34 @@ class PkElectricalAgents
 
     /**
      * @param string $instruction türün talimatı
-     * @param array $parts PkDocumentSections::texts() (by_system: sistem adı => o sistemin bölümleri; facility)
-     * @param list<array> $doclingTables pk_docling.py "tables"
+     * @param list<string> $systemNames katalog sistemleri
      */
-    public function read(string $instruction, array $parts, array $doclingTables, string $pdfPath, array $tableLabels, string $typeSlug, ?string $provider = null, array $systemNames = []): array
+    public function read(string $instruction, string $pdfPath, string $typeSlug, ?string $provider = null, array $systemNames = [], ?string $allText = null): array
     {
-        $schema = $this->contract->responseSchema()['properties'];
-        $template = $schema['template']['properties'];
-        $data = $schema['extracted_data']['properties'];
-        $system = $template['fire_systems']['properties']['systems']['items']['properties'];
-
-        // Docling'in bölümlerinde hiçbir sistemin tablosu yoksa (başlıklar tablonun içinde kaldı) tablonun sistemini ajan Camelot satırlarından
-        // seçer; alanı, haritası ve okuyucusu aynı kalır.
-        if (!collect((array) ($parts['by_system'] ?? []))->contains(fn ($text, $name) => $name !== 'Tesisat Geneli' && str_contains((string) $text, '### Tablo '))) {
-            [$bySystem, $camelotTables, $labels] = $this->systemTables($pdfPath, $systemNames, self::sections($instruction, [2], false), $provider);
-            if ($bySystem) {
-                $parts['by_system'] = [...(array) ($parts['by_system'] ?? []), ...$bySystem];
-                $listOnly = array_keys($bySystem);
-                $doclingTables = $camelotTables;
-                $tableLabels = array_values(array_unique([...$tableLabels, ...$labels]));
-            }
+        $raw = (array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []);
+        $definitions = $this->measurementLists($raw, $pdfPath, $systemNames, self::sections($instruction, [2], false), $provider);
+        $rows = self::facilityRows($raw);
+        $facility = $this->facility(self::sections($instruction, [6, 7]), $rows ? implode("\n", $rows) : $allText, $provider);
+        // Değer Camelot satırında yazılı olmalı (model uyduramaz, komşu hücreye kayamaz).
+        if ($rows) {
+            $text = implode(' ', $rows);
+            $labels = collect((array) ($facility['facility_or_project_information']['fields'] ?? []))->mapWithKeys(fn (array $field) => [$field['key'] => $field['label_patterns'][0] ?? '']);
+            $facility['facility_information'] = array_values(array_filter((array) ($facility['facility_information'] ?? []), fn (array $field) => self::facilityPair($text, (string) ($labels[$field['key']] ?? ''), (string) ($field['value'] ?? '')) !== null));
         }
-
-        // Her sistem ayrı ajan, yalnız kendi bölümü: sonucu (3. bölüm kuralı) ve ölçüm / cihaz listesi (4. bölüm, tablo haritası).
-        $systems = collect();
-        $map = [];
-        foreach ((array) ($parts['by_system'] ?? []) as $name => $text) {
-            $verdict = PkLocalRetry::client($provider, fn () => false)->extract(
-                self::sections($instruction, [3], false) . "\n\nBU ADIMDA: verilen bölüm \"{$name}\" sistemine ait; yalnız bu sistemin sonucunu (verdict) yaz.",
-                $text,
-                2000,
-                schema: ['type' => 'object', 'properties' => ['verdict' => $system['verdict']], 'required' => ['verdict']]
-            )['verdict'] ?? null;
-            // Kullanıcı kuralı: bir kriter uygunsuzsa sistem uygunsuz. Sonuç ajanı boş bıraktıysa satır satır ajan kararı: tek soruda satırdaki "U.D"yi kaçırıyordu (SGS topraklama).
-            if (blank($verdict['status'] ?? null) && $this->anyRowFailed($text, $provider)) {
-                $verdict = ['status' => 'uygun_degil', 'raw' => null, 'basis' => 'derived', 'evidence' => null];
-            }
-            $lines = explode("\n", $text);
-            $systems[$name] = [
-                'system_name' => $name,
-                'section_heading_patterns' => array_values(array_unique(array_map(fn ($line) => substr($line, 3), array_filter($lines, fn ($line) => str_starts_with($line, '## '))))),
-                'verdict' => $verdict ?? ['status' => null, 'raw' => null, 'basis' => 'not_stated', 'evidence' => null],
-            ];
-            $tableNos = array_values(array_filter(array_map(fn ($line) => str_starts_with($line, '### Tablo ') ? (int) substr($line, 10) : 0, $lines)));
-            // Kontrol listesi ve yazı tablosu ekipman listesi değildir (kriter ekipman olmaz): haritaya girince 11 sahte satır çıkıyordu (SGS topraklama).
-            if ($name !== 'Tesisat Geneli' && $tableNos && !in_array($name, $listOnly ?? [], true)) {
-                $found = $this->tableKinds($text, $tableNos, $provider);
-                $tableNos = array_values(array_filter($tableNos, fn (int $no) => !in_array($found['t' . $no] ?? null, ['kontrol_listesi', 'yazi'], true)));
-            }
-            if ($name !== 'Tesisat Geneli' && $tableNos) {
-                $map[$name] = app(PkTableMap::class)->map($text, [$name => []], $tableNos, $tableLabels, $provider, self::sections($instruction, [4], false), in_array($name, $listOnly ?? [], true))[$name] ?? ['lists' => [], 'singles' => []];
-            }
-        }
-        // Özelliği olmayan tek kayıt ekipman değildir: kontrol maddesi "Uygulaması Yok" kimliğiyle ekipman oluyordu (Neta paratoner).
-        foreach ($map as $name => $found) {
-            $map[$name]['singles'] = array_values(array_filter((array) ($found['singles'] ?? []), fn (array $single) => collect((array) ($single['properties'] ?? []))->contains(fn ($pair) => is_array($pair) && filled($pair['value'] ?? null))));
-        }
-        $definitions = $this->definitions->build($pdfPath, $doclingTables, $map);
-        foreach ($definitions as $name => $list) {
-            // Liste en az 2 sütun taşır: tek değerli kayıt etiket-değer tablosudur (SGS pano raporu: "Toprak Durumu" satırları ekipman oluyordu).
-            $definitions[$name] = array_values(array_filter($list, fn (array $definition) => ($definition['instance_structure']['equipment_axis'] ?? null) !== 'rows'
-                || (count((array) ($definition['attributes'] ?? [])) >= 2 && $this->definitions->identityLeads($pdfPath, (string) ($definition['instance_structure']['identity_field'] ?? '')))));
-        }
-        foreach ($map as $name => $found) {
-            $list = ((array) ($found['lists'] ?? []))[0] ?? null;
-            if (empty($definitions[$name]) && $list && $this->definitions->identityLeads($pdfPath, (string) ($list['identity_label'] ?? '')) && ($definition = $this->definitions->fromHeader($pdfPath, (string) $list['equipment_name'], (string) ($list['identity_label'] ?? '')))) {
-                $definitions[$name] = [$definition];
-            }
-        }
-        // Harita aynı listeyi ikinci adla ya da yanlış kimlikle de verebiliyor (378300-topraklama: 36 satır 72 oldu; 96320: "Not 6" satırları).
-        // shortcut: sistem başına tek liste; bir sistemde ayrı başlıklı iki ölçüm listesi olan rapor çıkarsa liste başına tarif kurulmalı.
-        foreach ($listOnly ?? [] as $name) {
-            $definitions[$name] = array_slice($definitions[$name] ?? [], 0, 1);
-        }
-
-        // Katalogda olmayan sistem ancak gerçek bir listeyle kalır: tablosu çıkmayan kayıt sahte sistemdir (SGS: "PERİYODİK KONTROL RAPOR BİLGİLERİ" adıyla açılıyordu).
-        $systems = $systems->reject(fn (array $row, string $name) => $name !== 'Tesisat Geneli' && $systemNames && !in_array($name, $systemNames, true) && empty($definitions[$name]));
-
-        // Tesis bilgisi bölümü etiketlenmediyse bütün yapılı metin (Tesis Özellikleri kartı her raporda okunur).
-        $facilityText = $parts['facility'] ?? $parts['all'] ?? null;
-        $facility = $this->facilityFromRows($pdfPath, $provider) ?? $this->facility(self::sections($instruction, [6, 7]), $facilityText, $provider);
-        $found =['template_type' => 'tesisat_raporu']; // shortcut: tek bölüm raporu (sistem_raporu) ayrımı yok; gerekirse kapsam ajanı eklenir
 
         return [
             'template' => [
-                'template_type' => $found['template_type'] ?? null,
+                'template_type' => 'tesisat_raporu',
                 'template_version' => '1.0',
                 'report_information' => [],
                 'facility_or_project_information' => $facility['facility_or_project_information'] ?? null,
-                'fire_systems' => ['systems' => $systems->map(fn (array $row, string $name) => $row + [
+                'fire_systems' => ['systems' => array_map(fn (string $name) => [
+                    'system_name' => $name,
+                    'section_heading_patterns' => [],
+                    'verdict' => ['status' => null, 'raw' => null, 'basis' => 'not_stated', 'evidence' => null],
                     'section_detection' => ['start_heading_patterns' => [], 'continuation_patterns' => [], 'end_detection_patterns' => []],
-                    'equipment_definitions' => $definitions[$name] ?? [],
-                ])->values()->all()],
+                    'equipment_definitions' => [$definitions[$name]],
+                ], array_keys($definitions))],
             ],
             'extracted_data' => [
                 'report_category' => null,
@@ -120,12 +53,336 @@ class PkElectricalAgents
                 'equipment_specs' => [],
                 'report_information' => [],
                 'facility_information' => (array) ($facility['facility_information'] ?? []),
-                'result_legend' => (array) ($facility['result_legend'] ?? []),
+                'result_legend' => [],
                 'findings' => [],
                 'overall_result' => null,
                 'inspection_body' => null,
             ],
         ];
+    }
+
+    /**
+     * Bulgu ajanı: yalnız bulguları bulur, kataloğun sistemine bağlar, sisteme ait değilse genel bulgu olur (kullanıcı kararı).
+     * Kusur açıklamaları / notlar ve sonuç metinleri kod tarafından olduğu gibi kopyalanır. Bulgusu olan sistem uygun değildir; rapor uygunsa sistemler de uygundur.
+     *
+     * @param list<string> $pages Docling sayfaları
+     * @param list<string> $catalogNames katalog sistemleri
+     */
+    public const HOOD = 'davlumbaz';
+
+    public function findings(array $semantic, array $pages, string $typeSlug, ?string $provider = null, array $catalogNames = []): array
+    {
+        // Ajan başlık satırlarını söyler, bölümü kod keser: bütün rapor verilince gerçek bulgu nota kayıyordu (Neta 350), Docling başlığı da her raporda çıkmıyor (Lider 6. bölüm).
+        $written = self::writtenText($pages);
+        // Yöntem ortak, talimatlar türün kendi metni (PkTesisatTalimat): elektrik, yangın algılama, akü.
+        $isElectric = in_array($typeSlug, ['elektrik-ic-tesisati', PkElectricalReportAnalyzer::DETECTION, PkElectricalReportAnalyzer::BATTERY, PkElectricalReportAnalyzer::GROUNDING, self::HOOD], true);
+        if ($typeSlug === PkElectricalReportAnalyzer::LIGHTNING) {
+            // Paratonere özel: genel başlık ajanı her satırı "diğer" diyordu, sonuç kesilmiyordu (Neta 201). Kusur boşsa bulgu sonuçtan aranır.
+            $lines = array_map('trim', explode("\n", $written));
+            $cut = self::lightningCut($lines, $this->lightningHeadings($lines, $provider));
+            $text = trim($cut['kusur'] ?: $cut['sonuc']) ?: ($cut['bulundu'] ? '' : $written);
+            $semantic['extracted_data']['facility_information'] = [...(array) ($semantic['extracted_data']['facility_information'] ?? []), ...$this->lightningMeasurement($lines, $provider)];
+        } elseif ($isElectric) {
+            // Elektriğe özel: notlar bulgu ajanına gitmez ("Yönetim odası..." notu 9 Lider raporunda bulgu oluyordu); kusur yoksa bulgular sonuçta yazılıdır (Lider 8. bölüm).
+            $lines = array_map('trim', explode("\n", $written));
+            $cut = self::electricalCut($lines, $this->electricalHeadings($lines, $provider, match ($typeSlug) {
+                PkElectricalReportAnalyzer::GROUNDING => PkTesisatTalimat::BASLIK_TOPRAKLAMA,
+                self::HOOD => PkTesisatTalimat::BASLIK_DAVLUMBAZ,
+                default => PkTesisatTalimat::BASLIK_ELEKTRIK,
+            }));
+            // Rapor uygun diyorsa sonuç bölümünden bulgu okunmaz: bilgi cümleleri bulgu oluyordu (Neta 262).
+            $status = $semantic['extracted_data']['overall_result']['status'] ?? null;
+            $text = trim($cut['kusur'] ?: ($status === 'uygun' ? '' : $cut['sonuc'])) ?: ($cut['bulundu'] ? '' : $written);
+            // Topraklama: sonuç başlığı metinde yoksa model kusur başlığını seçiyor (Lider T20250367); okuyucunun sonucu kalır.
+            if ($typeSlug === PkElectricalReportAnalyzer::GROUNDING && $cut['sonuc'] === $cut['kusur']) {
+                $cut['sonuc'] = '';
+            }
+            // Sonuç karar satırında biter: sonrası sayfa altı (Neta algılama) ya da işaretsiz seçenek (Neta akü).
+            if (in_array($typeSlug, [PkElectricalReportAnalyzer::DETECTION, PkElectricalReportAnalyzer::BATTERY, PkElectricalReportAnalyzer::GROUNDING, self::HOOD], true) && $status) {
+                $cut['sonuc'] = $this->untilDecision($cut['sonuc'], $status, $provider);
+            }
+        } else {
+            $cut = self::cutSections(explode("\n", $written), $this->sectionHeadings($written, $provider));
+            // Kusur bölümü varsa sonuç bölümünde bulgu aranmaz, olduğu gibi sonuç ve kanaat olur (kullanıcı kuralı). Yoksa kusurlar sonuçta yazılıdır.
+            $text = trim($cut['kusur'] . "\n" . $cut['not'] . ($cut['kusur'] === '' ? "\n" . $cut['sonuc'] : '')) ?: $written;
+        }
+        $listed = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->pluck('system_name')->all();
+        $systems = array_values(array_unique([...$listed, ...$catalogNames]));
+        $properties = ['items' => ['type' => 'array', 'maxItems' => 60, 'items' => ['type' => 'object', 'properties' => [
+            'text' => ['type' => 'string'],
+            'system' => ['type' => ['string', 'null'], 'enum' => [...$systems, null]],
+        ], 'required' => ['text', 'system']]]];
+        if ($isElectric) {
+            $properties['items']['items']['properties']['tur'] = ['type' => 'string', 'enum' => ['bulgu', 'karar', 'bilgi']];
+            $properties['items']['items']['required'][] = 'tur';
+        }
+        $answer = $text === '' ? [] : (array) PkLocalRetry::client($provider, fn () => false)->extract(
+            PkTesisatTalimat::kusur($typeSlug) . "\nSİSTEMLER: " . ($systems ? implode(' | ', $systems) : '(yok)'),
+            $text,
+            3000,
+            schema: ['type' => 'object', 'properties' => $properties, 'required' => array_keys($properties)]
+        );
+        $plain = fn (string $value) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $value), 'UTF-8');
+        $written_in = fn (string $value) => $plain($value) !== '' && str_contains($plain($text), $plain($value));
+        $items = collect((array) ($answer['items'] ?? []))->filter(fn ($item) => is_array($item) && filled($item['text'] ?? null) && $written_in((string) $item['text']) && (!$isElectric || ($item['tur'] ?? null) === 'bulgu' || ($typeSlug === PkElectricalReportAnalyzer::DETECTION && $cut['kusur'] !== '')))->unique('text')->values();
+        if ($isElectric) {
+            // Aynı satırdaki ikinci cümle düşüyordu ("...yapılmamıştır. Pano kapağı bulunmamaktadır.", Lider 7900).
+            $items = $items->concat(self::electricalLeftovers($text, (array) ($answer['items'] ?? [])))->values();
+            // Topraklama: cümlenin önündeki "Not 1 :" etiketi kalan metin sayılıp bulgu oluyordu (Neta 350).
+            if ($typeSlug === PkElectricalReportAnalyzer::GROUNDING) {
+                $items = $items->reject(fn (array $item) => mb_strlen(trim((string) $item['text'])) <= 10)->values();
+            }
+        }
+        $notes = trim($cut['kusur'] . "\n" . $cut['not']);
+        if ($cut['sonuc'] !== '') {
+            $semantic['extracted_data']['overall_result']['text'] = $cut['sonuc'];
+        }
+        if ($notes !== '') {
+            $semantic['extracted_data']['report_information'][] = ['key' => 'notlar', 'value' => $notes];
+        }
+        $semantic['extracted_data']['findings'] = $items->map(fn (array $item, int $i) => [
+            'id' => 'F' . ($i + 1), 'system_name' => $item['system'] ?? null, 'description' => $typeSlug === self::HOOD ? ltrim(trim((string) $item['text']), "-* \t") : trim((string) $item['text']), 'source_pages' => [], 'severity' => null, 'ambiguous' => false,
+        ])->all();
+        // Ölçüm tablosu olmayan sistem de bulgusuyla listeye girer: okuyucu listede olmayan sisteme bağlı bulguyu genele atar.
+        foreach ($items->pluck('system')->filter()->unique()->diff($listed) as $name) {
+            $semantic['template']['fire_systems']['systems'][] = ['system_name' => $name, 'section_heading_patterns' => [], 'verdict' => [], 'section_detection' => ['start_heading_patterns' => [], 'continuation_patterns' => [], 'end_detection_patterns' => []], 'equipment_definitions' => []];
+        }
+        $overall = $semantic['extracted_data']['overall_result']['status'] ?? null;
+        foreach ((array) ($semantic['template']['fire_systems']['systems'] ?? []) as $i => $system) {
+            $status = $items->contains('system', $system['system_name']) ? 'uygun_degil' : ($overall === 'uygun' ? 'uygun' : null);
+            // Davlumbazda sistemin kararı kontrol listesinden gelir, bulgusu yoksa korunur.
+            if ($typeSlug === self::HOOD && $status === null) {
+                continue;
+            }
+            $semantic['template']['fire_systems']['systems'][$i]['verdict'] = ['status' => $status, 'raw' => null, 'basis' => $status ? 'derived' : 'not_stated', 'evidence' => null];
+        }
+
+        return $semantic;
+    }
+
+    /**
+     * Başlık ajanı: yazı metnindeki ana bölüm başlıklarının satır numarası ve türü. Metne dokunmaz.
+     *
+     * @return list<array{line: int, kind: string}>
+     */
+    private function sectionHeadings(string $written, ?string $provider): array
+    {
+        $numbered = collect(explode("\n", $written))->map(fn (string $line, int $i) => ($i + 1) . ': ' . mb_substr($line, 0, 90))->implode("\n");
+
+        return (array) (PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::BASLIK, $numbered, 1000, schema: ['type' => 'object', 'properties' => ['headings' => ['type' => 'array', 'maxItems' => 30, 'items' => ['type' => 'object', 'properties' => [
+            'line' => ['type' => 'integer'],
+            'kind' => ['type' => 'string', 'enum' => ['kusur', 'not', 'sonuc', 'diger']],
+        ], 'required' => ['line', 'kind']]]], 'required' => ['headings']])['headings'] ?? []);
+    }
+
+    // Elektrik başlık ajanı: seçenekler Docling'in başlık satırları ve numaralı satırlar ("7. NOTLAR" bazı raporda başlık işaretsiz gelir, 11930).
+    private function electricalHeadings(array $lines, ?string $provider, string $prompt): array
+    {
+        $headings = array_values(array_unique(array_filter($lines, [self::class, 'isElectricalHeading'])));
+        if ($headings === []) {
+            return [];
+        }
+        $keys = ['kusur', 'not', 'sonuc', 'karar'];
+
+        return (array) PkLocalRetry::client($provider, fn () => false)->extract($prompt, implode("\n", $headings), 300, schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => ['string', 'null'], 'enum' => [...$headings, null]]), 'required' => $keys]);
+    }
+
+    /**
+     * Bulgu içeren satırda ajanın yazmadığı kalan metin aynı sistemin bulgusudur; ajanın karar ya da bilgi dediği parça kalanda sayılmaz.
+     *
+     * @return list<array{text: string, system: ?string, tur: string}>
+     */
+    public static function electricalLeftovers(string $text, array $items): array
+    {
+        $items = array_values(array_filter($items, fn ($item) => is_array($item) && filled($item['text'] ?? null)));
+        $rest = [];
+        foreach (explode("\n", $text) as $line) {
+            $inLine = array_values(array_filter($items, fn (array $item) => str_contains($line, trim((string) $item['text']))));
+            $bulgu = collect($inLine)->firstWhere('tur', 'bulgu');
+            $left = trim(str_replace(array_map(fn (array $item) => trim((string) $item['text']), $inLine), '', $line));
+            if ($bulgu && mb_strlen($left) > 3) {
+                $rest[] = ['text' => $left, 'system' => $bulgu['system'] ?? null, 'tur' => 'bulgu'];
+            }
+        }
+
+        return $rest;
+    }
+
+    // shortcut: karar ikinci seçenekse ilk seçenek satırı metinde kalır, "uygun değil" işaretli akü raporu gelince düzeltilir.
+    private function untilDecision(string $conclusion, string $status, ?string $provider): string
+    {
+        $lines = array_values(array_filter(array_map('trim', explode("\n", $conclusion)), fn (string $line) => $line !== ''));
+        if (count($lines) < 2) {
+            return $conclusion;
+        }
+        $answer = (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::KARAR_SATIRI, 'KARAR: ' . ($status === 'uygun' ? 'uygun' : 'uygun değil') . "\nSATIRLAR:\n" . implode("\n", $lines), 300, schema: ['type' => 'object', 'properties' => ['satir' => ['type' => 'string', 'enum' => array_values(array_unique($lines))]], 'required' => ['satir']]);
+
+        return self::cutAfter($lines, $answer['satir'] ?? null) ?? $conclusion;
+    }
+
+    public static function cutAfter(array $lines, mixed $line): ?string
+    {
+        $at = is_string($line) ? array_search($line, $lines, true) : false;
+
+        return $at === false ? null : implode("\n", array_slice($lines, 0, $at + 1));
+    }
+
+    public static function isElectricalHeading(string $line): bool
+    {
+        // Başlık işaretlidir, ya da büyük harfle numaralı / ":" ile biter ("7. NOTLAR", "NOTLAR:"). "1. kat tali panoda..." başlık değildir (Lider 590050); öteki büyük harf satırlar modeli şaşırtıyordu (Neta 262).
+        if (str_starts_with($line, '## ')) {
+            return true;
+        }
+
+        return mb_strlen($line) <= 60 && mb_strtoupper($line, 'UTF-8') === $line && preg_match('/\p{L}{3}/u', $line) && (ctype_digit(mb_substr($line, 0, 1)) || str_ends_with($line, ':'));
+    }
+
+    /**
+     * Elektrik bölümleri: her bölüm sıradaki başlığa kadar sürer; sonuçta karar satırı başlık gibi görünürse (Neta) metne dahildir.
+     *
+     * @param list<string> $lines
+     * @return array{kusur: string, not: string, sonuc: string, bulundu: bool}
+     */
+    public static function electricalCut(array $lines, array $found): array
+    {
+        $at = fn (mixed $heading) => is_string($heading) ? array_search($heading, $lines, true) : false;
+        // Bölüm, seçilen başlıklardan birine ya da işaretli başlığa kadar sürer: büyük harfle yazılmış bulgu satırı bölümü kesmez.
+        $selected = array_filter([$found['kusur'] ?? null, $found['not'] ?? null, $found['sonuc'] ?? null]);
+        $next = function (int $from) use ($lines, $selected) {
+            foreach (array_slice($lines, $from + 1, null, true) as $i => $line) {
+                if (str_starts_with($line, '## ') || in_array($line, $selected, true)) {
+                    return $i;
+                }
+            }
+
+            return count($lines);
+        };
+        $block = fn (int|false $from, ?int $to = null) => $from === false ? '' : trim(implode("\n", array_map(fn (string $line) => ltrim($line, '# '), array_slice($lines, $from + 1, max(0, ($to ?? $next($from)) - $from - 1)))));
+        [$kusur, $not, $sonuc, $karar] = [$at($found['kusur'] ?? null), $at($found['not'] ?? null), $at($found['sonuc'] ?? null), $at($found['karar'] ?? null)];
+        // Model "KUSUR AÇIKLAMALARI / NOTLAR" başlığını seçmeyebiliyor (Neta): sonuçtan hemen önceki başlık kusur bölümüdür, yoksa dolu kusur kaybolur.
+        if ($kusur === false && $not === false && $sonuc !== false) {
+            foreach (array_reverse(array_slice($lines, 0, $sonuc, true), true) as $i => $line) {
+                if (self::isElectricalHeading($line)) {
+                    $kusur = $i;
+                    break;
+                }
+            }
+        }
+
+        return [
+            'kusur' => $block($kusur),
+            'not' => $not === $kusur ? '' : $block($not),
+            'sonuc' => $block($sonuc, $sonuc !== false && $karar !== false && $karar > $sonuc ? $karar + 1 : null),
+            'bulundu' => $kusur !== false || $sonuc !== false,
+        ];
+    }
+
+    // Paratoner başlık ajanı: seçenekler Docling'in başlık satırları. Satır numarası sorulunca 2-3 satır kayıyordu, bütün satırlardan seçince şaşırıyordu (Neta 201).
+    private function lightningHeadings(array $lines, ?string $provider): array
+    {
+        $headings = array_values(array_unique(array_filter($lines, fn (string $line) => str_starts_with($line, '## '))));
+        if ($headings === []) {
+            return [];
+        }
+        $keys = ['kusur', 'sonuc', 'karar'];
+
+        return (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::BASLIK_PARATONER, implode("\n", $headings), 300, schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => ['string', 'null'], 'enum' => [...$headings, null]]), 'required' => $keys]);
+    }
+
+    /**
+     * Paratoner bölümleri: kusur = kusur başlığı → sonuç başlığı; sonuç = sonuç başlığının altı, karar satırı dahil (karar başlık değilse sonraki başlığa kadar).
+     *
+     * @param list<string> $lines
+     * @return array{kusur: string, not: string, sonuc: string, bulundu: bool}
+     */
+    public static function lightningCut(array $lines, array $found): array
+    {
+        $at = fn (mixed $heading) => is_string($heading) ? array_search($heading, $lines, true) : false;
+        [$kusur, $sonuc, $karar] = [$at($found['kusur'] ?? null), $at($found['sonuc'] ?? null), $at($found['karar'] ?? null)];
+        $next = function (int $from) use ($lines) {
+            foreach (array_slice($lines, $from + 1, null, true) as $i => $line) {
+                if (str_starts_with($line, '## ')) {
+                    return $i;
+                }
+            }
+
+            return count($lines);
+        };
+        $block = fn (int $from, int $to) => trim(implode("\n", array_map(fn (string $line) => ltrim($line, '# '), array_slice($lines, $from + 1, max(0, $to - $from - 1)))));
+
+        return [
+            'kusur' => $kusur === false ? '' : $block($kusur, $sonuc !== false && $sonuc > $kusur ? $sonuc : $next($kusur)),
+            'not' => '',
+            'sonuc' => $sonuc === false ? '' : $block($sonuc, $karar !== false && $karar > $sonuc ? $karar + 1 : $next($sonuc)),
+            'bulundu' => $kusur !== false || $sonuc !== false,
+        ];
+    }
+
+    // Paratoner ölçüm ve sınır değeri ayrı satırlara dağılmış düz yazıdır, tablo okuyucu görmez; tesis kartına girer.
+    private function lightningMeasurement(array $lines, ?string $provider): array
+    {
+        $options = ['type' => ['string', 'null'], 'enum' => [...array_values(array_unique(array_filter($lines, fn (string $line) => $line !== ''))), null]];
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::OLCUM_PARATONER, implode("\n", $lines), 300, schema: ['type' => 'object', 'properties' => ['olcum' => $options, 'sinir' => $options], 'required' => ['olcum', 'sinir']]);
+
+        return self::lightningFacts($lines, $found);
+    }
+
+    // Metinde yazmayan ya da sayı içermeyen seçim karta girmez.
+    public static function lightningFacts(array $lines, array $found): array
+    {
+        $rows = [];
+        foreach (['olcum' => 'Topraklama Ölçüm Değeri (Ω)', 'sinir' => 'Topraklama Sınır Değeri (Ω)'] as $key => $label) {
+            $value = is_string($found[$key] ?? null) ? trim($found[$key]) : '';
+            if (preg_match('/\d/', $value) && in_array($value, $lines, true)) {
+                $rows[] = ['key' => $label, 'value' => $value];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Başlık satırlarından bölüm metinleri: bölüm, sıradaki başlığa kadar sürer; başlık satırı metne girmez.
+     *
+     * @param list<string> $lines
+     * @param list<array{line: int, kind: string}> $headings satır numarası 1'den başlar
+     * @return array{kusur: string, not: string, sonuc: string}
+     */
+    public static function cutSections(array $lines, array $headings): array
+    {
+        $out = ['kusur' => [], 'not' => [], 'sonuc' => []];
+        $starts = collect($headings)->filter(fn ($h) => is_array($h) && is_int($h['line'] ?? null) && $h['line'] >= 1 && $h['line'] <= count($lines))->sortBy('line')->values();
+        foreach ($starts as $i => $heading) {
+            if (isset($out[$heading['kind'] ?? ''])) {
+                $end = $starts[$i + 1]['line'] ?? count($lines) + 1;
+                $out[$heading['kind']] = [...$out[$heading['kind']], ...array_slice($lines, $heading['line'], $end - $heading['line'] - 1)];
+            }
+        }
+
+        return array_map(fn (array $part) => trim(implode("\n", $part)), $out);
+    }
+
+    // Kusur ajanının metni: başlık, düz yazı ve tek hücreli tablo satırları. Sütunlu tablolar girmez: ölçüm ve kriter satırları bulgu oluyordu (96320-topraklama).
+    public static function writtenText(array $pages): string
+    {
+        $out = [];
+        foreach ($pages as $page) {
+            foreach (explode("\n", (string) $page) as $line) {
+                $line = trim($line);
+                if ($line === '' || str_starts_with($line, '### Tablo ')) {
+                    continue;
+                }
+                if (str_starts_with($line, '| ')) {
+                    $line = trim(substr($line, 2, -2));
+                    if ($line === '0' || str_contains($line, ' | ')) {
+                        continue;
+                    }
+                }
+                $out[] = $line;
+            }
+        }
+
+        return implode("\n", $out);
     }
 
     /**
@@ -190,49 +447,24 @@ Sana bir periyodik kontrol raporunun tabloları verilecek ("### Tablo N" ve ilk 
 PROMPT, $text, max(500, count($nos) * 15), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['olcum_listesi', 'kontrol_listesi', 'bilgi', 'yazi']]), 'required' => $keys]);
     }
 
-    // Bölümün tablo satırlarından en az birinin sonucu uygun değil mi: her satır için ajan kararı. shortcut: ilk 200 satır, daha uzun kontrol listesi çıkarsa bölünür.
-    private function anyRowFailed(string $text, ?string $provider): bool
-    {
-        $rows = array_values(array_unique(array_map(
-            fn (string $line) => implode(' | ', array_unique(array_filter(explode(' | ', trim(substr($line, 2, -2))), fn (string $cell) => trim($cell) !== ''))),
-            array_slice(array_values(array_filter(explode("\n", $text), fn (string $line) => str_starts_with($line, '| '))), 0, 200)
-        )));
-        if (!$rows) {
-            return false;
-        }
-        $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($rows));
-        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [sN] yazar. HER satırın sonucunu yaz (anahtar: sN).
-- uygun: madde uygun (U, UYGUN, ✓).
-- uygun_degil: madde uygun değil (U.D, UYGUN DEĞİL, UYGUNSUZ).
-- uygulanamaz: N.U, U.Y, Uygulama Yok, Görülemedi.
-- diger: başlık, bilgi ya da sonucu olmayan satır.
-PROMPT, implode("\n", array_map(fn (string $key, string $row) => "[{$key}] {$row}", $keys, $rows)), max(500, count($rows) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($keys, ['type' => 'string', 'enum' => ['uygun', 'uygun_degil', 'uygulanamaz', 'diger']]), 'required' => $keys]);
-
-        return in_array('uygun_degil', $found, true);
-    }
-
     /**
-     * Her çizgili tablonun sistemi, tablonun başından tek kararla (satırları ajan okumaz). Katalogda karşılığı olmayan tablo rapordaki
-     * adıyla kalır: okunur, görünür, kaydedilmez. Dönen alanlar Camelot'un kendi kutusu, tablo haritası bunlarla çalışır.
+     * Ölçüm listeleri: tablo başına tür kararı, liste başına sistem kararı (ajana yalnız tablonun başı gider). Sütunları ve satırları kod okur. Katalogda olmayan gerçek liste
+     * rapordaki adıyla kalır: okunur, görünür, kaydedilmez.
      *
-     * @param list<string> $names katalog sistemleri
-     * @return array{0: array<string, string>, 1: list<array>, 2: list<string>} sistem => metin, tablo alanları, sütun başlıkları
+     * @return array<string, array> sistem adı => tablo tarifi
      */
-    private function systemTables(string $pdfPath, array $names, string $rules, ?string $provider): array
+    private function measurementLists(array $raw, string $pdfPath, array $names, string $rules, ?string $provider): array
     {
-        $tables = self::latticeTables((array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []));
+        $tables = self::latticeTables($raw);
         if (!$tables) {
-            return [[], [], []];
+            return [];
         }
         $text = collect($tables)->map(fn (array $table) => '### Tablo ' . $table['no'] . "\n" . implode("\n", array_slice($table['rows'], 0, 12)))->implode("\n\n");
-        $keys = array_map(fn (array $table) => 't' . $table['no'], $tables);
-        // İki ayrı karar: önce tablo ölçüm listesi mi, yalnız öyleyse hangi sistem. Tek kararda hiç ölçüm tablosu olmayan rapora sistem açıyordu
-        // (kör test, 11930-elektrik: kontrol listesi ve notlardan 5 sahte sistem).
         $kinds = $this->tableKinds($text, array_column($tables, 'no'), $provider);
-        $runs = self::listRuns($tables, array_keys(array_filter((array) $kinds, fn ($kind) => $kind === 'olcum_listesi')));
+        $listKeys = array_keys(array_filter($kinds, fn ($kind) => $kind === 'olcum_listesi'));
+        $runs = self::listRuns($tables, $listKeys);
         if (!$runs) {
-            return [[], [], []];
+            return [];
         }
         $keys = array_map(fn (int $i) => 'l' . ($i + 1), array_keys($runs));
         $text = collect($runs)->map(fn (array $run, int $i) => '### Liste ' . ($i + 1) . "\n" . implode("\n", array_slice(array_merge(...array_column($run, 'rows')), 0, 20)))->implode("\n\n");
@@ -248,25 +480,45 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
             'name' => ['type' => ['string', 'null']],
         ], 'required' => ['system', 'name']]), 'required' => $keys]);
 
-        $bySystem = [];
-        $labels = [];
+        $out = [];
         foreach ($runs as $i => $run) {
             $choice = (array) ($found['l' . ($i + 1)] ?? []);
-            $system = ($choice['system'] ?? null) === 'katalogda_yok' ? trim((string) ($choice['name'] ?? '')) : (string) ($choice['system'] ?? '');
-            // Katalogda olmayan liste ancak gerçek listeyse: 3 satırlık cihaz tablosu öndeki firma tablosunun adıyla ("Ünvanı | ARÇELİK…") sahte sistem oluyordu (Neta
-            // elektrik; kataloğa bağlanan en kısa gerçek liste SGS'de başlık + 4 satır).
-            $own = array_sum(array_map(fn (array $table) => ($kinds['t' . $table['no']] ?? null) === 'olcum_listesi' ? count($table['rows']) : 0, $run));
-            if ($system === '' || (($choice['system'] ?? null) === 'katalogda_yok' && $own < 5)) {
-                continue;
+            $outside = ($choice['system'] ?? null) === 'katalogda_yok';
+            $system = $outside ? trim((string) ($choice['name'] ?? '')) : (string) ($choice['system'] ?? '');
+            $header = self::listHeader($run, $listKeys);
+            // Katalogda olmayan liste en az 5 satır ister: 3 satırlık cihaz tablosu sahte sistem oluyordu (Neta elektrik).
+            $own = array_sum(array_map(fn (array $table) => in_array('t' . $table['no'], $listKeys, true) ? count($table['rows']) : 0, $run));
+            if ($system === '' || isset($out[$system]) || !$header || ($outside && $own < 5)) {
+                continue; // shortcut: sistem başına tek liste; ayrı başlıklı ikinci liste olan rapor çıkarsa liste başına tarif kurulur
             }
-            // Ajana yalnız tablonun başı: bütün satırları verince tek tek yazıyordu (378300-topraklama: 200 sn); satırları tablo okuyucu okur.
-            foreach ($run as $k => $table) {
-                $bySystem[$system] = ($bySystem[$system] ?? '') . "\n### Tablo " . $table['no'] . "\n" . implode("\n", array_map(fn (string $row) => '| ' . $row . ' |', $k < 2 ? array_slice($table['rows'], 0, 12) : array_slice($table['rows'], 0, 1)));
-                $labels = [...$labels, ...$table['labels']];
+            $definition = $this->definitions->fromHeader($pdfPath, $header[1], $header[0]);
+            if ($definition) {
+                $out[$system] = $definition;
             }
         }
 
-        return [array_map('trim', $bySystem), array_map(fn (array $table) => ['no' => $table['no'], 'page' => $table['page'], 'area' => $table['area']], $tables), array_values(array_unique($labels))];
+        return $out;
+    }
+
+    /**
+     * Listenin başlık satırı, yapıdan: en az 4 hücreli ve hücrelerinin çoğunda rakam olmayan ilk satır (veri satırının çoğu rakamdır). Önce listenin kendi tabloları, sonra
+     * önündeki tablo (alttan yukarı). Dönen: hücreler; ilki kimlik sütunu.
+     *
+     * @return list<string>|null
+     */
+    public static function listHeader(array $run, array $listKeys): ?array
+    {
+        $own = array_filter($run, fn (array $table) => in_array('t' . $table['no'], $listKeys, true));
+        $before = array_filter($run, fn (array $table) => !in_array('t' . $table['no'], $listKeys, true));
+        $rows = [...array_merge([], ...array_column($own, 'rows')), ...array_reverse(array_merge([], ...array_column($before, 'rows')))];
+        foreach ($rows as $row) {
+            $cells = explode(' | ', $row);
+            if (count($cells) >= 4 && count(array_filter($cells, fn (string $cell) => preg_match('/\d/', $cell) === 1)) * 2 < count($cells)) {
+                return $cells;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -326,101 +578,6 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
     }
 
     /**
-     * Tesis kartı, Camelot satırlarından iki ayrı kararla (kör test, 31 Eki): önce her satırın türü, sonra yalnız tesis satırlarının
-     * etiket-değer çiftleri, satır satır. Düz metinden hepsini birden isteyince değerler kayıyordu ("proje var mı = U", enerji
-     * kuruluşu = firma adı). Çizgili tablo ya da tesis satırı yoksa null: çağıran eski ajana düşer.
-     */
-    private function facilityFromRows(string $pdfPath, ?string $provider): ?array
-    {
-        $cells = self::facilityCells((array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []));
-        $rows = array_column($cells, 'row');
-        if (!$rows) {
-            return null;
-        }
-        $keys = array_map(fn (int $i) => 's' . ($i + 1), array_keys($rows));
-        // Önce tablo konusu, bütün tablolar yan yana (karşılaştırarak karar verir); satır satır karar yalnız karışık tabloda. Tek istekte bütün satırlarda
-        // etiket-değer satırlarına "kriter" diyordu, tablo tablo sorunca firma bilgisine "tesis" (Neta yangın algılama).
-        $groups = collect($cells)->groupBy('table', preserveKeys: true);
-        $topicKeys = $groups->keys()->map(fn ($table) => 't' . $table)->all();
-        $topics = (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporunun tabloları verilecek ("### Tablo tN" ve ilk satırları). HER tablonun konusunu yaz (anahtar: tN).
-- tesis: tesisin / projenin özellikleri (enerji sağlayan kuruluş, şebeke tipi, proje var mı, kullanım amacı, yapı cinsi, tesise özgü bilgiler gibi etiket ve değerleri).
-- rapor_firma: rapor no, tarihler, firma / müşteri, adres, telefon, sözleşme ve sicil no.
-- alet: ölçüm aleti, cihaz, kalibrasyon.
-- kontrol_listesi: kontrol maddeleri ve sonuçları.
-- olcum_listesi: ölçüm noktası ya da ekipman satırları.
-- yazi: not, açıklama, sonuç, yönetmelik başlığı.
-- imza: yetkili kişi, personel, onay.
-- karisik: aynı tabloda birden çok konu birlikte (tesis özellikleri ile ölçüm aleti ya da kontrol listesi gibi).
-PROMPT, $groups->map(fn ($group, $table) => "### Tablo t{$table}
-" . $group->take(8)->map(fn (array $cell) => mb_substr($cell['row'], 0, 160))->implode("
-"))->implode("
-
-"), max(500, count($topicKeys) * 15), schema: ['type' => 'object', 'properties' => array_fill_keys($topicKeys, ['type' => 'string', 'enum' => ['tesis', 'rapor_firma', 'alet', 'kontrol_listesi', 'olcum_listesi', 'yazi', 'imza', 'karisik']]), 'required' => $topicKeys]);
-        $kinds = [];
-        foreach ($groups as $table => $group) {
-            $topic = $topics['t' . $table] ?? null;
-            // shortcut: tablonun ilk 40 satırı; tesis bilgisi uzun listenin sonunda olan rapor çıkarsa artırılır.
-            $own = array_slice($group->keys()->all(), 0, 40);
-            // Uzun tablo tek konu olamaz (form bütün sayfayı tek tablo çiziyor: Neta akü, 59 satır): satır kararına gider.
-            if ($topic === 'tesis' && count($own) <= 15) {
-                foreach ($own as $i) {
-                    $kinds[$keys[$i]] = 'tesis';
-                }
-            }
-            if ($topic !== 'karisik' && !($topic === 'tesis' && count($own) > 15)) {
-                continue;
-            }
-            $ownKeys = array_map(fn (int $i) => $keys[$i], $own);
-            $numbered = array_map(fn (int $i) => "[{$keys[$i]}] " . mb_substr($rows[$i], 0, 200), $own);
-            $kinds += (array) PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir periyodik kontrol raporunun tablo satırları verilecek; her satırın başında [sN] yazar, hücreler | ile ayrılır. HER satırın türünü anlamına göre yaz (anahtar: sN).
-- tesis: tesisin / projenin özelliği: enerji sağlayan kuruluş, şebeke tipi ve gerilimi, proje var mı, projeye uygunluk, topraklama / topraklayıcı şekli, kontrol nedeni, yapı cinsi, kullanım amacı ve yeri, son kontrol tarihi, tesisatta değişiklik. Satırın tek bir hücresi bile böyleyse satır tesistir, yanında U gibi sonuç olsa da.
-- kriter: kontrol listesi tablosunun maddesi ve sonucu (A.1. gibi madde numaralı ya da "KONTROL KRİTERİ / Değerlendirme" tablosundaki UYGUN, UYGUN DEĞİL, U, U.D, U.Y), madde grubunun başlığı, sütun başlığı. Değeri böyle bir sonuç olmayan etiket-değer satırı kriter değildir.
-- rapor: rapor no, tarihler, firma / müşteri, adres, telefon, e-posta, sicil ve sözleşme no, kontrol metodu ve kapsamı, kişi, imza, kuruluş bilgisi.
-- alet: ölçüm aleti ya da termal kamera, seri no, kalibrasyon.
-- olcum: ölçüm noktası ya da ekipman listesinin satırı (sıra no, yer adı ve sayısal değerler: menfez, fan, pano, priz gibi) ya da böyle bir listenin sütun başlığı.
-- baslik: yalnız bölüm başlığı olan satır.
-- diger: not, sonuç cümlesi, açıklama.
-PROMPT, implode("\n", $numbered), max(500, count($own) * 12), schema: ['type' => 'object', 'properties' => array_fill_keys($ownKeys, ['type' => 'string', 'enum' => ['tesis', 'kriter', 'rapor', 'alet', 'olcum', 'baslik', 'diger']]), 'required' => $ownKeys]);
-        }
-
-        $fields = [];
-        foreach ($rows as $i => $row) {
-            if (($kinds[$keys[$i]] ?? null) !== 'tesis') {
-                continue;
-            }
-            $found = PkLocalRetry::client($provider, fn () => false)->extract(<<<'PROMPT'
-Sana bir rapor tablosunun TEK satırı verilecek; hücreler | ile ayrılır. Satırdaki HER etiketi ve değerini yaz; etiket ve değer aynı hücrede de olabilir.
-- label: etiket, satırda yazdığı gibi.
-- value: o etikete ait değer, satırda yazdığı gibi. Seçenekli alanda değer yalnız ☒ işaretli seçenektir (işaretin kendisi yazılmaz); ☐ işaretli seçenek değer değildir. Değer yoksa null.
-PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['type' => 'array', 'maxItems' => 6, 'items' => ['type' => 'object', 'properties' => [
-                'label' => ['type' => 'string'],
-                'value' => ['type' => ['string', 'null']],
-            ], 'required' => ['label', 'value']]]], 'required' => ['fields']]);
-            foreach ((array) ($found['fields'] ?? []) as $field) {
-                $pair = is_array($field) ? self::facilityPair($row, (string) ($field['label'] ?? ''), (string) ($field['value'] ?? '')) : null;
-                if ($pair) {
-                    $fields[] = $pair + ['table' => $cells[$i]['table'], 'table_rows' => $groups[$cells[$i]['table']]->count()];
-                }
-            }
-        }
-        if (!$fields) {
-            return null;
-        }
-        $keyed = array_map(fn (array $pair) => ['key' => Str::slug($pair['label'], '_'), ...$pair], $fields);
-
-        return [
-            'facility_or_project_information' => [
-                'section_heading_patterns' => [],
-                'fields' => collect($keyed)->unique('key')->map(fn (array $field) => ['key' => $field['key'], 'label_patterns' => [$field['label']]])->values()->all(),
-            ],
-            'facility_information' => array_map(fn (array $field) => ['key' => $field['key'], 'value' => $field['value'], 'table' => $field['table'], 'table_rows' => $field['table_rows']], $keyed),
-            'result_legend' => [],
-        ];
-    }
-
-    /**
      * Kartın aranacağı satırlar: çizgili tabloların ilk sayfalardaki dolu satırları, hücreler " | " ile.
      * shortcut: yalnız ilk 3 sayfa (tesis bilgileri raporun başında), kapak ve içindekiler daha uzun bir raporda çıkarsa artırılır.
      *
@@ -436,10 +593,12 @@ PROMPT, $row, 1000, schema: ['type' => 'object', 'properties' => ['fields' => ['
     {
         $rows = [];
         foreach ($tables as $index => $table) {
-            if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice' || (int) ($table['page'] ?? 0) > $pages) {
+            // Tek sütunlu tablo yazıdır (not, sonuç), etiket-değer taşımaz: kusur cümleleri karta giriyordu (Lider elektrik).
+            if (!is_array($table) || ($table['flavor'] ?? null) !== 'lattice' || (int) ($table['page'] ?? 0) > $pages || count((array) (((array) ($table['data'] ?? []))[0] ?? [])) < 2) {
                 continue;
             }
-            foreach ((array) ($table['data'] ?? []) as $row) {
+            // shortcut: tablo başına ilk 25 satır; tesis bilgisi uzun tablonun sonunda olan rapor çıkarsa artırılır.
+            foreach (array_slice((array) ($table['data'] ?? []), 0, 25) as $row) {
                 $cells = array_values(array_filter(array_map(fn ($cell) => Str::squish((string) $cell), (array) $row), fn (string $cell) => $cell !== ''));
                 // Her sayfada tekrar eden form satırı bir kez (Neta akü: aynı üst bilgi 3 sayfada).
                 if ($cells && !in_array(implode(' | ', $cells), array_column($rows, 'row'), true)) {

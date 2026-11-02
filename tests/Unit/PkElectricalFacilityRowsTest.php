@@ -10,6 +10,85 @@ use Tests\TestCase;
 
 class PkElectricalFacilityRowsTest extends TestCase
 {
+    public function test_generator_letters_are_repaired_in_specs(): void
+    {
+        $semantic = ['extracted_data' => ['equipment_specs' => [['key' => 'calisma', 'value' => 'Otomaţk', 'raw_value' => 'Otomaţk']]]];
+
+        $this->assertSame('Otomatik', \App\Services\Ai\PkTakip\PkSingleEquipmentReader::repairGeneratorLetters($semantic)['extracted_data']['equipment_specs'][0]['value']);
+    }
+
+    public function test_tube_warnings_window_is_under_the_written_heading(): void
+    {
+        $lines = ['Form', 'İKAZ VE ÖNERİLER', 'Tüp eksik.', 'SONUÇ'];
+
+        $this->assertSame(['Tüp eksik.', 'SONUÇ'], \App\Services\Ai\PkTakip\PkBulkListPrompt::warningsWindow($lines, 'İKAZ VE ÖNERİLER'));
+        $this->assertSame([], \App\Services\Ai\PkTakip\PkBulkListPrompt::warningsWindow($lines, 'Uydurma Başlık'));
+        $this->assertSame([], \App\Services\Ai\PkTakip\PkBulkListPrompt::warningsWindow($lines, null));
+    }
+
+    public function test_lightning_measurement_must_be_written_in_the_report(): void
+    {
+        $lines = ['Topraklama Ölçüm Değeri (Ω)', '1,18', 'Topraklama Sınır Değeri (Ω)', '10,00'];
+
+        $this->assertSame([['key' => 'Topraklama Ölçüm Değeri (Ω)', 'value' => '1,18'], ['key' => 'Topraklama Sınır Değeri (Ω)', 'value' => '10,00']], PkElectricalAgents::lightningFacts($lines, ['olcum' => '1,18', 'sinir' => '10,00']));
+        $this->assertSame([], PkElectricalAgents::lightningFacts($lines, ['olcum' => '2,5', 'sinir' => 'Topraklama Sınır Değeri (Ω)']));
+    }
+
+    public function test_lightning_conclusion_includes_decision_heading_and_stops_at_footer(): void
+    {
+        $lines = ['## 7. KUSUR', 'Direk paslı.', '## 8. SONUÇ', 'UYARI metni', '## KULLANILMASI UYGUNDUR.', '## NETA'];
+        $found = ['kusur' => '## 7. KUSUR', 'sonuc' => '## 8. SONUÇ', 'karar' => '## KULLANILMASI UYGUNDUR.'];
+
+        $this->assertSame(['kusur' => 'Direk paslı.', 'not' => '', 'sonuc' => "UYARI metni\nKULLANILMASI UYGUNDUR.", 'bulundu' => true], PkElectricalAgents::lightningCut($lines, $found));
+        $this->assertSame('UYARI metni', PkElectricalAgents::lightningCut($lines, [...$found, 'karar' => null])['sonuc']);
+        $this->assertFalse(PkElectricalAgents::lightningCut($lines, [])['bulundu']);
+    }
+
+    public function test_table_findings_are_only_for_cabinet_reports(): void
+    {
+        $report = fn (array $names, string $slug = 'yangin-tesisati') => ['extracted_data' => ['equipment_type' => ['slug' => $slug]], 'template' => ['fire_systems' => ['systems' => array_map(fn ($name) => ['system_name' => $name], $names)]]];
+
+        $this->assertTrue(\App\Services\Ai\PkTakip\PkReportAnalyzer::isCabinetReport($report(['Yangın Dolapları ve Hortum Makaraları'])));
+        $this->assertFalse(\App\Services\Ai\PkTakip\PkReportAnalyzer::isCabinetReport($report(['Gazlı Söndürme Sistemi', 'Belge ve Kayıt Kontrolleri'])));
+        $this->assertFalse(\App\Services\Ai\PkTakip\PkReportAnalyzer::isCabinetReport($report(['Yangın Dolapları ve Hortum Makaraları'], 'forklift')));
+    }
+
+    public function test_electrical_sections_keep_notes_apart(): void
+    {
+        $lines = ['7. NOTLAR', '3-Yönetim odası ölçülemedi.', '## 8. SONUÇ', 'Panoda etiket yok.', 'Kullanımı uygun değildir.', '## 9. ONAY'];
+
+        $this->assertSame(['kusur' => '', 'not' => '3-Yönetim odası ölçülemedi.', 'sonuc' => "Panoda etiket yok.\nKullanımı uygun değildir.", 'bulundu' => true], PkElectricalAgents::electricalCut($lines, ['not' => '7. NOTLAR', 'sonuc' => '## 8. SONUÇ']));
+        $this->assertSame('Panoda etiket yok.', PkElectricalAgents::electricalCut(['## 8. SONUÇ', 'Panoda etiket yok.', '## KULLANILMASI UYGUNDUR.', '## FİRMA'], ['sonuc' => '## 8. SONUÇ', 'karar' => null])['sonuc']);
+        $this->assertSame("Metin\nKULLANILMASI UYGUNDUR.", PkElectricalAgents::electricalCut(['## 8. SONUÇ', 'Metin', '## KULLANILMASI UYGUNDUR.', '## FİRMA'], ['sonuc' => '## 8. SONUÇ', 'karar' => '## KULLANILMASI UYGUNDUR.'])['sonuc']);
+        $this->assertSame('Rölesi yok.', PkElectricalAgents::electricalCut(['## 6. ÖLÇÜM', '## 7. KUSUR / NOTLAR', 'Rölesi yok.', '## 8. SONUÇ', 'x'], ['sonuc' => '## 8. SONUÇ'])['kusur']);
+        $this->assertFalse(PkElectricalAgents::isElectricalHeading('12.07.2025'));
+        $this->assertFalse(PkElectricalAgents::isElectricalHeading('1. kat tali panoda etiketleme yapılmamıştır.'));
+        $this->assertTrue(PkElectricalAgents::isElectricalHeading('KUSUR AÇIKLAMALARI:'));
+        $this->assertSame('PROJE YOK', PkElectricalAgents::electricalCut(['KUSUR:', 'PROJE YOK', 'SONUÇ:', 'x'], ['kusur' => 'KUSUR:', 'sonuc' => 'SONUÇ:'])['kusur']);
+    }
+
+    public function test_electrical_leftover_sentence_in_finding_line_is_a_finding(): void
+    {
+        $text = "Tali panoda etiket yok. Pano kapağı yok.\nKullanımı uygun değildir.\nBu rapor iki nüshadır.";
+        $items = [['text' => 'Tali panoda etiket yok.', 'system' => 'Panolar', 'tur' => 'bulgu'], ['text' => 'Kullanımı uygun değildir.', 'system' => null, 'tur' => 'karar']];
+
+        $this->assertSame([['text' => 'Pano kapağı yok.', 'system' => 'Panolar', 'tur' => 'bulgu']], PkElectricalAgents::electricalLeftovers($text, $items));
+        $this->assertSame([], PkElectricalAgents::electricalLeftovers("A panosu yok. Kullanımı uygun değildir.", [['text' => 'A panosu yok.', 'tur' => 'bulgu'], ['text' => 'Kullanımı uygun değildir.', 'tur' => 'karar']]));
+    }
+
+    public function test_fire_line_split_must_keep_the_written_text(): void
+    {
+        $line = 'A DOLABI KIRIK. -B DOLABI YOK.';
+        $this->assertSame(['A DOLABI KIRIK.', '-B DOLABI YOK.'], \App\Services\Ai\PkTakip\PkFindingsPass::sameTextSplit($line, ['A DOLABI KIRIK.', '-B DOLABI YOK.']));
+        $this->assertSame([$line], \App\Services\Ai\PkTakip\PkFindingsPass::sameTextSplit($line, ['A DOLABI KIRIK.']));
+    }
+
+    public function test_conclusion_is_cut_after_decision_line(): void
+    {
+        $this->assertSame("Bilgi.\nKullanımı uygundur.", PkElectricalAgents::cutAfter(['Bilgi.', 'Kullanımı uygundur.', 'Sayfa altı'], 'Kullanımı uygundur.'));
+        $this->assertNull(PkElectricalAgents::cutAfter(['Bilgi.'], 'yok'));
+    }
+
     public function test_rows_come_from_lattice_tables_of_first_pages_with_clean_cells(): void
     {
         $tables = [
@@ -64,6 +143,28 @@ class PkElectricalFacilityRowsTest extends TestCase
         $this->assertSame([], PkElectricalReportReader::warnings(['status' => 'uygun_degil', 'general_findings' => ['Pano kapağı yok'], 'systems' => []]));
         $this->assertSame(['Rapor "uygun" diyor ama bulgu var; sonucu kontrol edin.'], PkElectricalReportReader::warnings(['status' => 'uygun', 'general_findings' => ['x'], 'systems' => []]));
         $this->assertSame(['Raporun genel sonucu okunamadı.'], PkElectricalReportReader::warnings(['status' => null]));
+    }
+
+    // Başlık yapıdan bulunur: veri satırının çoğu rakamdır, cihaz satırı 3 hücrelidir; başlık öndeki tablodaysa oradan.
+    public function test_sections_are_cut_from_heading_lines(): void
+    {
+        $lines = ['5. Ölçüm', 'satır', '6. KUSUR', 'kusur 1', 'kusur 2', '7. NOTLAR', 'not 1', '8. SONUÇ', 'sonuç', '9. YETKİLİ', 'imza'];
+        $cut = PkElectricalAgents::cutSections($lines, [['line' => 8, 'kind' => 'sonuc'], ['line' => 3, 'kind' => 'kusur'], ['line' => 6, 'kind' => 'not'], ['line' => 10, 'kind' => 'diger'], ['line' => 99, 'kind' => 'kusur']]);
+        $this->assertSame(['kusur' => "kusur 1\nkusur 2", 'not' => 'not 1', 'sonuc' => 'sonuç'], $cut);
+    }
+
+    public function test_list_header_is_found_by_structure(): void
+    {
+        $t = fn (int $no, array $rows) => ['no' => $no, 'rows' => $rows];
+        $run = [$t(1, ['KONTROL | UYGUN', 'Sıra | Ölçüm Noktası | In (A) | Ölçülen | Not', '1 Ana | 40 | C | 0,55 | Not 1']), $t(2, ['3 | Priz | 16 | 0,9 | Not 6'])];
+
+        $this->assertSame(['Sıra', 'Ölçüm Noktası', 'In (A)', 'Ölçülen', 'Not'], PkElectricalAgents::listHeader($run, ['t2']));
+        $this->assertNull(PkElectricalAgents::listHeader([$t(2, ['3 | Priz | 16 | 0,9 | 2'])], ['t2']));
+    }
+
+    public function test_written_text_keeps_prose_and_one_cell_rows_only(): void
+    {
+        $this->assertSame("## 6. KUSUR\nPriz topraksız.\nGaraj panosu açık.", PkElectricalAgents::writtenText(["## 6. KUSUR\n### Tablo 1\n| Sıra | Yer |\n| 1 | Priz |\nPriz topraksız.\n### Tablo 2\n| 0 |\n| Garaj panosu açık. |"]));
     }
 
     // 11930-elektrik: not ve sonuç tek sütunlu tabloda; sütunlu tablo kusur ajanına gitmez.
