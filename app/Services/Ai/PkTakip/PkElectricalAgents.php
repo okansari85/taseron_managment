@@ -108,6 +108,10 @@ class PkElectricalAgents
         }
         $listed = collect((array) ($semantic['template']['fire_systems']['systems'] ?? []))->pluck('system_name')->all();
         $systems = array_values(array_unique([...$listed, ...$catalogNames]));
+        // Topraklama: RCD selektivite ölçüm sistemi yalnız raporda tablosu varsa seçilir; yoksa artık akım bulguları ona gidiyordu (Lider).
+        if ($typeSlug === PkElectricalReportAnalyzer::GROUNDING && !in_array('RCD Selektivite Kontrolü', $listed, true)) {
+            $systems = array_values(array_diff($systems, ['RCD Selektivite Kontrolü']));
+        }
         $properties = ['items' => ['type' => 'array', 'maxItems' => 60, 'items' => ['type' => 'object', 'properties' => [
             'text' => ['type' => 'string'],
             'system' => ['type' => ['string', 'null'], 'enum' => [...$systems, null]],

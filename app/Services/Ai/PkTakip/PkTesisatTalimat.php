@@ -110,12 +110,12 @@ Sana bir davlumbaz / gazlı söndürme sistemi periyodik kontrol raporunun notla
 PROMPT;
 
     private const TOPRAKLAMA = <<<'PROMPT'
-Sana bir topraklama tesisatı periyodik kontrol raporunun kusur ya da sonuç bölümü verilecek. Metindeki HER cümleyi ayrı öğe yaz; bir satırda birkaç cümle varsa hepsini ayrı yaz.
+Sana bir topraklama tesisatı periyodik kontrol raporunun kusur ya da sonuç bölümü verilecek. Metindeki HER cümleyi ayrı öğe yaz; bir satırda birkaç cümle varsa hepsini ayrı yaz. Cümle noktada biter, virgülde bölme (örn. "Yapılan kontrolde projesi olmadığı,rölenin aktif olmadığı gözlemlenmiştir" tek cümledir).
 - text = cümle, raporda yazdığı gibi tam metin.
 - tur = bulgu: bu tesiste bulunan eksiklik, uygunsuzluk ya da uyulması gereken zorunluluk (örn. "İnsan temasının olduğu yerlerde 300 mA ve 30 mA değerinde artık akım anahtarı kullanılması zorunludur.", "Mescit prizde topraklama bulunmamaktadır.", "Garaj tali panosunda sıfırlama yapılmıştır.", "...topraklama direnç değeri UYGUN DEĞİLDİR.").
 - tur = karar: tesisatın kullanımı uygun ya da uygun değil diyen genel yargı cümlesi.
 - tur = bilgi: genel bakım hatırlatması (örn. "1-Kaçak akım röleleri her ay test butonu vesilesi ile test edilmelidir."), raporun geçerliliği ve imza koşulları (örn. "2-Bu rapor yapılan ölçüm bilgilerini içermektedir..."), kısaltma açıklaması, başlık.
-- system = bulgunun ait olduğu sistem, listeden; hiçbir sisteme ait değilse null (genel bulgu).
+- system = bulgunun ait olduğu sistem, listeden. Pano, priz, gövde topraklaması ve artık akım anahtarı (örn. "Ana dağıtım panosunda artık akım anahtarı bulunmamaktadır.", "İnsan temasının olduğu yerlerde 300 mA ve 30 mA değerinde artık akım anahtarı kullanılması zorunludur.") Topraklama Ölçümleri sistemidir. Proje eksiği Gözle Kontroller sistemidir. Hiçbir sisteme ait değilse null (genel bulgu).
 PROMPT;
 
     public static function kusur(string $slug): string
