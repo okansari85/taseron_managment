@@ -107,6 +107,7 @@ class PkInstallationReportReader
             'type_evidence' => $data['equipment_type']['evidence'] ?? null,
             'status' => $this->status($overall['status'] ?? null),
             'overall_text' => $overall['text'] ?? null,
+            'notes' => ($info['notlar'] ?? null) ?: null,
             'control_date' => $controlDate?->format('Y-m-d'),
             'next_control_date' => $nextDate?->format('Y-m-d'),
             'next_control_source' => $validity ? 'report' : ($nextDate ? 'period' : null),

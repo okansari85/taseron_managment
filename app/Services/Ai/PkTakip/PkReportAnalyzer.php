@@ -105,6 +105,10 @@ class PkReportAnalyzer
                 return app(PkElectricalAgents::class)->findings($semantic, $structuredPages, PkElectricalAgents::HOOD);
             }
             $semantic = app(PkFindingsPass::class)->apply($semantic, $parts['findings'] ?? $structuredText, systemEquipment: PkInstallationSystemsPass::equipmentBySystem($equipment['installation_catalog'], $semantic['extracted_data']['equipment_type']['slug'] ?? null), sectionOnly: isset($parts['findings']), wholeText: $findingsFallback, equipmentLinks: true, tablesText: self::isCabinetReport($semantic) ? $structuredText : null);
+            // Yangın tesisatı: kusur açıklamaları, okunan satırlar aynen (ayrı başlık ajanı yanlış satır seçiyordu: SGS "6.9 BAR"). Not / sonuç satırları not_kusur_lines'ta kalır.
+            if (($semantic['extracted_data']['equipment_type']['slug'] ?? null) === 'yangin-tesisati') {
+                $semantic['extracted_data']['report_information'][] = ['key' => 'notlar', 'value' => implode("\n", array_column((array) ($semantic['extracted_data']['findings'] ?? []), 'description'))];
+            }
         }
 
         return $semantic;
