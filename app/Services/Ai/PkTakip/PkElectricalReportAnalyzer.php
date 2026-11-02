@@ -88,7 +88,7 @@ class PkElectricalReportAnalyzer
             $semantic = $tesisat->read($instruction, $pdfPath, $typeSlug, systemNames: $catalogNames, allText: $this->buildDocumentText($structuredPages));
             $semantic = app(PkHeaderPass::class)->apply($semantic, PkHeaderPass::input([], $this->buildDocumentText($structuredPages)));
 
-            return $tesisat->findings($semantic, $structuredPages, $typeSlug, catalogNames: $catalogNames);
+            return $tesisat->findings($semantic, $structuredPages, $typeSlug, catalogNames: $catalogNames, pdfPath: $pdfPath);
         }
         $semantic = $client->extract($prompt, $text, 50000);
 

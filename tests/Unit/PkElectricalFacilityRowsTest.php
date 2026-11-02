@@ -76,6 +76,14 @@ class PkElectricalFacilityRowsTest extends TestCase
         $this->assertSame([], PkElectricalAgents::electricalLeftovers("A panosu yok. Kullanımı uygun değildir.", [['text' => 'A panosu yok.', 'tur' => 'bulgu'], ['text' => 'Kullanımı uygun değildir.', 'tur' => 'karar']]));
     }
 
+    public function test_lines_repeated_on_pages_are_removed_from_notes(): void
+    {
+        $pages = ["NOT A\n1/2 Bu rapor iki sayfadır\nFORM-KOD", "2/2 Bu rapor iki sayfadır\nFORM-KOD\nKIRIK PANO"];
+        $this->assertSame("NOT A\nKIRIK PANO", \App\Services\Ai\PkTakip\PkElectricalAgents::withoutFooters("NOT A\n1/2 Bu rapor iki sayfadır\nFORM-KOD\nKIRIK PANO", $pages));
+        $this->assertSame('FORM-KOD', \App\Services\Ai\PkTakip\PkElectricalAgents::withoutFooters('FORM-KOD', $pages, ['FORM-KOD']));
+        $this->assertSame('NOT A', \App\Services\Ai\PkTakip\PkElectricalAgents::withoutFooters("NOT A\nADRES SATIRI", ["NOT A\nADRES SATIRI"], [], ["ADRES SATIRI", "ADRES SATIRI\nNOT A"]));
+    }
+
     public function test_fire_line_split_must_keep_the_written_text(): void
     {
         $line = 'A DOLABI KIRIK. -B DOLABI YOK.';

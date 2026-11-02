@@ -70,7 +70,59 @@ class PkElectricalAgents
      */
     public const HOOD = 'davlumbaz';
 
-    public function findings(array $semantic, array $pages, string $typeSlug, ?string $provider = null, array $catalogNames = []): array
+    // Yangın tesisatı: raporun kendi notlar bölümü, yazdığı gibi. Kusur başlığı kullanılmaz: başlık yoksa model ilgisiz satır seçiyordu (SGS "6.9 BAR").
+    public function fireNotes(array $pages, ?string $pdfPath = null, ?string $provider = null): string
+    {
+        $lines = array_map('trim', explode("\n", self::writtenText($pages)));
+
+        return self::withoutFooters(self::electricalCut($lines, $this->electricalHeadings($lines, $provider, PkTesisatTalimat::BASLIK_YANGIN))['not'], $pages, [], self::pdfPages($pdfPath));
+    }
+
+    /**
+     * Notlara karışan sayfa altı satırları: birden çok sayfada tekrar eden satır (rakamlar sayılmaz: "1/2 Bu rapor...", "2/2 Bu rapor..."). Docling bu satırların çoğunu tek sayfada verir, ham PDF sayfalarına da bakılır. Model satır satır gerçek notları da siliyordu (OKCO). Bulgu olan satır kalır.
+     *
+     * @param list<string> $pages Docling sayfaları
+     * @param list<string> $findings bu rapordan okunan bulgular
+     * @param list<string> $pdfPages ham PDF sayfaları
+     */
+    public static function withoutFooters(string $notes, array $pages, array $findings = [], array $pdfPages = []): string
+    {
+        $plain = fn (string $line) => mb_strtolower((string) preg_replace('/[^\p{L}]+/u', '', $line), 'UTF-8');
+        $repeated = [];
+        foreach ([$pages, $pdfPages] as $set) {
+            $onPages = [];
+            foreach ($set as $page) {
+                foreach (array_unique(array_map($plain, explode("\n", self::writtenText([$page])))) as $line) {
+                    $onPages[$line] = ($onPages[$line] ?? 0) + 1;
+                }
+            }
+            $repeated += array_filter($onPages, fn (int $count) => $count >= 2);
+        }
+        $kept = array_filter(explode("\n", $notes), fn (string $line) => trim($line) !== ''
+            && (!isset($repeated[$plain($line)]) || array_filter($findings, fn (string $finding) => str_contains($line, $finding))));
+
+        return implode("\n", $kept);
+    }
+
+    // shortcut: PkReportText::pdfiumPages private (PkSingleEquipmentReader'daki gibi); ortak metot açılırsa doğrudan çağrılır.
+    private static function pdfPages(?string $pdfPath): array
+    {
+        return $pdfPath ? (array) (new \ReflectionMethod(PkReportText::class, 'pdfiumPages'))->invoke(app(PkReportText::class), $pdfPath) : [];
+    }
+
+    // Topraklama: kusur bölümünde adı geçmese de ölçüm satırı uygun değilse ölçüm sistemi uygun değildir (SGS: 0,84 Ω, sınır 0,14 Ω).
+    private function groundingRowFails(array $pages, ?string $provider): bool
+    {
+        $rows = collect($pages)->flatMap(fn ($page) => explode("\n", (string) $page))->filter(fn (string $line) => str_starts_with(trim($line), '| '))->implode("\n");
+        if ($rows === '') {
+            return false;
+        }
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::OLCUM_SONUC_TOPRAKLAMA, $rows, 30, schema: ['type' => 'object', 'properties' => ['uygunsuz' => ['type' => 'string', 'enum' => ['var', 'yok']]], 'required' => ['uygunsuz']]);
+
+        return ($found['uygunsuz'] ?? null) === 'var';
+    }
+
+    public function findings(array $semantic, array $pages, string $typeSlug, ?string $provider = null, array $catalogNames = [], ?string $pdfPath = null): array
     {
         // Ajan başlık satırlarını söyler, bölümü kod keser: bütün rapor verilince gerçek bulgu nota kayıyordu (Neta 350), Docling başlığı da her raporda çıkmıyor (Lider 6. bölüm).
         $written = self::writtenText($pages);
@@ -138,6 +190,9 @@ class PkElectricalAgents
             }
         }
         $notes = trim($cut['kusur'] . "\n" . $cut['not']);
+        if ($typeSlug === PkElectricalReportAnalyzer::GROUNDING) {
+            $notes = self::withoutFooters($notes, $pages, array_map(fn (array $item) => trim((string) $item['text']), $items->all()), self::pdfPages($pdfPath));
+        }
         if ($cut['sonuc'] !== '') {
             $semantic['extracted_data']['overall_result']['text'] = $cut['sonuc'];
         }
@@ -154,6 +209,9 @@ class PkElectricalAgents
         $overall = $semantic['extracted_data']['overall_result']['status'] ?? null;
         foreach ((array) ($semantic['template']['fire_systems']['systems'] ?? []) as $i => $system) {
             $status = $items->contains('system', $system['system_name']) ? 'uygun_degil' : ($overall === 'uygun' ? 'uygun' : null);
+            if ($typeSlug === PkElectricalReportAnalyzer::GROUNDING && $status === null && $overall === 'uygun_degil' && !empty($system['equipment_definitions']) && $this->groundingRowFails($pages, $provider)) {
+                $status = 'uygun_degil';
+            }
             // Davlumbazda sistemin kararı kontrol listesinden gelir, bulgusu yoksa korunur.
             if ($typeSlug === self::HOOD && $status === null) {
                 continue;

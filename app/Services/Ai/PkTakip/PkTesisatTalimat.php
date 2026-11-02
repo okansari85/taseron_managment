@@ -25,6 +25,20 @@ PROMPT;
 
     public const LISTE_TOPRAKLAMA = 'Sütunlarında ölçüm noktası ve ölçülen değer olan liste, üstünde kontrol maddeleri görünse de ölçüm sistemidir (örn. Topraklama Ölçümleri); Gözle Kontroller değildir.';
 
+    public const BASLIK_YANGIN = <<<'PROMPT'
+Sana bir yangın tesisatı periyodik kontrol raporunun başlık satırları verilecek. Her alan için listeden tam satırı seç, listede yoksa null. Aynı satırı iki alana yazma.
+- kusur: başlığında KUSUR ya da TESPİT yazan satır (örn. "8. KUSUR AÇIKLAMALARI / NOTLAR", "6. TESPİT VE BULGULAR").
+- not: başlığında KUSUR yazmayan, yalnız NOTLAR yazan satır (örn. "7. NOTLAR"). Yoksa null.
+- sonuc: başlığında SONUÇ yazan satır (örn. "8. SONUÇ VE KANAAT").
+- karar: null.
+PROMPT;
+
+    public const OLCUM_SONUC_TOPRAKLAMA = <<<'PROMPT'
+Sana bir topraklama tesisatı raporunun tablo satırları verilecek. uygunsuz alanını yaz.
+- var: ölçüm listesinde sonucu UYGUN DEĞİL olan ölçüm noktası satırı var (örn. "| 1 | Dağıtım Panosu | 160 | ... | 0.84 | 0.14 | UYGUN DEĞİL |").
+- yok: böyle bir ölçüm satırı yok. Kontrol maddeleri (örn. "Topraklama projesi mevcut mu? | U.D") ölçüm satırı değildir.
+PROMPT;
+
     public const BASLIK_TOPRAKLAMA = <<<'PROMPT'
 Sana bir topraklama tesisatı periyodik kontrol raporunun başlık satırları verilecek. Her alan için listeden tam satırı seç, listede yoksa null. Aynı satırı iki alana yazma.
 - kusur: başlığında KUSUR yazan satır (örn. "## KUSUR AÇIKLAMALARI:", "6. KUSUR AÇIKLAMALARI").
