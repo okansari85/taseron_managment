@@ -21,7 +21,7 @@ class PkElectricalAgents
     public function read(string $instruction, string $pdfPath, string $typeSlug, ?string $provider = null, array $systemNames = [], ?string $allText = null): array
     {
         $raw = (array) (app(PkCachedCamelot::class)->extract($pdfPath)['tables'] ?? []);
-        $definitions = $this->measurementLists($raw, $pdfPath, $systemNames, self::sections($instruction, [2], false), $provider);
+        $definitions = $this->measurementLists($raw, $pdfPath, $systemNames, self::sections($instruction, [2], false), $provider, $typeSlug === PkElectricalReportAnalyzer::GROUNDING);
         $rows = self::facilityRows($raw);
         $facility = $this->facility(self::sections($instruction, [6, 7]), $rows ? implode("\n", $rows) : $allText, $provider);
         // Değer Camelot satırında yazılı olmalı (model uyduramaz, komşu hücreye kayamaz).
@@ -448,12 +448,34 @@ PROMPT, $text, max(500, count($nos) * 15), schema: ['type' => 'object', 'propert
     }
 
     /**
+     * Topraklama: her tablo ayrı sorulur, tablonun tamamıyla. Ölçüm listesi form satırlarının altında başlayabiliyor (SGS: 26 satırın
+     * 13.sinden sonra); ortak tür sorusu ilk 12 satırı görüp "bilgi" diyordu, toplu soruda rapor bilgisi tablosuna da "var" diyordu.
+     *
+     * @return array<string, string> tN => olcum_listesi ya da yok
+     */
+    private function groundingListTables(array $tables, ?string $provider): array
+    {
+        $kinds = [];
+        foreach ($tables as $table) {
+            // En az 4 hücreli satır yoksa liste başlığı da yoktur (listHeader): not ve imza tablosu sorulmaz, "sınır değer" cümlesi sahte sistem açıyordu (SGS).
+            if (!array_filter($table['rows'], fn (string $row) => substr_count($row, ' | ') >= 3)) {
+                $kinds['t' . $table['no']] = 'yok';
+                continue;
+            }
+            $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::TABLO_TOPRAKLAMA, implode("\n", array_slice($table['rows'], 0, 40)), 50, schema: ['type' => 'object', 'properties' => ['liste' => ['type' => 'string', 'enum' => ['var', 'yok']]], 'required' => ['liste']]);
+            $kinds['t' . $table['no']] = ($found['liste'] ?? null) === 'var' ? 'olcum_listesi' : 'yok';
+        }
+
+        return $kinds;
+    }
+
+    /**
      * Ölçüm listeleri: tablo başına tür kararı, liste başına sistem kararı (ajana yalnız tablonun başı gider). Sütunları ve satırları kod okur. Katalogda olmayan gerçek liste
      * rapordaki adıyla kalır: okunur, görünür, kaydedilmez.
      *
      * @return array<string, array> sistem adı => tablo tarifi
      */
-    private function measurementLists(array $raw, string $pdfPath, array $names, string $rules, ?string $provider): array
+    private function measurementLists(array $raw, string $pdfPath, array $names, string $rules, ?string $provider, bool $grounding = false): array
     {
         $tables = self::latticeTables($raw);
         if (!$tables) {
@@ -461,6 +483,11 @@ PROMPT, $text, max(500, count($nos) * 15), schema: ['type' => 'object', 'propert
         }
         $text = collect($tables)->map(fn (array $table) => '### Tablo ' . $table['no'] . "\n" . implode("\n", array_slice($table['rows'], 0, 12)))->implode("\n\n");
         $kinds = $this->tableKinds($text, array_column($tables, 'no'), $provider);
+        // Topraklama: ortak soru hiç liste bulamadıysa tablo tablo sorulur. Her raporda sorulunca devam sayfaları listeden kopuyordu (Lider: 68 satır 4'e düştü).
+        if ($grounding && !in_array('olcum_listesi', $kinds, true)) {
+            $kinds = $this->groundingListTables($tables, $provider);
+            $rules .= "\n" . PkTesisatTalimat::LISTE_TOPRAKLAMA;
+        }
         $listKeys = array_keys(array_filter($kinds, fn ($kind) => $kind === 'olcum_listesi'));
         $runs = self::listRuns($tables, $listKeys);
         if (!$runs) {

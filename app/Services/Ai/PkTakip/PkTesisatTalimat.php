@@ -17,6 +17,14 @@ Sana bir periyodik kontrol raporunun numaralı satırları verilecek. Raporun an
 - kind = diger: raporun öteki bütün ana bölümleri (firma, ekipman, ölçüm, yetkili kişi, onay gibi).
 PROMPT;
 
+    public const TABLO_TOPRAKLAMA = <<<'PROMPT'
+Sana bir topraklama tesisatı raporundan TEK tablo verilecek. liste alanını yaz.
+- var: tablonun herhangi bir yerinde ölçüm listesi var; üstünde tesis bilgisi ya da kontrol maddeleri olsa da. Ölçüm listesinin sütunları ölçüm noktası ve ölçülen değerdir (örn. "Sıra No | Ölçüm Noktası | In A | Ölçülen Değer Ω | Sınır Değer Ω | SONUÇ"). Başlığı önceki sayfada kalmış, sıra no ile devam eden ölçüm satırları da budur.
+- yok: tabloda ölçülen değer sütunu ve ölçüm satırı yok. Yalnız rapor numarası, tarih, müşteri, adres, telefon, not ya da imza yazan tablo yoktur (örn. "SGS Dosya Numarası: | 25-0302", "Müşteri Adı / Ünvan:", "NOTLAR:", "SONUÇLAR:", "MUAYENE PERSONELİ"). Not cümlesinde "sınır değer" geçmesi liste değildir.
+PROMPT;
+
+    public const LISTE_TOPRAKLAMA = 'Sütunlarında ölçüm noktası ve ölçülen değer olan liste, üstünde kontrol maddeleri görünse de ölçüm sistemidir (örn. Topraklama Ölçümleri); Gözle Kontroller değildir.';
+
     public const BASLIK_TOPRAKLAMA = <<<'PROMPT'
 Sana bir topraklama tesisatı periyodik kontrol raporunun başlık satırları verilecek. Her alan için listeden tam satırı seç, listede yoksa null. Aynı satırı iki alana yazma.
 - kusur: başlığında KUSUR yazan satır (örn. "## KUSUR AÇIKLAMALARI:", "6. KUSUR AÇIKLAMALARI").
