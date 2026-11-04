@@ -589,6 +589,26 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
         return $out;
     }
 
+    // Elektrik: bilgi ajanı kuruluş adını bulamadıysa kuruluş kuralıyla bir kez daha okunur, YALNIZ ad alınır (kural ilk okumaya
+    // konunca müşteri adını kesiyordu, Lider 648460; ayrı kısa ajan 10 Lider raporunun 3'ünde adı bulamadı ya da kişi adı yazdı).
+    // Ad metinde aynen yazılı olmalı ve müşteri olmamalı: ad yazmayan SGS raporunda müşteri kuruluş yazılıyordu.
+    public function electricalInspectionBody(array $semantic, string $text, ?string $provider = null): array
+    {
+        if (filled($semantic['extracted_data']['inspection_body']['name'] ?? null)) {
+            return $semantic;
+        }
+        $found = app(PkHeaderPass::class)->apply($semantic, $text, $provider, PkTesisatTalimat::KURULUS_ELEKTRIK);
+        $name = trim((string) ($found['extracted_data']['inspection_body']['name'] ?? ''));
+        $plain = fn (string $value) => mb_strtolower((string) preg_replace('/[^\p{L}\p{N}]+/u', '', $value), 'UTF-8');
+        $customer = $plain((string) collect((array) ($semantic['extracted_data']['report_information'] ?? []))->firstWhere('key', 'company_title')['value'] ?? '');
+        if ($plain($name) === '' || !str_contains($plain($text), $plain($name)) || ($customer !== '' && (str_contains($customer, $plain($name)) || str_contains($plain($name), $customer)))) {
+            return $semantic;
+        }
+        $semantic['extracted_data']['inspection_body'] = [...(array) ($semantic['extracted_data']['inspection_body'] ?? []), 'name' => $name];
+
+        return $semantic;
+    }
+
     // Topraklama: satırın sonucunu yazan sütun özellik değildir, satırın durumudur (eski talimatın kuralı; SGS'te SONUÇ özellik olunca 4 satırın durumu boş kalıyordu).
     // Ajan liste başına bir kez sütunu seçer; değerleri tablo okuyucu çevirir (PkElectricalReportReader::gridRows, eski okuyucuda kriter sütunu).
     private function groundingRowResult(array $definition, array $run, ?string $provider): array

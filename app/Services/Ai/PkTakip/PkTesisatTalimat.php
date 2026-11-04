@@ -25,6 +25,9 @@ PROMPT;
 
     public const LISTE_TOPRAKLAMA = 'Sütunlarında ölçüm noktası ve ölçülen değer olan liste, üstünde kontrol maddeleri görünse de ölçüm sistemidir (örn. Topraklama Ölçümleri); Gözle Kontroller değildir.';
 
+    // Elektrik: kuruluşun adı logoda, metinde yalnız kopyalama cümlesinde yazılı olabiliyor (Lider: 11 raporda ad boştu).
+    public const KURULUS_ELEKTRIK = '- inspection_body.name başka yerde yazmıyorsa "Bu rapor ... yazılı onayı olmadan kopyalanamaz" cümlesinde adı geçen firma raporu düzenleyen kuruluştur; adını o cümleden, yazdığı gibi al.';
+
     public const SONUC_SUTUNU_TOPRAKLAMA = <<<'PROMPT'
 Sana bir topraklama tesisatı raporundaki ölçüm listesinin sütun başlıkları ve ilk satırları verilecek. sutun alanını yaz.
 - sutun: her ölçüm satırının sonucunu (uygun / uygun değil) yazan sütunun başlığı, listeden AYNEN. Ölçülen değer, sınır değer, akım, eğri tipi ve not sütunları sonuç değildir; hücrelerinde yalnız rakam ya da birim olan sütun sonuç değildir.

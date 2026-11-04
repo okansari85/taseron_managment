@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai\PkTakip;
 
+use App\Services\PkInstallationService;
 use RuntimeException;
 
 /**
@@ -87,6 +88,9 @@ class PkElectricalReportAnalyzer
             $tesisat = app(PkElectricalAgents::class);
             $semantic = $tesisat->read($instruction, $pdfPath, $typeSlug, systemNames: $catalogNames, allText: $this->buildDocumentText($structuredPages));
             $semantic = app(PkHeaderPass::class)->apply($semantic, PkHeaderPass::input([], $this->buildDocumentText($structuredPages)));
+            if ($typeSlug === PkInstallationService::ELECTRICAL_TYPE_SLUG) {
+                $semantic = $tesisat->electricalInspectionBody($semantic, $this->buildDocumentText($structuredPages));
+            }
 
             return $tesisat->findings($semantic, $structuredPages, $typeSlug, catalogNames: $catalogNames, pdfPath: $pdfPath);
         }
