@@ -225,7 +225,8 @@ PROMPT;
         if (mb_strlen($line) <= 80) {
             return [$line];
         }
-        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(self::FIRE_ITEMS, $line, max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['items' => ['type' => 'array', 'items' => ['type' => 'string']]], 'required' => ['items']]);
+        // Satır başındaki liste işareti ("- ") ajana gitmez: işaretli madde cümle cümle bölünüyordu (OKCO 5.13 üç bulgu, 4/4); karşılaştırma harf ve rakamla.
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(self::FIRE_ITEMS, ltrim($line, "-* \t"), max(500, (int) (mb_strlen($line) / 2)), schema: ['type' => 'object', 'properties' => ['items' => ['type' => 'array', 'items' => ['type' => 'string']]], 'required' => ['items']]);
 
         return self::sameTextSplit($line, array_values(array_filter((array) ($found['items'] ?? []), 'is_string')));
     }
