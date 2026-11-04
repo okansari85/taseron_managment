@@ -116,17 +116,33 @@ class PkElectricalReportReader
                 }
                 $tables['equipment'] = collect((array) ($tables['equipment'] ?? []))->reject($mine)->values()->all();
                 $tables['equipment_summary'] = collect((array) ($tables['equipment_summary'] ?? []))->reject($mine)->values()->all();
+                // Satırın sonuç sütunu (yerel topraklama ajanı seçer, PkElectricalAgents::groundingRowResult): değer eski okuyucunun çeviricisiyle durum olur.
+                $resultLabel = $definition['row_result'] ?? null;
+                // Rakamlı hücresi olan sütun ölçüm değeridir, sonuç değil: çevirici tanımadığı değeri "uygun değil" sayar, yanlış seçim satırları uygunsuz yapardı.
+                if ($resultLabel !== null && array_filter($rows, fn (array $row) => preg_match('/\d/', (string) ($row['properties'][$resultLabel] ?? '')) === 1)) {
+                    $resultLabel = null;
+                }
+                $counts = ['uygun' => 0, 'uygun_degil' => 0, 'unknown' => 0];
                 foreach ($rows as $row) {
-                    $tables['equipment'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'code' => $row['code'], 'location' => null, 'brand' => null, 'model' => null, 'serial_no' => null, 'properties' => $row['properties'], 'status' => null, 'status_source' => null, 'note' => null, 'source_pages' => [$row['page']]];
+                    $status = $resultLabel !== null ? $this->rowStatus($row['properties'][$resultLabel] ?? null) : null;
+                    unset($row['properties'][$resultLabel ?? '']);
+                    $counts[in_array($status, ['uygun', 'uygun_degil'], true) ? $status : 'unknown']++;
+                    $tables['equipment'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'code' => $row['code'], 'location' => null, 'brand' => null, 'model' => null, 'serial_no' => null, 'properties' => $row['properties'], 'status' => $status, 'status_source' => $status ? 'table' : null, 'note' => null, 'source_pages' => [$row['page']]];
                 }
                 if ($rows) {
                     $tables['grid_lists'][] = $systemName . '|' . $name;
-                    $tables['equipment_summary'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'total' => count($rows), 'uygun' => 0, 'uygun_degil' => 0, 'unknown' => count($rows)];
+                    $tables['equipment_summary'][] = ['system_name' => $systemName, 'equipment_name' => $name, 'total' => count($rows), ...$counts];
                 }
             }
         }
 
         return $tables;
+    }
+
+    // shortcut: eski okuyucunun sonuç çeviricisi private, yansımayla çağrılır; çevirici paylaşılır hale gelirse doğrudan çağrılmalı.
+    private function rowStatus(?string $value): ?string
+    {
+        return $value === null ? null : (new \ReflectionMethod(\App\Services\Ai\FireSuppressionUnifiedNormalizer::class, 'normalizeResult'))->invoke(app(\App\Services\Ai\FireSuppressionUnifiedNormalizer::class), $value);
     }
 
     /**

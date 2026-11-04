@@ -582,11 +582,32 @@ PROMPT, $text, max(1000, count($runs) * 40), schema: ['type' => 'object', 'prope
             }
             $definition = $this->definitions->fromHeader($pdfPath, $header[1], $header[0]);
             if ($definition) {
-                $out[$system] = $definition;
+                $out[$system] = $grounding ? $this->groundingRowResult($definition, $run, $provider) : $definition;
             }
         }
 
         return $out;
+    }
+
+    // Topraklama: satırın sonucunu yazan sütun özellik değildir, satırın durumudur (eski talimatın kuralı; SGS'te SONUÇ özellik olunca 4 satırın durumu boş kalıyordu).
+    // Ajan liste başına bir kez sütunu seçer; değerleri tablo okuyucu çevirir (PkElectricalReportReader::gridRows, eski okuyucuda kriter sütunu).
+    private function groundingRowResult(array $definition, array $run, ?string $provider): array
+    {
+        $labels = array_values(array_filter(array_map(fn (array $attribute) => (string) ($attribute['field'] ?? ''), (array) ($definition['attributes'] ?? []))));
+        if (!$labels) {
+            return $definition;
+        }
+        $rows = implode("\n", array_slice(array_merge([], ...array_column($run, 'rows')), 0, 20));
+        $found = (array) PkLocalRetry::client($provider, fn () => false)->extract(PkTesisatTalimat::SONUC_SUTUNU_TOPRAKLAMA, "SÜTUNLAR: " . implode(' | ', $labels) . "\n\n" . $rows, 60, schema: ['type' => 'object', 'properties' => ['sutun' => ['type' => 'string', 'enum' => [...$labels, 'yok']]], 'required' => ['sutun']]);
+        $label = $found['sutun'] ?? 'yok';
+        if (!in_array($label, $labels, true)) {
+            return $definition;
+        }
+        $definition['attributes'] = array_values(array_filter($definition['attributes'], fn (array $attribute) => ($attribute['field'] ?? null) !== $label));
+        $definition['instance_structure']['header_patterns'] = array_values(array_diff((array) $definition['instance_structure']['header_patterns'], [$label]));
+        $definition['row_result'] = $label;
+
+        return $definition;
     }
 
     /**
