@@ -95,8 +95,11 @@ class PkFireAgents
             // Grubun sistemi başlık ve maddeleriyle (satır başındaki "[grup]" etiketi PkTableDefinitions'ın): aynı genel başlık
             // ("TESTLER VE KONTROLLER") PK25'te belge maddeleri, PK25-0092-004'te bütün gazlı sistem; yalnız başlıkla ayırt edilemiyor.
             $rowLines = $tableRows->flatMap(fn ($rows) => explode("\n", $rows));
+            // Tabloda maddesi olmayan grup (ajanın uydurduğu başlık) sisteme bağlanmaz: tek başına başlık sorulunca model sistem uyduruyordu
+            // (davlumbaz SGS PK25-0092-004: boş 19 grup → "Yangın Su Deposu: uygun").
+            $hasItems = fn (array $group) => $rowLines->contains(fn ($line) => str_contains($line, '[' . $group['title'] . ']'));
             $groups['groups'] = collect($groups['groups'])->map(fn (array $group) => $group + [
-                'system' => PkLocalRetry::client($provider, fn () => false)->extract(
+                'system' => !$hasItems($group) ? null : PkLocalRetry::client($provider, fn () => false)->extract(
                     "Bir yangın tesisatı kontrol listesindeki grubun başlığı ve maddeleri verilecek (satırlarda [grup başlığı] ile işaretli maddeler bu grubundur). Grubun karşılığı olan sistemi seç. ÖNCE BAŞLIĞA BAK: başlık bir sistemin ya da onun ekipmanının adını içeriyorsa (yağmurlama / sprinkler, pompa, su deposu, dolap, hidrant, boru, belge / kayıt gibi) o sistemi seç; maddelere bakma. Yalnız başlık genelse (hiçbir sistemi anmıyorsa) maddelerin ne kontrol ettiğine göre seç. Hiçbiri değilse null." . (filled($subject) ? "\nRAPORUN KONUSU: {$subject}" : '') . "\nSİSTEMLER: " . implode(' | ', $names),
                     // Yalnız grubun kendi parçası (etiketten sonraki "[" etiketine kadar): iki sütunlu formda satır öbür grubun maddesini de
                     // taşıyor (PK25: "[TESTLER VE KONTROLLER] 2 Bakım kayıtları… | [Sistemin Genel Kontrolleri] 20 Test ve drenaj…").
