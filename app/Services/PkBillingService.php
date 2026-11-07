@@ -86,6 +86,7 @@ class PkBillingService
             'started_at' => $row->started_at,
             'next_grant_at' => $row->next_grant_at,
             'resets_at' => $row->resets_at,
+            'paid_until' => $row->paid_until,
             'note' => $row->note,
         ];
     }
@@ -149,7 +150,9 @@ class PkBillingService
         }
         $today = CarbonImmutable::today();
         $values = ['mode' => $mode, 'pk_package_id' => null, 'monthly_credits' => 0, 'workplace_limit' => null, 'started_at' => $today->toDateString(),
-            'next_grant_at' => null, 'resets_at' => null, 'note' => $note, 'updated_at' => now()];
+            'next_grant_at' => null, 'resets_at' => null, 'note' => $note, 'updated_at' => now(),
+            // Elle (süper admin) atama süresizdir; PayTR ödemesi dönem sonunu assign'dan sonra ayrıca yazar.
+            'paid_until' => null];
         if ($mode === 'package') {
             $package = DB::table('pk_packages')->where('id', $packageId)->first();
             $accountType = DB::table('tenants')->where('id', $tenantId)->value('tenant_type');
@@ -238,15 +241,19 @@ class PkBillingService
             $row = DB::table('pk_subscriptions')->where('id', $row->id)->lockForUpdate()->first();
             $next = CarbonImmutable::parse($row->next_grant_at);
             $resets = $row->resets_at ? CarbonImmutable::parse($row->resets_at) : null;
+            $paidUntil = $row->paid_until ? CarbonImmutable::parse($row->paid_until) : null;
             for ($guard = 0; $next->lessThanOrEqualTo($today) && $guard < 120; $guard++) {
                 if ($resets && $resets->lessThanOrEqualTo($next)) {
                     $this->resetBalance($row->tenant_id, null, 'Yıllık sıfırlama', $resets);
                     $resets = $resets->addYear();
                 }
-                DB::table('pk_credit_entries')->insert([
-                    'tenant_id' => $row->tenant_id, 'amount' => (int) $row->monthly_credits, 'reason' => 'grant',
-                    'note' => 'Aylık paket kredisi', 'created_at' => $next->startOfDay(), 'updated_at' => now(),
-                ]);
+                // Ödenen dönem (PayTR) varsa yalnız dönemin içine tam sığan ayların kredisi yüklenir (aylık 1, yıllık 12).
+                if (!$paidUntil || $next->addMonthNoOverflow()->lessThanOrEqualTo($paidUntil)) {
+                    DB::table('pk_credit_entries')->insert([
+                        'tenant_id' => $row->tenant_id, 'amount' => (int) $row->monthly_credits, 'reason' => 'grant',
+                        'note' => 'Aylık paket kredisi', 'created_at' => $next->startOfDay(), 'updated_at' => now(),
+                    ]);
+                }
                 $next = $next->addMonthNoOverflow();
             }
             DB::table('pk_subscriptions')->where('id', $row->id)->update(['next_grant_at' => $next->toDateString(), 'resets_at' => $resets?->toDateString(), 'updated_at' => now()]);

@@ -60,4 +60,16 @@ return [
         'ai_provider' => env('FIRE_SUPPRESSION_AI_PROVIDER', 'nvidia'),
     ],
 
+    // pktakip: tanıtım sitesinden ücretli paket kaydı, PayTR iFrame ödemesi. Anahtarlar yoksa ödeme kapalı (503).
+    // landing_url: ödeme sonrası dönüş sayfaları (…/odeme-basarili, …/odeme-basarisiz).
+    'paytr' => [
+        'merchant_id' => env('PAYTR_MERCHANT_ID'),
+        'merchant_key' => env('PAYTR_MERCHANT_KEY'),
+        'merchant_salt' => env('PAYTR_MERCHANT_SALT'),
+        'test_mode' => filter_var(env('PAYTR_TEST_MODE', false), FILTER_VALIDATE_BOOL),
+        'landing_url' => env('PK_LANDING_URL') ?: 'https://pktakip.com',
+        // Tanıtım sitesindeki Mesafeli Satış Sözleşmesi / Ön Bilgilendirme Formu metninin sürümü; metin değişince güncellenir.
+        'agreements_version' => '2026-11-07',
+    ],
+
 ];

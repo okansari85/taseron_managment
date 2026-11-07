@@ -10,6 +10,7 @@ use App\Http\Controllers\PkCompanyTitleController;
 use App\Http\Controllers\PkWorkplaceAssignmentController;
 use App\Http\Controllers\PkAdminBillingController;
 use App\Http\Controllers\PkSignupController;
+use App\Http\Controllers\PkPayTrController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('experts/set-password', [ExpertController::class, 'setPassword']);
@@ -18,6 +19,10 @@ Route::post('experts/set-password', [ExpertController::class, 'setPassword']);
 Route::post('pk-signup', [PkSignupController::class, 'store'])->middleware('throttle:5,1');
 // Ücretli paketle üyelik; şimdilik deneme ödemesi, yalnız PK_FAKE_PAYMENT=true ortamında çalışır.
 Route::post('pk-signup/checkout', [PkSignupController::class, 'checkout'])->middleware('throttle:5,1');
+// Ücretli paketle üyelik, PayTR iFrame: sipariş + ödeme jetonu. Hesap, PayTR bildirimi başarılı gelince açılır.
+Route::post('pk-signup/paytr/start', [PkPayTrController::class, 'start'])->middleware('throttle:5,1');
+// PayTR'nin sunucudan sunucuya ödeme bildirimi (/api/paytr/callback); imza (hash) ile doğrulanır, istek sınırı yok.
+Route::post('paytr/callback', [PkPayTrController::class, 'callback']);
 
 Route::middleware(['auth:sanctum', 'web-role:super-admin'])->group(function () {
     Route::post('experts', [ExpertController::class, 'store']);
