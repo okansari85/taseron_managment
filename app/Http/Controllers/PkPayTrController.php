@@ -35,6 +35,10 @@ class PkPayTrController extends Controller
 
     public function start(Request $request): JsonResponse
     {
+        // 2026-11-07: satın alma uygulama içinden (PkBillingProfileController::paytrStart); site yalnız ücretsiz üyelik.
+        if (!config('services.paytr.signup_enabled')) {
+            return response()->json(['message' => 'Paket satın alma uygulama içinden yapılır. Ücretsiz üye olun, giriş yaptıktan sonra Paketim ekranından satın alın.'], 410);
+        }
         if (!$this->paytr->configured()) {
             return response()->json(['message' => 'Online ödeme henüz aktif değil. Lütfen bizimle iletişime geçin.'], 503);
         }
@@ -74,11 +78,9 @@ class PkPayTrController extends Controller
             throw ValidationException::withMessages(['period' => 'Bu paket için seçilen dönemin fiyatı tanımlı değil.']);
         }
 
-        // Para kuruş tamsayısıyla: KDV %20, kuruşa yuvarlanır (yarım yukarı).
-        $net = (int) round((float) $price * 100);
-        $vat = intdiv($net * 20 + 50, 100);
-        $total = $net + $vat;
-        $amounts = ['net' => $this->tl($net), 'vat' => $this->tl($vat), 'total' => $this->tl($total)];
+        $amounts = $this->paytr->amounts($price);
+        $total = $amounts['total_kurus'];
+        unset($amounts['total_kurus']);
 
         $oid = 'PK' . now()->format('YmdHis') . Str::random(10);
         $periodLabel = $data['period'] === 'yearly' ? 'yıllık' : 'aylık';
@@ -124,8 +126,8 @@ class PkPayTrController extends Controller
         $oid = (string) $post['merchant_oid'];
         $payload = json_encode(collect($post)->except('hash')->all());
 
-        // Yalnız bu bildirimle "paid" olan siparişin numarası döner (onay e-postası işlem kapandıktan sonra, bir kez).
-        $paidId = DB::transaction(function () use ($oid, $post, $payload, $billing) {
+        // Yalnız bu bildirimle "paid" olan siparişin numarası (ve uygulama siparişinde hizmet dönemi) döner (onay e-postası işlem kapandıktan sonra, bir kez).
+        $paid = DB::transaction(function () use ($oid, $post, $payload, $billing) {
             $order = DB::table('pk_payment_orders')->where('merchant_oid', $oid)->lockForUpdate()->first();
             if (!$order) {
                 Log::warning('PayTR bildirimi: sipariş yok', ['merchant_oid' => $oid]);
@@ -143,6 +145,29 @@ class PkPayTrController extends Controller
                 ]);
 
                 return;
+            }
+
+            // Uygulama içi sipariş (tenant_id başlangıçta dolu): hesap açılmaz, ödenen dönem hesaba uygulanır.
+            if ($order->tenant_id) {
+                $period = $order->period === 'yearly' ? 'yıllık' : 'aylık';
+                try {
+                    // İç işlem: hata olursa yalnız paket değişikliği geri alınır, sipariş satırı kalır.
+                    $servicePeriod = DB::transaction(fn () => $billing->applyPaidPeriod(
+                        (int) $order->tenant_id, (int) $order->pk_package_id, $order->period, "Uygulamadan {$period}, PayTR {$order->merchant_oid}"
+                    ));
+                } catch (\Throwable $e) {
+                    DB::table('pk_payment_orders')->where('id', $order->id)->update([
+                        'status' => 'attention', 'paytr_payload' => $payload, 'failed_reason' => mb_substr('Paket uygulanamadı: ' . $e->getMessage(), 0, 500), 'updated_at' => now(),
+                    ]);
+                    Log::error('PayTR: ödeme alındı ama paket uygulanamadı', ['merchant_oid' => $oid, 'tenant_id' => $order->tenant_id, 'error' => $e->getMessage()]);
+
+                    return;
+                }
+                DB::table('pk_payment_orders')->where('id', $order->id)->update([
+                    'status' => 'paid', 'paid_at' => now(), 'paytr_payload' => $payload, 'updated_at' => now(),
+                ]);
+
+                return [$order->id, $servicePeriod];
             }
 
             // Para alındı: hesap açılamazsa sipariş "attention" kalır (veri kaybolmaz, elle çözülür).
@@ -182,11 +207,11 @@ class PkPayTrController extends Controller
                 Log::warning('PayTR: hesap açıldı ama davet e-postası gönderilemedi', ['merchant_oid' => $oid, 'tenant_id' => $tenantId]);
             }
 
-            return $order->id;
+            return [$order->id, null];
         });
 
-        if ($paidId) {
-            $this->sendConfirmation($paidId);
+        if ($paid) {
+            $this->sendConfirmation(...$paid);
         }
 
         return response('OK', 200)->header('Content-Type', 'text/plain');
@@ -194,20 +219,17 @@ class PkPayTrController extends Controller
 
     // Sipariş onayı (Mesafeli Sözleşmeler Yönetmeliği: sözleşme teyidi kalıcı veri saklayıcısıyla). Gönderilemezse sipariş
     // ve hesap etkilenmez, loglanır.
-    private function sendConfirmation(int $orderId): void
+    // $servicePeriod: [başlangıç, bitiş] (uygulama siparişi; yenilemede eski dönemin sonundan başlar); yoksa abonelikten.
+    private function sendConfirmation(int $orderId, ?array $servicePeriod = null): void
     {
         try {
             $order = DB::table('pk_payment_orders')->where('id', $orderId)->first();
             $subscription = DB::table('pk_subscriptions')->where('tenant_id', $order->tenant_id)->first(['started_at', 'paid_until']);
+            [$startsAt, $endsAt] = $servicePeriod ?? [$subscription?->started_at, $subscription?->paid_until];
             $packageName = (string) DB::table('pk_packages')->where('id', $order->pk_package_id)->value('name');
-            Mail::to($order->email)->send(new PkOrderConfirmationMail($order, $packageName, $subscription?->started_at, $subscription?->paid_until));
+            Mail::to($order->email)->send(new PkOrderConfirmationMail($order, $packageName, $startsAt, $endsAt));
         } catch (\Throwable $e) {
             Log::error('PayTR: sipariş onay e-postası gönderilemedi', ['order_id' => $orderId, 'error' => $e->getMessage()]);
         }
-    }
-
-    private function tl(int $kurus): string
-    {
-        return sprintf('%d.%02d', intdiv($kurus, 100), $kurus % 100);
     }
 }

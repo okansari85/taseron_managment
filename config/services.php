@@ -68,6 +68,10 @@ return [
         'merchant_salt' => env('PAYTR_MERCHANT_SALT'),
         'test_mode' => filter_var(env('PAYTR_TEST_MODE', false), FILTER_VALIDATE_BOOL),
         'landing_url' => env('PK_LANDING_URL') ?: 'https://pktakip.com',
+        // Uygulama içi ödemede PayTR dönüş adresi (Paketim → ödeme sonucu).
+        'app_url' => env('PAYTR_APP_URL') ?: 'https://app.pktakip.com',
+        // Tanıtım sitesinden ödemeli kayıt (pk-signup/paytr/start); kapalıyken satın alma yalnız uygulama içinden.
+        'signup_enabled' => filter_var(env('PAYTR_SIGNUP_ENABLED', false), FILTER_VALIDATE_BOOL),
         // Tanıtım sitesindeki Mesafeli Satış Sözleşmesi / Ön Bilgilendirme Formu metninin sürümü; metin değişince güncellenir.
         'agreements_version' => '2026-11-07',
     ],

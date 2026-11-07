@@ -175,6 +175,54 @@ class PkBillingService
         $this->catchUp(DB::table('pk_subscriptions')->where('tenant_id', $tenantId)->first());
     }
 
+    /**
+     * Uygulama içi PayTR ödemesi (2026-11-07, kullanıcı onayladı). Aynı paket ve dönem sürüyorsa yenileme: yalnız paid_until
+     * bir dönem uzar. Diğer her durumda (deneme, paketsiz, süresi bitmiş, farklı paket, süresiz elle atama) paket bugünden
+     * başlar; assign()'ın aksine eski kredi silinmez. Döner: bu ödemenin hizmet dönemi [başlangıç, bitiş] (Y-m-d).
+     */
+    public function applyPaidPeriod(int $tenantId, int $packageId, string $period, ?string $note = null): array
+    {
+        $row = $this->subscription($tenantId);
+        if (!$row) {
+            throw new \RuntimeException('Bu hesap pktakip hesabı değil.');
+        }
+        if ($row->mode === 'unlimited') {
+            throw new \RuntimeException('Hesap sınırsız modda; paket elle uygulanmalı.');
+        }
+        $package = DB::table('pk_packages')->where('id', $packageId)->first();
+        $accountType = DB::table('tenants')->where('id', $tenantId)->value('tenant_type');
+        if (!$package || $package->account_type !== ($accountType === 'public' ? 'corporate' : $accountType)) {
+            throw new \RuntimeException('Paket bu hesap türü için değil.');
+        }
+        $add = fn (CarbonImmutable $d) => $period === 'yearly' ? $d->addYearNoOverflow() : $d->addMonthNoOverflow();
+        $today = CarbonImmutable::today();
+
+        $servicePeriod = DB::transaction(function () use ($row, $package, $note, $add, $today) {
+            $row = DB::table('pk_subscriptions')->where('id', $row->id)->lockForUpdate()->first();
+            $paidUntil = $row->paid_until ? CarbonImmutable::parse($row->paid_until) : null;
+            if ($row->mode === 'package' && (int) $row->pk_package_id === (int) $package->id && $paidUntil && $paidUntil->greaterThanOrEqualTo($today)) {
+                $values = ['paid_until' => $add($paidUntil)->toDateString(), 'updated_at' => now()];
+                // Son gün yenilemede catchUp o günün yüklemesini dönem dışı sayıp atlamış olabilir: o ay geri gelir.
+                if ($row->next_grant_at && CarbonImmutable::parse($row->next_grant_at)->greaterThan($paidUntil)) {
+                    $values['next_grant_at'] = $paidUntil->toDateString();
+                }
+                DB::table('pk_subscriptions')->where('id', $row->id)->update($values);
+
+                return [$paidUntil->toDateString(), $values['paid_until']];
+            }
+            DB::table('pk_subscriptions')->where('id', $row->id)->update([
+                'mode' => 'package', 'pk_package_id' => $package->id, 'monthly_credits' => $package->monthly_credits,
+                'workplace_limit' => $package->workplace_limit, 'started_at' => $today->toDateString(), 'next_grant_at' => $today->toDateString(),
+                'resets_at' => $today->addYear()->toDateString(), 'paid_until' => $add($today)->toDateString(), 'note' => $note, 'updated_at' => now(),
+            ]);
+
+            return [$today->toDateString(), $add($today)->toDateString()];
+        });
+        $this->catchUp(DB::table('pk_subscriptions')->where('tenant_id', $tenantId)->first());
+
+        return $servicePeriod;
+    }
+
     public function addManual(int $tenantId, int $amount, ?int $userId, ?string $note): void
     {
         if (!$this->subscription($tenantId)) {

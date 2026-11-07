@@ -15,6 +15,8 @@ use App\Http\Controllers\PkCustomerTypeController;
 use App\Http\Controllers\PkOperationalUnitController;
 use App\Http\Controllers\PkOrganizationNodeController;
 use App\Http\Controllers\PkExpertOrganizationController;
+use App\Http\Controllers\PkUserProfileController;
+use App\Http\Controllers\PkBillingProfileController;
 use App\Http\Controllers\PkOrganizationLabelController;
 use App\Http\Controllers\PkBulkAnalysisController;
 use App\Http\Controllers\PkBulkReportController;
@@ -74,6 +76,9 @@ Route::prefix('api')
         Route::get('my-workplaces', [ExpertCompanyController::class, 'workplaces']);
         // pktakip: üstteki Organizasyon kutusu, bireysel uzman (OSGB / kurumsal yönetici pk-account/organizations kullanır).
         Route::get('pk-expert/organizations', PkExpertOrganizationController::class);
+        // pktakip: Kullanıcı Profili sayfası (bütün pktakip hesapları; her kullanıcı kendi bilgisi).
+        Route::get('pk-profile', [PkUserProfileController::class, 'show']);
+        Route::patch('pk-profile', [PkUserProfileController::class, 'update']);
         // İşyeri ekleme: seçilen müşteride gösterilecek firmalar (başka müşterilerin firmaları gizlenir).
         Route::get('customers/{customer}/companies', [ExpertCompanyController::class, 'customerCompanies']);
         Route::get('customer-company-counts', [ExpertCompanyController::class, 'customerCompanyCounts']);
@@ -162,6 +167,12 @@ Route::prefix('api')
         // pktakip paket ve kredi: "Paketim" ve Analiz geçmişi → Kredi hareketleri.
         Route::get('pk-billing', [PkBillingController::class, 'status']);
         Route::get('pk-billing/entries', [PkBillingController::class, 'entries']);
+        // pktakip uygulama içi satın alma (yalnız ödeme yapabilen: bireysel uzman ya da hesap yöneticisi).
+        Route::get('pk-billing/profile', [PkBillingProfileController::class, 'show']);
+        Route::put('pk-billing/profile', [PkBillingProfileController::class, 'update']);
+        Route::get('pk-billing/packages', [PkBillingProfileController::class, 'packages']);
+        Route::get('pk-billing/orders', [PkBillingProfileController::class, 'orders']);
+        Route::post('pk-billing/paytr/start', [PkBillingProfileController::class, 'paytrStart'])->middleware('throttle:5,1');
         Route::post('pk-bulk-analysis/duplicates', [PkBulkAnalysisController::class, 'duplicates']);
         Route::post('pk-bulk-analysis/reuse', [PkBulkAnalysisController::class, 'reuse']);
         Route::post('pk-bulk-analysis/{analysisId}/preview', [PkBulkAnalysisController::class, 'preview']);

@@ -52,8 +52,9 @@ class PayTrService
             'user_name' => mb_substr($order['name'], 0, 60),
             'user_address' => mb_substr($order['address'], 0, 400),
             'user_phone' => mb_substr($order['phone'], 0, 20),
-            'merchant_ok_url' => $landing . '/odeme-basarili',
-            'merchant_fail_url' => $landing . '/odeme-basarisiz',
+            // Uygulama içi siparişte dönüş adresleri $order'dan gelir; site siparişi tanıtım sitesine döner.
+            'merchant_ok_url' => $order['ok_url'] ?? $landing . '/odeme-basarili',
+            'merchant_fail_url' => $order['fail_url'] ?? $landing . '/odeme-basarisiz',
             'timeout_limit' => 30,
             'currency' => $currency,
             'test_mode' => $testMode,
@@ -65,6 +66,20 @@ class PayTrService
         }
 
         return $response->json('token');
+    }
+
+    /**
+     * Paket fiyatından (KDV hariç, TL) tutarlar. Para kuruş tamsayısıyla: KDV %20, kuruşa yuvarlanır (yarım yukarı).
+     * Döner: total_kurus (PayTR payment_amount) ve TL metinleri net / vat / total ("298.80").
+     */
+    public function amounts(float|string $price): array
+    {
+        $net = (int) round((float) $price * 100);
+        $vat = intdiv($net * 20 + 50, 100);
+        $total = $net + $vat;
+        $tl = fn (int $kurus) => sprintf('%d.%02d', intdiv($kurus, 100), $kurus % 100);
+
+        return ['total_kurus' => $total, 'net' => $tl($net), 'vat' => $tl($vat), 'total' => $tl($total)];
     }
 
     // Bildirim gerçekten PayTR'den mi: hash = base64(hmac_sha256(merchant_oid . salt . status . total_amount, key)).

@@ -8,6 +8,8 @@
     $td = 'padding:6px 0;color:#111827;vertical-align:top;';
     $h2 = 'font-size:16px;margin:28px 0 8px;';
     $link = 'color:#111827;';
+    // Uygulama içi siparişte fatura bilgisinin sipariş anındaki kopyası.
+    $billing = isset($order->billing) && $order->billing ? json_decode($order->billing, true) : null;
 @endphp
 <!doctype html>
 <html lang="tr">
@@ -44,7 +46,13 @@
             @endif
             <tr><th style="{{ $th }}">E-posta</th><td style="{{ $td }}">{{ $order->email }}</td></tr>
             <tr><th style="{{ $th }}">Telefon</th><td style="{{ $td }}">{{ $order->phone }}</td></tr>
-            <tr><th style="{{ $th }}">Adres</th><td style="{{ $td }}">{{ $order->address }}</td></tr>
+            @if (!empty($billing['tckn']))
+                <tr><th style="{{ $th }}">T.C. kimlik no</th><td style="{{ $td }}">{{ $billing['tckn'] }}</td></tr>
+            @endif
+            @if (!empty($billing['tax_number']))
+                <tr><th style="{{ $th }}">Vergi dairesi / no</th><td style="{{ $td }}">{{ $billing['tax_office'] }} / {{ $billing['tax_number'] }}</td></tr>
+            @endif
+            <tr><th style="{{ $th }}">{{ $billing ? 'Fatura adresi' : 'Adres' }}</th><td style="{{ $td }}">{{ $order->address }}</td></tr>
         </table>
 
         <h2 style="{{ $h2 }}">Satıcı</h2>
