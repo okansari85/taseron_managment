@@ -216,4 +216,17 @@ Route::prefix('api')
         // Müşteri türü (kurumsal / şahıs / kamu): OSGB ve bireysel uzman; "Lokasyona Firma Ata" sihirbazı soruyu buna göre sorar.
         Route::get('pk-customer-types', [PkCustomerTypeController::class, 'index']);
         Route::patch('pk-customer-types/{customer}', [PkCustomerTypeController::class, 'update'])->whereNumber('customer');
+        // Bulgu Takip (2026-11-12): raporlardaki bulguların takibi.
+        Route::get('pk-findings', [\App\Http\Controllers\PkFindingController::class, 'index']);
+        Route::get('pk-findings/count', [\App\Http\Controllers\PkFindingController::class, 'count']);
+        Route::get('pk-findings/responsibles', [\App\Http\Controllers\PkFindingController::class, 'responsibles']);
+        Route::get('pk-findings/rechecks', [\App\Http\Controllers\PkFindingController::class, 'rechecks']);
+        Route::get('pk-findings/{pkFinding}', [\App\Http\Controllers\PkFindingController::class, 'show'])->whereNumber('pkFinding');
+        Route::patch('pk-findings/{pkFinding}', [\App\Http\Controllers\PkFindingController::class, 'update'])->whereNumber('pkFinding');
+        Route::post('pk-findings/{pkFinding}/notes', [\App\Http\Controllers\PkFindingController::class, 'note'])->whereNumber('pkFinding');
+        Route::post('pk-findings/{pkFinding}/files', [\App\Http\Controllers\PkFindingController::class, 'storeFile'])->whereNumber('pkFinding');
+        Route::get('pk-findings/{pkFinding}/files/{event}', [\App\Http\Controllers\PkFindingController::class, 'file'])->whereNumber(['pkFinding', 'event']);
+        Route::post('pk-findings/{pkFinding}/close', [\App\Http\Controllers\PkFindingController::class, 'close'])->whereNumber('pkFinding');
+        Route::post('pk-findings/{pkFinding}/reopen', [\App\Http\Controllers\PkFindingController::class, 'reopen'])->whereNumber('pkFinding');
+        Route::post('pk-findings/{pkFinding}/reject-suggestion', [\App\Http\Controllers\PkFindingController::class, 'rejectSuggestion'])->whereNumber('pkFinding');
     });

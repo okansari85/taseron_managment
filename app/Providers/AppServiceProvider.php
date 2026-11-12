@@ -43,6 +43,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // pktakip Bulgu Takip (2026-11-12): raporlar kaydedilince / silinince bulgular eşitlenir.
+        foreach ([\App\Models\PkInspection::class, \App\Models\PkInstallationReport::class, \App\Models\PkInstallationReportSystem::class, \App\Models\PkInstallationReportComponent::class] as $model) {
+            $model::observe(\App\Observers\PkFindingSourceObserver::class);
+        }
+
         Route::middleware('api')
             ->prefix('api')
             ->group(base_path('routes/experts.php'));
