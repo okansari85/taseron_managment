@@ -176,8 +176,8 @@ class PkBillingService
     }
 
     /**
-     * Uygulama içi PayTR ödemesi (2026-11-07, kullanıcı onayladı). Aynı paket ve dönem sürüyorsa yenileme: yalnız paid_until
-     * bir dönem uzar. Diğer her durumda (deneme, paketsiz, süresi bitmiş, farklı paket, süresiz elle atama) paket bugünden
+     * Uygulama içi PayTR ödemesi (2026-11-07, kullanıcı onayladı). Aynı paket ve dönem sürüyorsa yenileme: paid_until
+     * bir dönem uzar, bir aylık kredi hemen yüklenir. Diğer her durumda (deneme, paketsiz, süresi bitmiş, farklı paket, süresiz elle atama) paket bugünden
      * başlar; assign()'ın aksine eski kredi silinmez. Döner: bu ödemenin hizmet dönemi [başlangıç, bitiş] (Y-m-d).
      */
     public function applyPaidPeriod(int $tenantId, int $packageId, string $period, ?string $note = null): array
@@ -201,11 +201,15 @@ class PkBillingService
             $row = DB::table('pk_subscriptions')->where('id', $row->id)->lockForUpdate()->first();
             $paidUntil = $row->paid_until ? CarbonImmutable::parse($row->paid_until) : null;
             if ($row->mode === 'package' && (int) $row->pk_package_id === (int) $package->id && $paidUntil && $paidUntil->greaterThanOrEqualTo($today)) {
-                $values = ['paid_until' => $add($paidUntil)->toDateString(), 'updated_at' => now()];
-                // Son gün yenilemede catchUp o günün yüklemesini dönem dışı sayıp atlamış olabilir: o ay geri gelir.
-                if ($row->next_grant_at && CarbonImmutable::parse($row->next_grant_at)->greaterThan($paidUntil)) {
-                    $values['next_grant_at'] = $paidUntil->toDateString();
-                }
+                // Yenilemede bir aylık kredi hemen yüklenir (kullanıcı, 2026-11-12); karşılığında sıradaki yükleme bir ay kayar,
+                // toplam değişmez. Son gün yenilemede catchUp o günün yüklemesini dönem dışı sayıp atlamışsa sıra dönem sonundan alınır.
+                $next = $row->next_grant_at ? CarbonImmutable::parse($row->next_grant_at) : $paidUntil;
+                $next = $next->greaterThan($paidUntil) ? $paidUntil : $next;
+                DB::table('pk_credit_entries')->insert([
+                    'tenant_id' => $row->tenant_id, 'amount' => (int) $row->monthly_credits, 'reason' => 'grant',
+                    'note' => 'Aylık paket kredisi (yenileme)', 'created_at' => now(), 'updated_at' => now(),
+                ]);
+                $values = ['paid_until' => $add($paidUntil)->toDateString(), 'next_grant_at' => $next->addMonthNoOverflow()->toDateString(), 'updated_at' => now()];
                 DB::table('pk_subscriptions')->where('id', $row->id)->update($values);
 
                 return [$paidUntil->toDateString(), $values['paid_until']];

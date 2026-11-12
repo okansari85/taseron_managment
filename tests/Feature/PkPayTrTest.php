@@ -44,6 +44,7 @@ class PkPayTrTest extends TestCase
         '2026_11_07_100000_create_pk_payment_orders_table.php',
         '2026_11_07_110000_add_paid_until_and_agreements_version.php',
         '2026_11_07_120000_create_pk_billing_profiles_table.php',
+        '2026_11_12_100000_update_pk_packages_from_site.php',
     ];
 
     private int $packageId;
@@ -440,14 +441,14 @@ class PkPayTrTest extends TestCase
         Mail::assertSent(PkOrderConfirmationMail::class, fn ($mail) => $mail->hasTo('uzman@example.test')
             && str_contains($mail->render(), '12345678901') && str_contains($mail->render(), 'Fatura adresi'));
 
-        // Aynı paket, dönem sürüyor: yenileme, yalnız dönem sonu uzar.
+        // Aynı paket, dönem sürüyor: yenileme, dönem sonu uzar, kredi hemen gelir, sıradaki yükleme bir ay kayar.
         $oid2 = $this->appStart($user, $tenantId)->json('merchant_oid');
         $this->notify($oid2, 'success')->assertOk();
         $after = DB::table('pk_subscriptions')->where('tenant_id', $tenantId)->first();
         $this->assertSame($today->addMonthNoOverflow()->addMonthNoOverflow()->toDateString(), $after->paid_until);
         $this->assertSame($sub->started_at, $after->started_at);
-        $this->assertSame($sub->next_grant_at, $after->next_grant_at);
-        $this->assertSame(70, $billing->balance($tenantId));
+        $this->assertSame($today->addMonthNoOverflow()->addMonthNoOverflow()->toDateString(), $after->next_grant_at);
+        $this->assertSame(120, $billing->balance($tenantId));
         Mail::assertSent(PkOrderConfirmationMail::class, 2);
 
         // Tekrar gelen bildirim ikinci kez uygulanmaz.
@@ -455,10 +456,11 @@ class PkPayTrTest extends TestCase
         $this->assertSame($after->paid_until, DB::table('pk_subscriptions')->where('tenant_id', $tenantId)->value('paid_until'));
         Mail::assertSent(PkOrderConfirmationMail::class, 2);
 
-        // Yenilenen ay zamanı gelince yüklenir.
+        // Yenilenen ayın kredisi önceden geldi: dönem başında ikinci kez yüklenmez.
         Carbon::setTestNow(now()->addMonthNoOverflow()->addDay());
         $billing->subscription($tenantId);
         $this->assertSame(120, $billing->balance($tenantId));
+        $this->assertSame(2, $this->grants($tenantId));
     }
 
     public function test_callback_buyuk_pakete_gecis_bugunden_baslar_eski_kredi_kalir(): void
@@ -498,6 +500,13 @@ class PkPayTrTest extends TestCase
 
         $this->assertSame(2, $this->grants($tenantId));
         $this->assertSame(120, $billing->balance($tenantId));
+    }
+
+    public function test_paketler_sitedeki_fiyatlarla_ayni(): void
+    {
+        $standart = DB::table('pk_packages')->where('account_type', 'expert')->where('name', 'Standart')->first();
+        $this->assertEquals([250, 249, 2750], [(int) $standart->monthly_credits, (float) $standart->monthly_price, (float) $standart->yearly_price]);
+        $this->assertSame(0, DB::table('pk_packages')->where('name', '!=', 'PayTR Test')->whereNull('yearly_price')->count());
     }
 
     public function test_odemeler_listesi_yalniz_hesabin_siparisleri_site_siparisi_dahil(): void
