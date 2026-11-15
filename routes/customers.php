@@ -229,4 +229,8 @@ Route::prefix('api')
         Route::post('pk-findings/{pkFinding}/close', [\App\Http\Controllers\PkFindingController::class, 'close'])->whereNumber('pkFinding');
         Route::post('pk-findings/{pkFinding}/reopen', [\App\Http\Controllers\PkFindingController::class, 'reopen'])->whereNumber('pkFinding');
         Route::post('pk-findings/{pkFinding}/reject-suggestion', [\App\Http\Controllers\PkFindingController::class, 'rejectSuggestion'])->whereNumber('pkFinding');
+        // Panel bildirimleri (2026-11-15): pk:notifications-generate üretir; yalnız kullanıcının kendi bildirimleri.
+        Route::get('pk-notifications', [\App\Http\Controllers\PkNotificationController::class, 'index']);
+        Route::post('pk-notifications/read-all', [\App\Http\Controllers\PkNotificationController::class, 'readAll']);
+        Route::post('pk-notifications/{notification}/read', [\App\Http\Controllers\PkNotificationController::class, 'read'])->whereNumber('notification');
     });
