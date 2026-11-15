@@ -233,4 +233,9 @@ Route::prefix('api')
         Route::get('pk-notifications', [\App\Http\Controllers\PkNotificationController::class, 'index']);
         Route::post('pk-notifications/read-all', [\App\Http\Controllers\PkNotificationController::class, 'readAll']);
         Route::post('pk-notifications/{notification}/read', [\App\Http\Controllers\PkNotificationController::class, 'read'])->whereNumber('notification');
+        // Kontrol planlama (2026-11-15): lokasyonda planlanan kontrol günleri.
+        Route::get('pk-control-plans', [\App\Http\Controllers\PkControlPlanController::class, 'index']);
+        Route::post('pk-control-plans', [\App\Http\Controllers\PkControlPlanController::class, 'store']);
+        Route::patch('pk-control-plans/{pkControlPlan}', [\App\Http\Controllers\PkControlPlanController::class, 'update'])->whereNumber('pkControlPlan');
+        Route::delete('pk-control-plans/{pkControlPlan}', [\App\Http\Controllers\PkControlPlanController::class, 'destroy'])->whereNumber('pkControlPlan');
     });
