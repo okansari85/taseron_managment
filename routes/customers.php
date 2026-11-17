@@ -61,6 +61,10 @@ Route::prefix('api')
 
         Route::get('customers/{customer}/locations',[CustomerLocationController::class, 'index']);
         Route::post('customers/{customer}/organizations/{organization}/locations', [CustomerLocationController::class, 'store']);
+        // pktakip: lokasyon hesabın kaydı; ana firmaya bağı isteğe bağlı (kayıtlı lokasyonu ara / bağla / yalnız bu ana firmadan ayır).
+        Route::get('customers/{customer}/pk-location-candidates', [\App\Http\Controllers\PkLocationLinkController::class, 'candidates']);
+        Route::post('customers/{customer}/organizations/{organization}/pk-location-links', [\App\Http\Controllers\PkLocationLinkController::class, 'store']);
+        Route::delete('customers/{customer}/pk-location-links/{location}', [\App\Http\Controllers\PkLocationLinkController::class, 'destroy']);
 
         Route::get('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'index']);
         // pktakip: paketin işyeri limiti (Taşeron hesaplarında etkisiz).
