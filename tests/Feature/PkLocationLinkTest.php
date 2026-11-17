@@ -192,6 +192,47 @@ class PkLocationLinkTest extends TestCase
         $this->api()->deleteJson("/api/customers/{$b}/pk-location-links/{$ofB}")->assertStatus(422)->assertJsonPath('code', 'tek_bag');
     }
 
+    public function test_move_location_to_another_node(): void
+    {
+        [$a, $aRoot, $aBranch] = $this->customer('A Holding');
+        [$b, $bRoot] = $this->customer('B Holding');
+        $shared = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Ortak Kampüs']);
+        $onlyB = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'B Depo']);
+        DB::table('organization_locations')->insert([['organization_id' => $aRoot, 'location_id' => $shared], ['organization_id' => $bRoot, 'location_id' => $shared], ['organization_id' => $bRoot, 'location_id' => $onlyB]]);
+
+        // Kökten dala taşınır; B'deki bağ kalır.
+        $this->api()->patchJson("/api/customers/{$a}/pk-location-links/{$shared}", ['organization_id' => $aBranch])->assertOk()
+            ->assertJsonPath('id', $shared)->assertJsonPath('organization_id', $aBranch);
+        $this->assertDatabaseMissing('organization_locations', ['organization_id' => $aRoot, 'location_id' => $shared]);
+        $this->assertDatabaseHas('organization_locations', ['organization_id' => $aBranch, 'location_id' => $shared]);
+        $this->assertDatabaseHas('organization_locations', ['organization_id' => $bRoot, 'location_id' => $shared]);
+
+        // Lokasyon A'ya bağlı değil; hedef düğüm A'nın ağacında değil.
+        $this->api()->patchJson("/api/customers/{$a}/pk-location-links/{$onlyB}", ['organization_id' => $aRoot])->assertUnprocessable()->assertJsonValidationErrors('location');
+        $this->api()->patchJson("/api/customers/{$a}/pk-location-links/{$shared}", ['organization_id' => $bRoot])->assertUnprocessable()->assertJsonValidationErrors('organization_id');
+    }
+
+    public function test_reparent_organization_node(): void
+    {
+        [$a, $aRoot, $aBranch] = $this->customer('A Holding');
+        [$b, $bRoot] = $this->customer('B Holding');
+        $second = DB::table('organizations')->insertGetId(['tenant_id' => $this->tenantId, 'parent_id' => $aRoot, 'name' => 'A Dal 2']);
+        $leaf = DB::table('organizations')->insertGetId(['tenant_id' => $this->tenantId, 'parent_id' => $aBranch, 'name' => 'A Alt']);
+
+        // Dal, ikinci dalın altına taşınır (altındaki düğümle birlikte).
+        $this->api()->patchJson("/api/customers/{$a}/pk-organizations/{$aBranch}/parent", ['parent_id' => $second])->assertOk()
+            ->assertJsonPath('id', $aBranch)->assertJsonPath('parent_id', $second);
+        $this->assertDatabaseHas('organizations', ['id' => $aBranch, 'parent_id' => $second]);
+        $this->assertDatabaseHas('organizations', ['id' => $leaf, 'parent_id' => $aBranch]);
+
+        // Kök taşınmaz; başka ağacın düğümü üst olamaz; kendisi ya da altı üst olamaz.
+        $this->api()->patchJson("/api/customers/{$a}/pk-organizations/{$aRoot}/parent", ['parent_id' => $second])->assertUnprocessable()->assertJsonValidationErrors('organization');
+        $this->api()->patchJson("/api/customers/{$a}/pk-organizations/{$aBranch}/parent", ['parent_id' => $bRoot])->assertUnprocessable()->assertJsonValidationErrors('parent_id');
+        $this->api()->patchJson("/api/customers/{$a}/pk-organizations/{$aBranch}/parent", ['parent_id' => $aBranch])->assertUnprocessable()->assertJsonValidationErrors('parent_id');
+        $this->api()->patchJson("/api/customers/{$a}/pk-organizations/{$aBranch}/parent", ['parent_id' => $leaf])->assertUnprocessable()->assertJsonValidationErrors('parent_id');
+        $this->assertDatabaseHas('organizations', ['id' => $aBranch, 'parent_id' => $second]);
+    }
+
     public function test_customer_companies_and_sub_facilities(): void
     {
         [$a, $aRoot] = $this->customer('A Holding');

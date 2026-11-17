@@ -65,6 +65,9 @@ Route::prefix('api')
         Route::get('customers/{customer}/pk-location-candidates', [\App\Http\Controllers\PkLocationLinkController::class, 'candidates']);
         Route::post('customers/{customer}/organizations/{organization}/pk-location-links', [\App\Http\Controllers\PkLocationLinkController::class, 'store']);
         Route::delete('customers/{customer}/pk-location-links/{location}', [\App\Http\Controllers\PkLocationLinkController::class, 'destroy']);
+        // pktakip: yeni şemada sürükle-bırak (lokasyonu başka düğüme taşı, düğümün üstünü değiştir).
+        Route::patch('customers/{customer}/pk-location-links/{location}', [\App\Http\Controllers\PkLocationLinkController::class, 'move']);
+        Route::patch('customers/{customer}/pk-organizations/{organization}/parent', [\App\Http\Controllers\PkLocationLinkController::class, 'reparent'])->whereNumber('organization');
         // KSY-SIS yapısı: ana firmanın firmaları ve lokasyonun alt tesisleri.
         Route::get('customers/{customer}/firms', [\App\Http\Controllers\CustomerCompanyController::class, 'index']);
         Route::post('customers/{customer}/firms', [\App\Http\Controllers\CustomerCompanyController::class, 'store']);

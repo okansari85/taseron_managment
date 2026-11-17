@@ -103,8 +103,63 @@ class PkLocationLinkController extends Controller
         return response()->json(['detached' => true]);
     }
 
+    // Şemada sürükle-bırak: lokasyonu bu ana firmanın başka bir düğümüne taşır; öbür ana firmalardaki bağlar kalır.
+    public function move(Request $request, Customer $customer, Location $location): JsonResponse
+    {
+        $data = $request->validate(['organization_id' => ['required', 'integer']]);
+        $linked = $this->organizationIds($customer);
+
+        if (! $linked->contains((int) $data['organization_id'])) {
+            throw ValidationException::withMessages(['organization_id' => 'Seçilen organizasyon bu ana firmaya bağlı değil.']);
+        }
+        $here = $location->organizations()->whereIn('organizations.id', $linked->all())->get();
+        if ($here->isEmpty()) {
+            throw ValidationException::withMessages(['location' => 'Bu lokasyon bu ana firmaya bağlı değil.']);
+        }
+        $target = Organization::query()->findOrFail($data['organization_id']);
+
+        DB::transaction(function () use ($here, $target, $location) {
+            $here->each(fn (Organization $organization) => $this->organizationLocationService->detach($organization, $location));
+            $this->organizationLocationService->attach($target, $location);
+        });
+
+        return response()->json(['id' => $location->id, 'organization_id' => $target->id]);
+    }
+
+    // Şemada sürükle-bırak: kök olmayan düğümü aynı ağaçta başka bir düğümün altına taşır (döngü olamaz).
+    public function reparent(Request $request, Customer $customer, Organization $organization): JsonResponse
+    {
+        $data = $request->validate(['parent_id' => ['required', 'integer']]);
+        $tree = $this->customerOrganizationService->tree($customer);
+        $parentId = (int) $data['parent_id'];
+        $node = $this->findNode($tree, (int) $organization->id);
+
+        if ($node === null) {
+            throw ValidationException::withMessages(['organization' => 'Seçilen organizasyon bu ana firmaya bağlı değil.']);
+        }
+        if ($organization->parent_id === null) {
+            throw ValidationException::withMessages(['organization' => 'Firmanın en üstteki organizasyonu taşınamaz.']);
+        }
+        if (! $this->ids($tree)->contains($parentId)) {
+            throw ValidationException::withMessages(['parent_id' => 'Seçilen üst organizasyon bu ana firmaya bağlı değil.']);
+        }
+        if ($this->ids([$node])->contains($parentId)) {
+            throw ValidationException::withMessages(['parent_id' => 'Organizasyon kendi altına taşınamaz.']);
+        }
+
+        $organization->forceFill(['parent_id' => $parentId])->save();
+
+        return response()->json(['id' => $organization->id, 'parent_id' => $parentId]);
+    }
+
     // Ana firmanın ağacındaki bütün düğüm id'leri (tree() müşterinin tenant kontrolünü yapar).
     private function organizationIds(Customer $customer): Collection
+    {
+        return $this->ids($this->customerOrganizationService->tree($customer));
+    }
+
+    // Verilen düğümlerin ve altlarının id'leri.
+    private function ids(array $nodes): Collection
     {
         $ids = collect();
         $walk = function (array $nodes) use (&$walk, $ids): void {
@@ -113,8 +168,22 @@ class PkLocationLinkController extends Controller
                 $walk($node['children'] ?? []);
             }
         };
-        $walk($this->customerOrganizationService->tree($customer));
+        $walk($nodes);
 
         return $ids;
+    }
+
+    private function findNode(array $nodes, int $id): ?array
+    {
+        foreach ($nodes as $node) {
+            if ((int) $node['id'] === $id) {
+                return $node;
+            }
+            if ($found = $this->findNode($node['children'] ?? [], $id)) {
+                return $found;
+            }
+        }
+
+        return null;
     }
 }
