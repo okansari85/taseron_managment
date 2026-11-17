@@ -240,8 +240,9 @@ class CustomerOrganizationService
             'context_tenant_type' => gettype($this->tenantId()),
         ]);
 
+        // Başka hesabın müşterisi: 500 yerine 404 (önyüz "Server Error" göstermesin).
         if ($customer->tenant_id !== $this->tenantId()) {
-            throw new RuntimeException('Bu müşteriye erişim yetkiniz yok.');
+            abort(404, 'Bu ana firma bulunamadı.');
         }
     }
 }
