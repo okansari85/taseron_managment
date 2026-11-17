@@ -28,7 +28,7 @@ Tek kelimelik ilişki adlarında (`location()`, `user()`, `businessEntity()` gib
 
 Bu backend canlıdaki Taşeron uygulamasıyla ortak; PKTakip (`C:\Users\zanba\Desktop\pktakip_front`) aynı backend'i kullanır.
 
-- **Yalnızca yeni kod ekle.** Yeni controller/servis/middleware/observer ve `routes/customers.php` / `routes/experts.php` içine yeni route satırları. Mevcut metot, route ve sınıfları değiştirme; var olan public servisleri çağır. Mevcut bir satıra dokunmak şartsa önce kullanıcıya sor.
+- **Taşeron uygulaması iptal (17 Kas 2026, kullanıcı):** backend artık yalnız PKTakip'in; mevcut kod ve tablolar değiştirilebilir. Taşeron (alt yüklenici) işleri KSY-SIS'te. Yapı KSY-SIS gibi: firma ve işyeri ana firmaya ait (`customer_id`), lokasyon hesabın kaydı, aynı firmanın aynı lokasyondaki ikinci işyeri ayrı alt tesiste (`sub_facilities`).
 - Önce oku; değiştireceğin dosyaları ve etkisini listele, onay al.
 - Bireysel uzman (`tenant_type=expert`) davranışı değişmez; yeni kurallar osgb/corporate ile koşullanır.
 - Her sorguda tenant filtresi; filtresiz `::query()->get()` döngüsü yazma.

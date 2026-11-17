@@ -108,6 +108,15 @@ class CustomerPurgeService
         $workplaces = DB::table('location_business_entities')->whereIn('location_id', $locations)->pluck('id');
         $equipment = DB::table('pk_equipment')->whereIn('location_id', $locations)->get(['id', 'photo_path']);
 
+        // KSY-SIS: başka ana firmanın işyeri silinmez; bu ana firmanın ortak lokasyondaki işyeri sahipsiz (herkese görünür) kalmaz.
+        $ownership = [];
+        if ($count = DB::table('location_business_entities')->whereIn('id', $workplaces)->whereNotNull('customer_id')->where('customer_id', '!=', $customer->id)->count()) {
+            $ownership[] = "{$count} işyeri başka bir ana firmaya ait";
+        }
+        if ($count = DB::table('location_business_entities')->whereIn('location_id', $shared)->where('customer_id', $customer->id)->count()) {
+            $ownership[] = "{$count} işyeri başka ana firmayla ortak lokasyonda; önce bu işyerlerini kaldırın";
+        }
+
         foreach (self::WORKPLACE_BLOCKERS as $table => $label) {
             if ($count = DB::table($table)->whereIn('location_business_entity_id', $workplaces)->count()) {
                 $blockers[] = "{$count} {$label}";
@@ -129,6 +138,7 @@ class CustomerPurgeService
             // Taşeron yönetimine ait kayıtlar buradan silinmez.
             $blockers[] = 'bunlar taşeron yönetimine ait kayıtlar, buradan silinmez';
         }
+        $blockers = array_merge($blockers, $ownership);
 
         return ['organizations' => $organizations, 'locations' => $locations, 'workplaces' => $workplaces, 'equipment' => $equipment, 'blockers' => $blockers];
     }

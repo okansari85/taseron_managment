@@ -118,11 +118,12 @@ class ExpertCompanyController extends Controller
             ->mapWithKeys(fn (Customer $customer) => [$customer->id => $this->companiesAt($customer)->count()]));
     }
 
-    // Müşterinin lokasyonlarında işyeri olan firmalar (business entity id).
+    // Müşterinin lokasyonlarında işyeri olan firmalar (business entity id); ortak lokasyonda yalnız bu ana firmanın işyerleri.
     private function companiesAt(Customer $customer): \Illuminate\Support\Collection
     {
         return LocationBusinessEntity::query()
             ->whereIn('location_id', $this->customerLocationService->list($customer)->pluck('id'))
+            ->where(fn ($query) => $query->whereNull('customer_id')->orWhere('customer_id', $customer->id))
             ->pluck('business_entity_id')
             ->unique();
     }
@@ -143,6 +144,9 @@ class ExpertCompanyController extends Controller
             }
         }
 
+        $customerNames = Customer::query()->where('tenant_id', app(\App\Domain\Tenancy\TenantContext::class)->id())->pluck('name', 'id');
+        $subFacilities = DB::table('sub_facilities')->where('tenant_id', app(\App\Domain\Tenancy\TenantContext::class)->id())->pluck('name', 'id');
+
         $items = LocationBusinessEntity::query()
             ->whereIn('id', DB::table('location_experts')
                 ->where('user_id', $request->user()->id)
@@ -151,8 +155,12 @@ class ExpertCompanyController extends Controller
             ->with(['businessEntity.company', 'location:id,name'])
             ->orderByDesc('id')
             ->get()
-            ->map(function (LocationBusinessEntity $item) use ($locationContext) {
+            ->map(function (LocationBusinessEntity $item) use ($locationContext, $customerNames, $subFacilities) {
                 $context = $locationContext[$item->location_id] ?? null;
+                // KSY-SIS yapısı: işyerinin ana firması kendi kaydında (ortak lokasyonda lokasyonun ilk ana firması değil).
+                if ($item->customer_id && $customerNames->has($item->customer_id)) {
+                    $context = ['customer_id' => $item->customer_id, 'customer_name' => $customerNames->get($item->customer_id), 'organization_name' => $context['organization_name'] ?? null];
+                }
                 $experts = DB::table('location_experts')
                     ->join('users', 'users.id', '=', 'location_experts.user_id')
                     ->where('location_experts.location_business_entity_id', $item->id)
@@ -167,6 +175,8 @@ class ExpertCompanyController extends Controller
                     'customer_id' => $context['customer_id'] ?? null,
                     'customer_name' => $context['customer_name'] ?? null,
                     'organization_name' => $context['organization_name'] ?? null,
+                    'sub_facility_id' => $item->sub_facility_id,
+                    'sub_facility_name' => $item->sub_facility_id ? $subFacilities->get($item->sub_facility_id) : null,
                     'nace_code' => $item->nace_code,
                     'activity' => $item->activity,
                     'hazard_class' => $item->hazard_class,
@@ -213,7 +223,7 @@ class ExpertCompanyController extends Controller
         }
     }
 
-    private static function normalizeName(string $name): string
+    public static function normalizeName(string $name): string
     {
         $name = str_replace(['I', 'İ'], ['ı', 'i'], $name);
         $name = mb_strtolower($name, 'UTF-8');

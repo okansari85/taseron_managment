@@ -65,6 +65,13 @@ Route::prefix('api')
         Route::get('customers/{customer}/pk-location-candidates', [\App\Http\Controllers\PkLocationLinkController::class, 'candidates']);
         Route::post('customers/{customer}/organizations/{organization}/pk-location-links', [\App\Http\Controllers\PkLocationLinkController::class, 'store']);
         Route::delete('customers/{customer}/pk-location-links/{location}', [\App\Http\Controllers\PkLocationLinkController::class, 'destroy']);
+        // KSY-SIS yapısı: ana firmanın firmaları ve lokasyonun alt tesisleri.
+        Route::get('customers/{customer}/firms', [\App\Http\Controllers\CustomerCompanyController::class, 'index']);
+        Route::post('customers/{customer}/firms', [\App\Http\Controllers\CustomerCompanyController::class, 'store']);
+        Route::delete('customers/{customer}/firms/{businessEntity}', [\App\Http\Controllers\CustomerCompanyController::class, 'destroy']);
+        Route::get('locations/{location}/sub-facilities', [\App\Http\Controllers\SubFacilityController::class, 'index']);
+        Route::post('locations/{location}/sub-facilities', [\App\Http\Controllers\SubFacilityController::class, 'store']);
+        Route::delete('locations/{location}/sub-facilities/{subFacility}', [\App\Http\Controllers\SubFacilityController::class, 'destroy'])->whereNumber('subFacility');
 
         Route::get('customers/{customer}/locations/{location}/companies', [CustomerLocationCompanyController::class, 'index']);
         // pktakip: paketin işyeri limiti (Taşeron hesaplarında etkisiz).

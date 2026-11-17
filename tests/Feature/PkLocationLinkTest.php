@@ -83,10 +83,63 @@ class PkLocationLinkTest extends TestCase
             $t->boolean('is_active')->default(true);
             $t->timestamps();
         });
+        Schema::create('business_entities', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('tenant_id');
+            $t->unsignedBigInteger('customer_id')->nullable();
+            $t->string('type');
+            $t->string('name');
+            $t->timestamps();
+        });
+        Schema::create('companies', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('tenant_id')->nullable();
+            $t->unsignedBigInteger('business_entity_id');
+            $t->string('name');
+            $t->string('short_name')->nullable();
+            $t->text('description')->nullable();
+            $t->string('company_type')->nullable();
+            $t->boolean('is_active')->default(true);
+            $t->timestamps();
+        });
+        Schema::create('location_business_entities', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('location_id');
+            $t->unsignedBigInteger('business_entity_id');
+            $t->unsignedBigInteger('customer_id')->nullable();
+            $t->unsignedBigInteger('sub_facility_id')->nullable();
+            $t->string('hazard_class')->nullable();
+            $t->string('nace_code')->nullable();
+            $t->string('activity')->nullable();
+            $t->string('sgk_workplace_number')->nullable();
+            $t->string('address')->nullable();
+            $t->boolean('is_active')->default(true);
+            $t->timestamps();
+        });
+        Schema::create('sub_facilities', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('tenant_id');
+            $t->unsignedBigInteger('location_id');
+            $t->string('name');
+            $t->timestamps();
+        });
         Schema::create('organization_locations', function (Blueprint $t) {
             $t->id();
             $t->unsignedBigInteger('organization_id');
             $t->unsignedBigInteger('location_id');
+            $t->timestamps();
+        });
+
+        Schema::create('pk_workplace_names', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('location_business_entity_id');
+            $t->string('name');
+            $t->timestamps();
+        });
+        Schema::create('location_experts', function (Blueprint $t) {
+            $t->id();
+            $t->unsignedBigInteger('location_business_entity_id');
+            $t->unsignedBigInteger('user_id');
             $t->timestamps();
         });
 
@@ -137,5 +190,104 @@ class PkLocationLinkTest extends TestCase
         $this->assertDatabaseHas('organization_locations', ['organization_id' => $bRoot, 'location_id' => $ofB]);
         $this->assertDatabaseMissing('organization_locations', ['organization_id' => $aBranch, 'location_id' => $ofB]);
         $this->api()->deleteJson("/api/customers/{$b}/pk-location-links/{$ofB}")->assertStatus(422)->assertJsonPath('code', 'tek_bag');
+    }
+
+    public function test_customer_companies_and_sub_facilities(): void
+    {
+        [$a, $aRoot] = $this->customer('A Holding');
+        [$b] = $this->customer('B Holding');
+        $location = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Kampüs']);
+        DB::table('organization_locations')->insert(['organization_id' => $aRoot, 'location_id' => $location]);
+
+        // Firma ana firmaya ait; aynı unvan başka ana firmaya eklenemez.
+        $firm = $this->api()->postJson("/api/customers/{$a}/firms", ['name' => 'ABC Gıda A.Ş.'])->assertCreated()->json('business_entity_id');
+        $this->api()->postJson("/api/customers/{$b}/firms", ['name' => 'abc gıda a.ş.'])->assertUnprocessable();
+        $this->api()->getJson("/api/customers/{$a}/firms")->assertOk()->assertJsonCount(1)->assertJsonPath("0.workplaces_count", 0);
+        $this->api()->getJson("/api/customers/{$b}/firms")->assertOk()->assertJsonCount(0);
+
+        // Alt tesis: aynı ad iki kez açılmaz; işyeri olan alt tesis silinmez.
+        $hangar = $this->api()->postJson("/api/locations/{$location}/sub-facilities", ['name' => 'Hangar 1'])->assertCreated()->json('id');
+        $this->api()->postJson("/api/locations/{$location}/sub-facilities", ['name' => 'hangar 1'])->assertUnprocessable();
+        DB::table('location_business_entities')->insert(['location_id' => $location, 'business_entity_id' => $firm, 'customer_id' => $a, 'sub_facility_id' => $hangar]);
+        $this->api()->deleteJson("/api/locations/{$location}/sub-facilities/{$hangar}")->assertUnprocessable();
+        $this->api()->getJson("/api/locations/{$location}/sub-facilities")->assertOk()->assertJsonPath('0.workplaces_count', 1);
+
+        // İşyeri olan firma ana firmadan çıkarılmaz; işyeri olan lokasyonun bağı kaldırılmaz.
+        $this->api()->deleteJson("/api/customers/{$a}/firms/{$firm}")->assertUnprocessable();
+        $this->api()->deleteJson("/api/customers/{$a}/pk-location-links/{$location}")->assertUnprocessable();
+    }
+
+    public function test_additional_workplace_owner_and_sub_facility(): void
+    {
+        [$a, $aRoot] = $this->customer('A Holding');
+        [$b, $bRoot] = $this->customer('B Holding');
+        [$c] = $this->customer('C Holding');
+        $location = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Ortak Kampüs']);
+        DB::table('organization_locations')->insert([['organization_id' => $aRoot, 'location_id' => $location], ['organization_id' => $bRoot, 'location_id' => $location]]);
+        $firm = DB::table('business_entities')->insertGetId(['tenant_id' => $this->tenantId, 'customer_id' => $b, 'type' => 'company', 'name' => 'B Gıda']);
+        DB::table('location_business_entities')->insert(['location_id' => $location, 'business_entity_id' => $firm, 'customer_id' => $b]);
+        $hangar = DB::table('sub_facilities')->insertGetId(['tenant_id' => $this->tenantId, 'location_id' => $location, 'name' => 'Hangar 1']);
+        $elsewhere = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Başka']);
+        $foreignHangar = DB::table('sub_facilities')->insertGetId(['tenant_id' => $this->tenantId, 'location_id' => $elsewhere, 'name' => 'Hangar 2']);
+        $body = ['location_id' => $location, 'business_entity_id' => $firm, 'name' => 'Kompresör', 'hazard_class' => 'Tehlikeli'];
+        app(\App\Services\PkBillingService::class)->subscription($this->tenantId);
+        DB::table('pk_subscriptions')->where('tenant_id', $this->tenantId)->update(['workplace_limit' => null]); // deneme paketinin işyeri limiti bu testin konusu değil
+
+        // Lokasyon C'nin ağacında değil; firma A'ya değil B'ye ait; alt tesis başka lokasyonun.
+        $this->api()->postJson('/api/pk-workplaces/additional', $body + ['customer_id' => $c])->assertUnprocessable()->assertJsonValidationErrors('customer_id');
+        $this->api()->postJson('/api/pk-workplaces/additional', $body + ['customer_id' => $a])->assertUnprocessable()->assertJsonValidationErrors('business_entity_id');
+        $this->api()->postJson('/api/pk-workplaces/additional', $body + ['customer_id' => $b, 'sub_facility_id' => $foreignHangar])->assertUnprocessable()->assertJsonValidationErrors('sub_facility_id');
+
+        $this->api()->postJson('/api/pk-workplaces/additional', $body + ['customer_id' => $b, 'sub_facility_id' => $hangar])->assertCreated()
+            ->assertJsonPath('customer_id', $b)->assertJsonPath('sub_facility_id', $hangar)->assertJsonPath('name', 'Kompresör');
+        // Ad yine tekil; ana firma verilmezse lokasyonun ilk ana firması (A).
+        $this->api()->postJson('/api/pk-workplaces/additional', ['name' => 'kompresör', 'customer_id' => $b] + $body)->assertUnprocessable()->assertJsonValidationErrors('name');
+        $free = DB::table('business_entities')->insertGetId(['tenant_id' => $this->tenantId, 'type' => 'company', 'name' => 'Sahipsiz']);
+        DB::table('location_business_entities')->insert(['location_id' => $location, 'business_entity_id' => $free]);
+        $this->api()->postJson('/api/pk-workplaces/additional', ['business_entity_id' => $free] + $body)->assertCreated()->assertJsonPath('customer_id', $a);
+        $this->assertDatabaseHas('business_entities', ['id' => $free, 'customer_id' => $a]);
+
+        // customers/{c}/companies: ortak lokasyonda yalnız kendi (ve sahipsiz) işyerleri.
+        $this->api()->getJson("/api/customers/{$a}/companies")->assertOk()->assertJsonPath('customer', [$free]);
+        $this->api()->getJson("/api/customers/{$b}/companies")->assertOk()->assertJsonPath('customer', [$firm, $free]);
+    }
+
+    public function test_purge_keeps_other_customers_workplaces(): void
+    {
+        foreach (['pk_equipment', 'pk_inspections', 'periodic_equipment_spec_requests', 'location_business_entity_photos', 'work_requests',
+            'operational_regions', 'organization_contractors', 'organization_companies', 'fire_suppression_reports', 'fire_suppression_inventory_items',
+            'emergency_equipment_annual_control_reports', 'location_emergency_equipment', 'field_findings'] as $table) {
+            Schema::create($table, function (Blueprint $t) {
+                $t->id();
+                foreach (['location_id', 'organization_id', 'location_business_entity_id', 'pk_equipment_id'] as $column) {
+                    $t->unsignedBigInteger($column)->nullable();
+                }
+                $t->string('photo_path')->nullable();
+                $t->string('status')->nullable();
+            });
+        }
+        [$a, $aRoot] = $this->customer('A Holding');
+        [$b, $bRoot] = $this->customer('B Holding');
+        $own = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'A Fabrika']);
+        $shared = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Ortak Kampüs']);
+        DB::table('organization_locations')->insert([['organization_id' => $aRoot, 'location_id' => $own], ['organization_id' => $aRoot, 'location_id' => $shared], ['organization_id' => $bRoot, 'location_id' => $shared]]);
+        $firm = DB::table('business_entities')->insertGetId(['tenant_id' => $this->tenantId, 'type' => 'company', 'name' => 'Firma']);
+        DB::table('location_business_entities')->insert(['location_id' => $own, 'business_entity_id' => $firm, 'customer_id' => $a]);
+        $bAtShared = DB::table('location_business_entities')->insertGetId(['location_id' => $shared, 'business_entity_id' => $firm, 'customer_id' => $b]);
+        $aAtShared = DB::table('location_business_entities')->insertGetId(['location_id' => $shared, 'business_entity_id' => $firm, 'customer_id' => $a]);
+        $bAtOwn = DB::table('location_business_entities')->insertGetId(['location_id' => $own, 'business_entity_id' => $firm, 'customer_id' => $b]);
+
+        // B'nin A'nın lokasyonundaki işyeri ve A'nın ortak lokasyondaki işyeri silmeyi durdurur.
+        $blockers = $this->api()->getJson("/api/customers/{$a}/purge-summary")->assertOk()->assertJsonPath('locations', 1)->json('blockers');
+        $this->assertSame(['1 işyeri başka bir ana firmaya ait', '1 işyeri başka ana firmayla ortak lokasyonda; önce bu işyerlerini kaldırın'], $blockers);
+        $this->api()->deleteJson("/api/customers/{$a}/purge")->assertUnprocessable();
+
+        DB::table('location_business_entities')->whereIn('id', [$aAtShared, $bAtOwn])->delete();
+        $this->api()->getJson("/api/customers/{$a}/purge-summary")->assertOk()->assertJsonPath('blockers', [])->assertJsonPath('workplaces', 1);
+        $this->api()->deleteJson("/api/customers/{$a}/purge")->assertOk();
+        $this->assertDatabaseMissing('locations', ['id' => $own]);
+        $this->assertDatabaseHas('locations', ['id' => $shared]);
+        $this->assertDatabaseHas('location_business_entities', ['id' => $bAtShared]);
+        $this->assertDatabaseHas('organization_locations', ['organization_id' => $bRoot, 'location_id' => $shared]);
     }
 }

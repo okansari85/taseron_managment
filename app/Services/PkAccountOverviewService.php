@@ -56,6 +56,7 @@ class PkAccountOverviewService
         $assignments = LocationExpert::query()->whereIn('location_business_entity_id', $workplaces->pluck('id'))->get();
         $uzmanIds = $members->where('role', 'uzman')->pluck('id')->all();
         $customerOf = $this->customerNames($tenant);
+        $ownerNames = Customer::query()->where('tenant_id', $tenant->id)->pluck('name', 'id');
 
         $experts = $members->where('role', 'uzman')->where('passive', false)->map(function (array $member) use ($assignments, $workplaces, $active) {
             $mine = $workplaces->whereIn('id', $assignments->where('user_id', $member['id'])->pluck('location_business_entity_id'));
@@ -67,12 +68,12 @@ class PkAccountOverviewService
         })->sortBy(fn ($row) => [-($row['score']['overdue']), $row['name']])->values();
 
         $unassigned = $workplaces->reject(fn (LocationBusinessEntity $item) => $assignments->where('location_business_entity_id', $item->id)->whereIn('user_id', $uzmanIds)->isNotEmpty())
-            ->map(fn (LocationBusinessEntity $item) => [
+            ->map(fn (LocationBusinessEntity $item) => [ // ana firma işyerinin kendi kaydında; yoksa lokasyonun ilk ana firması
                 'id' => $item->id,
                 'company_name' => $item->businessEntity?->company?->name ?? $item->businessEntity?->name,
                 'location_id' => $item->location_id,
                 'location_name' => $item->location?->name,
-                'customer_name' => $customerOf[$item->location_id] ?? null,
+                'customer_name' => $ownerNames->get((int) $item->customer_id) ?? $customerOf[$item->location_id] ?? null,
             ])->sortBy(fn ($row) => [$row['customer_name'] ?? '', $row['location_name'] ?? '', $row['company_name'] ?? ''])->values();
 
         return [

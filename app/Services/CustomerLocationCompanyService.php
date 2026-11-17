@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 // Müşteri lokasyonlarına company tipindeki firmaları bağlar; ekleyen uzmanı otomatik atar.
-// Mevcut servisleri yalnızca çağırır, davranışlarını değiştirmez.
+// KSY-SIS yapısı: işyeri ve firma ana firmaya aittir (customer_id); işyeri isteğe bağlı bir alt tesiste olabilir.
 class CustomerLocationCompanyService
 {
     // location_business_entities silinince bu tablolardaki kayıtlar da cascade ile silinir.
@@ -35,13 +35,17 @@ class CustomerLocationCompanyService
     {
         $this->assertCustomerLocation($customer, $location);
 
+        // KSY-SIS yapısı: ortak lokasyonda yalnız bu ana firmanın işyerleri (sahibi boş eski kayıtlar herkese görünür).
+        $subFacilities = DB::table('sub_facilities')->where('location_id', $location->id)->pluck('name', 'id');
+
         return LocationBusinessEntity::query()
             ->where('location_id', $location->id)
+            ->where(fn ($query) => $query->whereNull('customer_id')->orWhere('customer_id', $customer->id))
             ->whereHas('businessEntity', fn ($query) => $query->where('type', 'company'))
             ->with('businessEntity.company')
             ->orderBy('id')
             ->get()
-            ->map(function (LocationBusinessEntity $item) {
+            ->map(function (LocationBusinessEntity $item) use ($subFacilities) {
                 $experts = DB::table('location_experts')
                     ->join('users', 'users.id', '=', 'location_experts.user_id')
                     ->where('location_experts.location_business_entity_id', $item->id)
@@ -57,6 +61,9 @@ class CustomerLocationCompanyService
                     'sgk_workplace_number' => $item->sgk_workplace_number,
                     'address' => $item->address,
                     'is_active' => (bool) $item->is_active,
+                    'customer_id' => $item->customer_id,
+                    'sub_facility_id' => $item->sub_facility_id,
+                    'sub_facility_name' => $item->sub_facility_id ? $subFacilities->get($item->sub_facility_id) : null,
                     'experts' => $experts->values(),
                     'created_at' => $item->created_at,
                 ];
@@ -75,22 +82,49 @@ class CustomerLocationCompanyService
                 'business_entity_id' => 'Yalnızca firmalar (company) lokasyona eklenebilir.',
             ]);
         }
+        $this->assertCustomerCompany($customer, $businessEntity);
+        $subFacilityId = $this->subFacilityId($location, $data['sub_facility_id'] ?? null);
+        // KSY-SIS: aynı firma aynı lokasyonda birden çok işyeri açabilir; her biri ayrı alt tesiste (ad ile ayırma yok).
+        $taken = DB::table('location_business_entities')->where('location_id', $location->id)
+            ->where('business_entity_id', $businessEntity->id)->pluck('sub_facility_id');
+        if ($taken->isNotEmpty() && ($subFacilityId === null || $taken->contains(fn ($id) => (int) $id === $subFacilityId))) {
+            throw ValidationException::withMessages([
+                'sub_facility_id' => $subFacilityId === null
+                    ? 'Bu firmanın bu lokasyonda işyeri zaten var. İkinci işyeri için bir alt tesis seçin.'
+                    : 'Bu firmanın bu alt tesiste işyeri zaten var.',
+            ]);
+        }
 
-        return DB::transaction(function () use ($location, $businessEntity, $expert, $data) {
-            $this->locationBusinessEntityService->attach($location, $businessEntity, [
+        return DB::transaction(function () use ($customer, $location, $businessEntity, $expert, $data, $subFacilityId, $taken) {
+            $fields = [
                 'hazard_class' => $data['hazard_class'],
                 'nace_code' => $data['nace_code'] ?? null,
                 'activity' => $data['activity'] ?? null,
                 'sgk_workplace_number' => $data['sgk_workplace_number'] ?? null,
                 'address' => $data['address'] ?? null,
-            ]);
+            ];
+            if ($taken->isEmpty()) {
+                $this->locationBusinessEntityService->attach($location, $businessEntity, $fields);
+                $id = LocationBusinessEntity::query()
+                    ->where('location_id', $location->id)
+                    ->where('business_entity_id', $businessEntity->id)
+                    ->whereNull('operational_region_id')
+                    ->latest('id')
+                    ->value('id');
+            } else {
+                // İkinci işyeri: aynı firma başka alt tesiste (mevcut servis bölgesiz ikinci kaydı reddeder).
+                $id = DB::table('location_business_entities')->insertGetId($fields + [
+                    'location_id' => $location->id, 'business_entity_id' => $businessEntity->id,
+                    'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+            $locationBusinessEntity = LocationBusinessEntity::query()->findOrFail($id);
 
-            $locationBusinessEntity = LocationBusinessEntity::query()
-                ->where('location_id', $location->id)
-                ->where('business_entity_id', $businessEntity->id)
-                ->whereNull('operational_region_id')
-                ->latest('id')
-                ->firstOrFail();
+            // İşyeri ana firmaya aittir; sahibi olmayan firma da bu ana firmaya geçer.
+            DB::table('location_business_entities')->where('id', $locationBusinessEntity->id)
+                ->update(['customer_id' => $customer->id, 'sub_facility_id' => $subFacilityId]);
+            DB::table('business_entities')->where('id', $businessEntity->id)->whereNull('customer_id')->update(['customer_id' => $customer->id]);
+            $locationBusinessEntity->refresh();
 
             $this->locationExpertService->attach($locationBusinessEntity, $expert);
 
@@ -111,6 +145,29 @@ class CustomerLocationCompanyService
         }
 
         $this->locationBusinessEntityService->detach($location, $locationBusinessEntity);
+    }
+
+    // KSY-SIS: işyeri yalnız ana firmanın kendi firmalarıyla açılır (alt yüklenici KSY-SIS'te).
+    public function assertCustomerCompany(Customer $customer, BusinessEntity $businessEntity): void
+    {
+        if ($businessEntity->customer_id && (int) $businessEntity->customer_id !== (int) $customer->id) {
+            throw ValidationException::withMessages([
+                'business_entity_id' => 'Bu firma başka bir ana firmaya ait; işyeri yalnız bu ana firmanın firmalarıyla açılır.',
+            ]);
+        }
+    }
+
+    // Alt tesis bu lokasyonun olmalı; boşsa işyeri lokasyonun genelindedir.
+    public function subFacilityId(Location $location, mixed $id): ?int
+    {
+        if (! $id) {
+            return null;
+        }
+        if (! DB::table('sub_facilities')->where('id', $id)->where('location_id', $location->id)->exists()) {
+            throw ValidationException::withMessages(['sub_facility_id' => 'Seçilen alt tesis bu lokasyonda değil.']);
+        }
+
+        return (int) $id;
     }
 
     private function assertCustomerLocation(Customer $customer, Location $location): void

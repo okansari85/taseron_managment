@@ -34,6 +34,7 @@ class CustomerLocationCompanyController extends Controller
                 'activity' => ['nullable', 'string', 'max:255'],
                 'sgk_workplace_number' => ['nullable', 'string', 'max:50'],
                 'address' => ['nullable', 'string', 'max:255'],
+                'sub_facility_id' => ['nullable', 'integer'],
             ])
         );
 

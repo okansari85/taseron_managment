@@ -58,6 +58,10 @@ class PkWorkplaceAssignmentService
         $experts = DB::table('location_experts')->join('users', 'users.id', '=', 'location_experts.user_id')
             ->whereIn('location_experts.location_business_entity_id', $items->pluck('id'))
             ->get(['location_experts.location_business_entity_id as workplace', 'users.name'])->groupBy('workplace');
+        // KSY-SIS yapısı (my-workplaces ile aynı): ana firma işyerinin kendi kaydında; yoksa lokasyonun ilk ana firması.
+        $customerNames = Customer::query()->where('tenant_id', $tenant->id)->pluck('name', 'id');
+        $subFacilities = DB::table('sub_facilities')->where('tenant_id', $tenant->id)->pluck('name', 'id');
+        $owner = fn (LocationBusinessEntity $item) => $item->customer_id && $customerNames->has($item->customer_id) ? (int) $item->customer_id : null;
 
         return $items->map(fn (LocationBusinessEntity $item) => [
             'id' => $item->id,
@@ -65,9 +69,11 @@ class PkWorkplaceAssignmentService
             'company_name' => $item->businessEntity?->company?->name ?? $item->businessEntity?->name,
             'location_id' => $item->location_id,
             'location_name' => $item->location?->name,
-            'customer_id' => $context[$item->location_id]['customer_id'] ?? null,
-            'customer_name' => $context[$item->location_id]['customer_name'] ?? null,
+            'customer_id' => $owner($item) ?? $context[$item->location_id]['customer_id'] ?? null,
+            'customer_name' => $owner($item) ? $customerNames->get($owner($item)) : $context[$item->location_id]['customer_name'] ?? null,
             'organization_name' => $context[$item->location_id]['organization_name'] ?? null,
+            'sub_facility_id' => $item->sub_facility_id,
+            'sub_facility_name' => $item->sub_facility_id ? $subFacilities->get($item->sub_facility_id) : null,
             'nace_code' => $item->nace_code,
             'activity' => $item->activity,
             'hazard_class' => $item->hazard_class,
@@ -151,13 +157,14 @@ class PkWorkplaceAssignmentService
             ->with(['businessEntity.company', 'location:id,name'])
             ->get();
         $assigned = LocationExpert::query()->whereIn('location_business_entity_id', $items->pluck('id'))->get()->groupBy('location_business_entity_id');
+        $customerNames = Customer::query()->where('tenant_id', $tenant->id)->pluck('name', 'id');
 
         return $items->map(fn (LocationBusinessEntity $item) => [
             'id' => $item->id,
             'company_name' => $item->businessEntity?->company?->name ?? $item->businessEntity?->name,
             'location_id' => $item->location_id,
             'location_name' => $item->location?->name,
-            'customer_name' => $customers[$item->location_id] ?? null,
+            'customer_name' => $customerNames->get((int) $item->customer_id) ?? $customers[$item->location_id] ?? null,
             // Atanan kullanıcılar (hesap dışı ya da silinmiş kullanıcılar gösterilmez).
             'users' => collect($assigned[$item->id] ?? [])
                 ->map(fn (LocationExpert $row) => $names[$row->user_id] ?? null)

@@ -3,8 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\BusinessEntity;
+use App\Models\Customer;
 use App\Models\Location;
 use App\Models\LocationBusinessEntity;
+use App\Services\CustomerLocationCompanyService;
+use App\Services\CustomerLocationService;
 use App\Services\LocationExpertService;
 use App\Services\PkAccountService;
 use Illuminate\Http\JsonResponse;
@@ -46,7 +49,8 @@ class PkWorkplaceNameController extends Controller
     }
 
     // Aynı firmanın bu lokasyondaki ek işyeri (adı zorunlu); firma lokasyonda yoksa normal firma ekleme kullanılır.
-    public function storeAdditional(Request $request, LocationExpertService $experts): JsonResponse
+    // KSY-SIS: işyeri bir ana firmaya aittir (customer_id; boşsa lokasyonun ilk ana firması), isteğe bağlı alt tesiste olabilir.
+    public function storeAdditional(Request $request, LocationExpertService $experts, CustomerLocationService $customerLocations, CustomerLocationCompanyService $companies): JsonResponse
     {
         $data = $request->validate([
             'location_id' => ['required', 'integer'],
@@ -56,6 +60,8 @@ class PkWorkplaceNameController extends Controller
             'nace_code' => ['nullable', 'string', 'max:50'],
             'activity' => ['nullable', 'string', 'max:255'],
             'sgk_workplace_number' => ['nullable', 'string', 'max:50'],
+            'customer_id' => ['nullable', 'integer'],
+            'sub_facility_id' => ['nullable', 'integer'],
         ]);
         $this->assertWriter($request);
         $location = Location::query()->findOrFail($data['location_id']);
@@ -67,6 +73,11 @@ class PkWorkplaceNameController extends Controller
         if ($existing->isEmpty()) {
             throw ValidationException::withMessages(['business_entity_id' => 'Firma bu lokasyonda yok; normal firma ekleme kullanılır.']);
         }
+        $customer = $this->ownerOf($location, $data['customer_id'] ?? null, $customerLocations);
+        if ($customer) {
+            $companies->assertCustomerCompany($customer, $entity);
+        }
+        $subFacilityId = $companies->subFacilityId($location, $data['sub_facility_id'] ?? null);
         $name = trim($data['name']);
         $taken = DB::table('pk_workplace_names')->whereIn('location_business_entity_id', $existing)->get(['name'])
             ->contains(fn ($row) => mb_strtolower($row->name, 'UTF-8') === mb_strtolower($name, 'UTF-8'));
@@ -74,12 +85,16 @@ class PkWorkplaceNameController extends Controller
             throw ValidationException::withMessages(['name' => "Bu firmanın bu lokasyonda \"{$name}\" adlı işyeri zaten var."]);
         }
 
-        $record = DB::transaction(function () use ($location, $entity, $data, $name, $experts, $request) {
+        $record = DB::transaction(function () use ($location, $entity, $data, $name, $experts, $request, $customer, $subFacilityId) {
             $id = DB::table('location_business_entities')->insertGetId([
                 'location_id' => $location->id, 'business_entity_id' => $entity->id, 'hazard_class' => $data['hazard_class'],
                 'nace_code' => $data['nace_code'] ?? null, 'activity' => $data['activity'] ?? null, 'sgk_workplace_number' => $data['sgk_workplace_number'] ?? null,
+                'customer_id' => $customer?->id, 'sub_facility_id' => $subFacilityId,
                 'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
             ]);
+            if ($customer) {
+                DB::table('business_entities')->where('id', $entity->id)->whereNull('customer_id')->update(['customer_id' => $customer->id]);
+            }
             $this->setName($id, $name);
             $record = LocationBusinessEntity::query()->findOrFail($id);
             // Normal firma eklemedeki gibi işlemi yapan uzman işyerine atanır.
@@ -88,7 +103,21 @@ class PkWorkplaceNameController extends Controller
             return $record;
         });
 
-        return response()->json(['id' => $record->id, 'location_id' => $record->location_id, 'business_entity_id' => $record->business_entity_id, 'name' => $name], 201);
+        return response()->json(['id' => $record->id, 'location_id' => $record->location_id, 'business_entity_id' => $record->business_entity_id, 'name' => $name,
+            'customer_id' => $record->customer_id, 'sub_facility_id' => $record->sub_facility_id], 201);
+    }
+
+    // İşyerinin ana firması: verilen ana firma bu hesabın olmalı ve lokasyon onun ağacında; verilmezse lokasyonun ilk ana firması.
+    private function ownerOf(Location $location, mixed $customerId, CustomerLocationService $customerLocations): ?Customer
+    {
+        $customers = Customer::query()->where('tenant_id', $location->tenant_id)
+            ->when($customerId, fn ($query) => $query->whereKey($customerId))->orderBy('id')->get();
+        $owner = $customers->first(fn (Customer $customer) => $customerLocations->list($customer)->contains('id', $location->id));
+        if ($customerId && ! $owner) {
+            throw ValidationException::withMessages(['customer_id' => 'Seçilen ana firma bu hesapta değil ya da lokasyon bu ana firmaya bağlı değil.']);
+        }
+
+        return $owner;
     }
 
     private function setName(int $workplaceId, ?string $name): void
