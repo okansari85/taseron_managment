@@ -89,12 +89,13 @@ class PkLocationLinkController extends Controller
         if ($here->isEmpty()) {
             throw ValidationException::withMessages(['location' => 'Bu lokasyon bu ana firmaya bağlı değil.']);
         }
-        // KSY-SIS: bu ana firmanın burada işyeri varken bağ kaldırılmaz.
-        if (DB::table('location_business_entities')->where('location_id', $location->id)->where('customer_id', $customer->id)->exists()) {
-            throw ValidationException::withMessages(['location' => 'Bu ana firmanın bu lokasyonda işyeri var; önce işyerlerini kaldırın.']);
-        }
+        // Yalnız bu ana firmaya bağlıysa önyüz bugünkü silme akışına geçer (işyerleri + lokasyon).
         if ($location->organizations()->whereNotIn('organizations.id', $linked->all())->doesntExist()) {
             return response()->json(['code' => 'tek_bag', 'message' => 'Lokasyon yalnız bu ana firmaya bağlı.'], 422);
+        }
+        // KSY-SIS: ortak lokasyonda bu ana firmanın işyeri varken bağ kaldırılmaz.
+        if (DB::table('location_business_entities')->where('location_id', $location->id)->where('customer_id', $customer->id)->exists()) {
+            throw ValidationException::withMessages(['location' => 'Bu ana firmanın bu lokasyonda işyeri var; önce işyerlerini kaldırın.']);
         }
 
         DB::transaction(fn () => $here->each(fn (Organization $organization) => $this->organizationLocationService->detach($organization, $location)));

@@ -46,7 +46,8 @@ class SubFacilityController extends Controller
 
     public function destroy(Location $location, int $subFacility): JsonResponse
     {
-        if (DB::table('location_business_entities')->where('sub_facility_id', $subFacility)->exists()) {
+        abort_unless(DB::table('sub_facilities')->where('id', $subFacility)->where('location_id', $location->id)->exists(), 404);
+        if (DB::table('location_business_entities')->where('location_id', $location->id)->where('sub_facility_id', $subFacility)->exists()) {
             throw ValidationException::withMessages(['sub_facility' => 'Bu alt tesiste işyeri var; önce işyerlerini kaldırın.']);
         }
         DB::table('sub_facilities')->where('id', $subFacility)->where('location_id', $location->id)->delete();

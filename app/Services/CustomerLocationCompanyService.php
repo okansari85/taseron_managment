@@ -86,7 +86,8 @@ class CustomerLocationCompanyService
         $subFacilityId = $this->subFacilityId($location, $data['sub_facility_id'] ?? null);
         // KSY-SIS: aynı firma aynı lokasyonda birden çok işyeri açabilir; her biri ayrı alt tesiste (ad ile ayırma yok).
         $taken = DB::table('location_business_entities')->where('location_id', $location->id)
-            ->where('business_entity_id', $businessEntity->id)->pluck('sub_facility_id');
+            ->where('business_entity_id', $businessEntity->id)
+            ->where(fn ($query) => $query->whereNull('customer_id')->orWhere('customer_id', $customer->id))->pluck('sub_facility_id');
         if ($taken->isNotEmpty() && ($subFacilityId === null || $taken->contains(fn ($id) => (int) $id === $subFacilityId))) {
             throw ValidationException::withMessages([
                 'sub_facility_id' => $subFacilityId === null

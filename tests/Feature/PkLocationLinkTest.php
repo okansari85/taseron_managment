@@ -214,7 +214,11 @@ class PkLocationLinkTest extends TestCase
 
         // İşyeri olan firma ana firmadan çıkarılmaz; işyeri olan lokasyonun bağı kaldırılmaz.
         $this->api()->deleteJson("/api/customers/{$a}/firms/{$firm}")->assertUnprocessable();
-        $this->api()->deleteJson("/api/customers/{$a}/pk-location-links/{$location}")->assertUnprocessable();
+        // Yalnız A'ya bağlı lokasyon: işyeri olsa da tek_bag döner (önyüz silme akışına geçer).
+        $this->api()->deleteJson("/api/customers/{$a}/pk-location-links/{$location}")->assertStatus(422)->assertJsonPath('code', 'tek_bag');
+        // Başka lokasyonun alt tesisi bu lokasyondan silinemez.
+        $other = DB::table('locations')->insertGetId(['tenant_id' => $this->tenantId, 'name' => 'Depo']);
+        $this->api()->deleteJson("/api/locations/{$other}/sub-facilities/{$hangar}")->assertNotFound();
     }
 
     public function test_additional_workplace_owner_and_sub_facility(): void
